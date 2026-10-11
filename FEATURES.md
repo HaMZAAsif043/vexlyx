@@ -2485,20 +2485,19 @@ Connecting a repository today is manual and per project (F1.3, F2.7): the user p
 ## Phase 6: Ecosystem & Launch
 
 ### F6.1 — Complete Documentation
-**Status:** 🔴 NOT STARTED
+**Status:** 🟢 COMPLETED
 
 **Description:**
 VitePress documentation site covering installation, development, and API reference.
 
 **Acceptance Criteria:**
-- [ ] Installation guide (bare metal, Docker)
-- [ ] Developer guide (local setup, contributing)
-- [ ] API reference (auto-generated from OpenAPI)
-- [ ] Feature documentation (all 48 features)
-- [ ] Troubleshooting guide
-- [ ] Changelog
-- [ ] Hosted at `docs.vexlyx.com` I know that the car is a bit of an oddity, but I want to be honest. I don't know what the car is. I mean, I The first one is the one that was used in And then, the next I I I I I Took the picture and put it on the table, and then he was like, well, I I I I I I Hello?
-Haan ji. the second day was about, you know, we got to go back together, and you know that you can come back together and reunite.
+- [x] Installation guide (bare metal, Docker)
+- [x] Developer guide (local setup, contributing)
+- [x] API reference (auto-generated from OpenAPI)
+- [x] Feature documentation for every released feature
+- [x] Troubleshooting guide
+- [x] Changelog
+- [x] Hosted at `docs.vexlyx.atlantiqs.org`
 
 **Test Plan:**
 1. New developer reads guide → sets up local env successfully

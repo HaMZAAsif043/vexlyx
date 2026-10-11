@@ -4,13 +4,19 @@
 
 The documentation site at `docs.vexlyx.atlantiqs.org` is a [VitePress](https://vitepress.dev) app that lives in `docs/` of this repository, so docs and code are edited, reviewed and released together. It is a standalone pnpm project (own `package.json` and `pnpm-lock.yaml`), deliberately **not** part of the root pnpm workspace, so installing or building the panel never touches VitePress.
 
+The information architecture separates learning-oriented guides, task-oriented how-to material,
+technical reference, and explanation. User guides should help readers reach an outcome; developer
+reference should document exact contracts, architecture, tests, and extension points. Roadmap work
+must not be presented as released behavior.
+
 ## Where content lives
 
 | Site section | Source | Notes |
 | --- | --- | --- |
-| Reference (`/reference/...`) | `docs/dev/**/*.md` | One page per feature. This is where `CLAUDE.md` says to write feature docs. |
-| Contributing, Security (`/project/...`) | `CONTRIBUTING.md`, `SECURITY.md` at the repo root | |
-| Guide (`/guide/...`), home page | `docs/guide/`, `docs/index.md` | Written for the site, edited in place. |
+| Developer reference (`/reference/...`) | `docs/dev/**/*.md` | Engineering sources required by `CLAUDE.md`. |
+| API (`/api/...`) | `docs/api/` | API conventions and generated-reference entry point. |
+| Project (`/project/...`) | `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md` at the repo root | Community and release information. |
+| Guides (`/guide/...`), home page | `docs/guide/`, `docs/index.md` | Outcome-oriented user and operator documentation. |
 | Reference overview | `docs/reference/index.md` | The only committed file in `docs/reference/`. |
 | Site config, sidebar, theme | `docs/.vitepress/` | New `docs/dev` pages show up under "More" until you place them in `sidebar.mts`. |
 
@@ -29,7 +35,7 @@ Markdown rules for the site: raw HTML is shown as text and `{{ }}` is not interp
 
 ## CI and deployment
 
-- `.github/workflows/docs.yml` builds the site on pull requests and pushes that touch `docs/`, `CONTRIBUTING.md` or `SECURITY.md`.
+- `.github/workflows/docs.yml` builds the site on pull requests and pushes that touch `docs/`, `CONTRIBUTING.md`, `SECURITY.md`, or `CHANGELOG.md`.
 - Vercel deploys `main` from this repository. Project settings: **Root Directory** `docs`, **Include source files outside of the Root Directory** enabled (the build reads `../docs/dev` and the root markdown files), framework preset VitePress, Install Command `pnpm install`, Build Command `pnpm build`, Output Directory `.vitepress/dist`, and an **Ignored Build Step** so unrelated commits do not redeploy: `git diff --quiet HEAD^ HEAD -- . ../docs ../CONTRIBUTING.md ../SECURITY.md`.
 
 ## History

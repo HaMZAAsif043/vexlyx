@@ -29,6 +29,8 @@
     "@fastify/multipart": "^10.1.1",
     "@fastify/rate-limit": "^11.2.0",
     "@fastify/redis": "^9.0.0",
+    "@fastify/swagger": "^9.9.2",
+    "@fastify/swagger-ui": "^6.1.2",
     "@prisma/client": "^6.9.0",
     "@vexlyx/shared": "workspace:*",
     "argon2": "^0.45.1",

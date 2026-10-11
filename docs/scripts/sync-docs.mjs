@@ -4,6 +4,7 @@
 //   ../docs/dev/**/*.md  -> reference/**/*.md   (generated, git-ignored)
 //   ../CONTRIBUTING.md   -> project/contributing.md (generated, git-ignored)
 //   ../SECURITY.md       -> project/security.md (generated, git-ignored)
+//   ../CHANGELOG.md      -> project/changelog.md (generated, git-ignored)
 //
 // Run automatically by `pnpm dev` and `pnpm build`. Do not edit the generated files; every
 // page has an "Edit this page" link that goes to the real source.
@@ -55,6 +56,7 @@ function sitePathFor(repoRel) {
     return "/reference/" + repoRel.slice("docs/dev/".length, -3);
   if (repoRel === "CONTRIBUTING.md") return "/project/contributing";
   if (repoRel === "SECURITY.md") return "/project/security";
+  if (repoRel === "CHANGELOG.md") return "/project/changelog";
   return null;
 }
 
@@ -185,6 +187,11 @@ try {
     abs: join(source.root, "SECURITY.md"),
     srcRel: "SECURITY.md",
     out: join(OUT_PROJECT, "security.md"),
+  });
+  jobs.push({
+    abs: join(source.root, "CHANGELOG.md"),
+    srcRel: "CHANGELOG.md",
+    out: join(OUT_PROJECT, "changelog.md"),
   });
 
   for (const job of jobs) {

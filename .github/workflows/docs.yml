@@ -7,12 +7,14 @@ on:
       - "docs/**"
       - "CONTRIBUTING.md"
       - "SECURITY.md"
+      - "CHANGELOG.md"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
       - "docs/**"
       - "CONTRIBUTING.md"
       - "SECURITY.md"
+      - "CHANGELOG.md"
       - ".github/workflows/docs.yml"
 
 jobs:

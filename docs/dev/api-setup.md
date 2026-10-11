@@ -187,6 +187,25 @@ pnpm build
 
 ---
 
+## OpenAPI reference
+
+The API registers `plugins/openapi.ts` before every route module. `@fastify/swagger` discovers the
+registered routes and publishes an OpenAPI 3.1 document; `@fastify/swagger-ui` serves the interactive
+reference at `/documentation/`. The raw specification is available at `/documentation/json` and
+`/documentation/yaml`.
+
+The plugin supplies stable operation IDs, resource tags, session-cookie security, and the standard
+error envelope to routes that do not declare more specific metadata. Public health, authentication,
+and signed-webhook routes omit session-cookie security. When adding or changing an endpoint, add
+route-specific parameter, body, success-response, and example schemas wherever generic metadata is
+not sufficient.
+
+Run the focused contract test with:
+
+```bash
+pnpm --dir apps/api exec vitest run src/plugins/openapi.test.ts
+```
+
 ## Testing Endpoints
 
 ```bash

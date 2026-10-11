@@ -1,13 +1,11 @@
-# Reference overview
+# Developer reference
 
-This is the developer reference for Vexlyx. Each page documents one feature: what it does, how it
-is built, how to test it and how to extend it. Pages live in `docs/dev/` of the Vexlyx repository, next to
-the code, so they stay accurate as features change.
+These pages explain how Vexlyx is built, tested, and extended. Their sources live in `docs/dev/`
+next to the code so implementation changes and engineering documentation can be reviewed together.
 
 ::: tip Looking for step-by-step user guides?
-Start with [Getting started](/guide/getting-started) — install, first login, first deploy — and
-the rest of the [guide](/guide/deploying) from there. The sections below are the developer
-reference: how each part is actually built.
+Use [Getting started](/guide/getting-started) and the [feature guide](/guide/features). For HTTP
+endpoint documentation and API conventions, see the [API reference](/api/).
 :::
 
 ## Sections

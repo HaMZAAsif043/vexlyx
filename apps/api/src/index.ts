@@ -10,6 +10,7 @@ import { queuePlugin_ } from "./config/queue.js";
 import { errorHandlerPlugin } from "./plugins/error-handler.js";
 import { authSessionPlugin } from "./plugins/auth.js";
 import { socketPlugin } from "./plugins/socket.js";
+import { openApiPlugin } from "./plugins/openapi.js";
 import { healthRoutes } from "./modules/health/routes.js";
 import { authRoutes } from "./modules/auth/routes.js";
 import { projectRoutes } from "./modules/projects/routes.js";
@@ -77,6 +78,7 @@ async function buildApp() {
   await app.register(multipart, {
     limits: { fileSize: env.FILE_UPLOAD_MAX_MB * 1024 * 1024 },
   });
+  await app.register(openApiPlugin);
   await app.register(databasePlugin);
   await app.register(redisClientPlugin);
   await app.register(queuePlugin_);

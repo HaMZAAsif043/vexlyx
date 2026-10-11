@@ -43,15 +43,13 @@ export default defineConfig({
     logo: "/logo.svg",
     siteTitle: "Vexlyx Docs",
     nav: [
+      { text: "Get started", link: "/guide/getting-started" },
+      { text: "Guides", link: "/guide/deploying", activeMatch: "/guide/" },
+      { text: "API", link: "/api/", activeMatch: "/api/" },
+      { text: "Developer", link: "/reference/", activeMatch: "/reference/" },
       {
-        text: "Guide",
-        link: "/guide/getting-started",
-        activeMatch: "/guide/",
-      },
-      { text: "Reference", link: "/reference/", activeMatch: "/reference/" },
-      {
-        text: "Contributing",
-        link: "/project/contributing",
+        text: "Project",
+        link: "/project/",
         activeMatch: "/project/",
       },
       { text: "Website", link: "https://vexlyx.atlantiqs.org" },
@@ -60,6 +58,12 @@ export default defineConfig({
     socialLinks: [{ icon: "github", link: repo }],
     search: { provider: "local" },
     outline: { level: [2, 3] },
+    lastUpdated: {
+      text: "Updated",
+      formatOptions: {
+        dateStyle: "medium",
+      },
+    },
     editLink: {
       // Must be self-contained: VitePress rebuilds this function on the client without its scope.
       // Reference and project pages are generated from their sources, so edit those instead.
@@ -71,6 +75,8 @@ export default defineConfig({
           return `${repo}/edit/main/CONTRIBUTING.md`;
         if (filePath === "project/security.md")
           return `${repo}/edit/main/SECURITY.md`;
+        if (filePath === "project/changelog.md")
+          return `${repo}/edit/main/CHANGELOG.md`;
         return `${repo}/edit/main/docs/${filePath}`;
       },
       text: "Edit this page on GitHub",

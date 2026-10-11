@@ -85,6 +85,8 @@ docker/postfix/opendkim/keys/*/
 # CONTRIBUTING.md and SECURITY.md by docs/scripts/sync-docs.mjs
 docs/reference/*
 !docs/reference/index.md
-docs/project/
+docs/project/*
+!docs/project/index.md
 docs/.vitepress/cache/
+docs/.vitepress/.temp/
 docs/.vitepress/dist/

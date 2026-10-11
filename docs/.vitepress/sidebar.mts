@@ -11,14 +11,23 @@ interface Group {
 
 const groups: Group[] = [
   {
-    text: "Guide",
+    text: "Start here",
     pages: [
       "guide/getting-started",
+      "guide/installation",
+      "guide/docker",
+      "guide/local-development",
+    ],
+  },
+  {
+    text: "Use Vexlyx",
+    pages: [
       "guide/deploying",
       "guide/domains-and-ssl",
       "guide/email",
       "guide/operations",
       "guide/troubleshooting",
+      "guide/features",
     ],
   },
   {
@@ -113,7 +122,16 @@ const groups: Group[] = [
       "reference/dashboard-home",
     ],
   },
-  { text: "Project", pages: ["project/contributing", "project/security"] },
+  { text: "API", pages: ["api/index"] },
+  {
+    text: "Project",
+    pages: [
+      "project/index",
+      "project/contributing",
+      "project/security",
+      "project/changelog",
+    ],
+  },
 ];
 
 /** Sidebar label from the page's first heading, without feature codes like "F3.1 — " or " (F3.1)". */
@@ -166,7 +184,7 @@ export function buildSidebar() {
     },
     ...all.map((g) => ({
       text: g.text,
-      collapsed: g.text !== "Guide",
+      collapsed: !["Start here", "Use Vexlyx"].includes(g.text),
       items: g.pages.map((p) => ({ text: titleOf(p), link: `/${p}` })),
     })),
   ];
