@@ -39,6 +39,8 @@ Fastify HTTP server
 
 Every Socket.io connection is authenticated in the `io.use()` middleware inside `plugins/socket.ts`. The session cookie (`vexlyx_session`) is parsed from the handshake headers and looked up in Redis — identical to the REST auth flow in `plugins/auth.ts`. Unauthenticated connections are rejected immediately.
 
+The configured `CORS_ORIGIN` is the only accepted browser origin in production. Development accepts any syntactically valid HTTP(S) origin so local dashboard ports and loopback variants continue to work. The policy is enforced for both polling and WebSocket handshakes. Requests without an `Origin` header are allowed for non-browser clients and WebSocket tooling, but this does not bypass authentication: they must still provide a valid session ID backed by Redis.
+
 ---
 
 ## Key Files

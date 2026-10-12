@@ -3,6 +3,10 @@ import fp from "fastify-plugin";
 import { Server as SocketIOServer } from "socket.io";
 import type { Redis } from "ioredis";
 import { env } from "../config/env.js";
+import {
+  createSocketOriginHandler,
+  isSocketOriginAllowed,
+} from "./socket-origin.js";
 
 // ---------------------------------------------------------------------------
 // Module-level singleton so other modules can call getIO() without circular deps
@@ -68,23 +72,21 @@ async function resolveUserId(redis: Redis, sessionId: string): Promise<string | 
 // ---------------------------------------------------------------------------
 
 async function initSocketPlugin(app: FastifyInstance) {
+  const originPolicy = {
+    configuredOrigin: env.CORS_ORIGIN,
+    nodeEnvironment: env.NODE_ENV,
+  };
+  const handleOrigin = createSocketOriginHandler(originPolicy);
+
   const io = new SocketIOServer(app.server, {
     cors: {
-      origin: (origin, callback) => {
-        // Allow same-origin, configured CORS_ORIGIN, or any localhost / LAN IP in development
-        if (
-          !origin ||
-          env.NODE_ENV !== "production" ||
-          origin === env.CORS_ORIGIN ||
-          origin.startsWith("http://localhost:") ||
-          origin.startsWith("http://127.0.0.1:")
-        ) {
-          callback(null, true);
-        } else {
-          callback(null, env.CORS_ORIGIN);
-        }
-      },
+      origin: handleOrigin,
       credentials: true,
+    },
+    // Browser CORS does not protect WebSocket upgrades, so enforce the same
+    // policy at the Engine.IO handshake layer for every transport.
+    allowRequest: (request, callback) => {
+      callback(null, isSocketOriginAllowed(request.headers.origin, originPolicy));
     },
     transports: ["websocket", "polling"],
   });
