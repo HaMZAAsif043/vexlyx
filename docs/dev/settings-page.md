@@ -11,7 +11,7 @@
 - **Account card:** read-only name, email, role. Editing wasn't in scope for this pass — see "How to Extend".
 - **Change Password card:** self-service form (current password + new password + confirm). On success, the current session stays logged in; the old password simply stops verifying everywhere else, since login re-checks the hash on every attempt rather than caching anything.
 - **DNS Records & Public IP card:** ADMIN-only (both client-side — the section isn't rendered for other roles — and server-side, since `GET /api/system/dns-info` itself is ADMIN-gated). Shows the server's public IP and every DNS record from F5.9, each with a copy-to-clipboard button, plus a manual refresh (`RefreshCw`, 600ms spin, per CLAUDE.md's refresh-button convention).
-- **Setup instructions + live verification (UX follow-up, same pass):** a short blurb tells the admin what to actually do with the records ("add each as an A record at your registrar/DNS provider"), and a **Verify DNS** button triggers a real cross-resolver DNS lookup (`POST /api/system/dns-info/verify`) so they can confirm propagation from inside the panel instead of shelling out to `dig`. Each record gets a Live / Not pointed here yet / Not found badge.
+- **Setup instructions + live verification (UX follow-up, same pass):** a short blurb tells the admin to add each record using its displayed type. The list includes application A records and the hosted-mail A/MX pair. A **Verify DNS** button triggers real cross-resolver A or MX lookups (`POST /api/system/dns-info/verify`) so propagation can be confirmed inside the panel. Each record gets a Live / Not pointed here yet / Not found badge.
 - **GitHub card (F5.29):** administrators create or replace the panel-wide GitHub App; every authenticated user can link and disconnect their own account or organization installations. App credentials are never rendered. See [GitHub Integration](github-integration.md).
 
 ---
@@ -44,16 +44,16 @@ packages/shared/src/schemas/dnsOnboarding.ts
 
 ### Key Files
 
-| File | Purpose |
-|------|---------|
-| `packages/shared/src/schemas/auth.ts` | `ChangePasswordSchema` — mirrors `RegisterSchema`'s password/confirm refine pattern |
-| `apps/api/src/modules/auth/service.ts` | `changePassword()` — verifies the current hash with `argon2.verify`, re-hashes and stores the new one |
-| `apps/api/src/modules/auth/routes.ts` | `POST /api/auth/change-password` |
-| `apps/dashboard/src/hooks/useAuth.ts` | `changePassword(current, new, confirm)` added alongside `login`/`register`/`logout` |
-| `apps/dashboard/src/hooks/useDnsInfo.ts` | New hook, mirrors `useContainerStatus`'s `enabled` gating pattern — skips the request entirely for non-admins instead of eating a guaranteed 403. Also exposes `verify()`/`isVerifying`/`verification` for the live-check button |
-| `apps/api/src/modules/system/service.ts` | `verifyDnsRecords()` — for a wildcard record, queries a fixed probe subdomain (`vexlyx-dns-check.<zone>`) instead of the literal `*.<zone>`, since a wildcard isn't directly resolvable |
-| `apps/dashboard/src/app/(panel)/settings/page.tsx` | Route (Server Component wrapper, metadata only) |
-| `apps/dashboard/src/components/settings/SettingsPage.tsx` | All interactive content |
+| File                                                      | Purpose                                                                                                                                                                                                                          |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/shared/src/schemas/auth.ts`                     | `ChangePasswordSchema` — mirrors `RegisterSchema`'s password/confirm refine pattern                                                                                                                                              |
+| `apps/api/src/modules/auth/service.ts`                    | `changePassword()` — verifies the current hash with `argon2.verify`, re-hashes and stores the new one                                                                                                                            |
+| `apps/api/src/modules/auth/routes.ts`                     | `POST /api/auth/change-password`                                                                                                                                                                                                 |
+| `apps/dashboard/src/hooks/useAuth.ts`                     | `changePassword(current, new, confirm)` added alongside `login`/`register`/`logout`                                                                                                                                              |
+| `apps/dashboard/src/hooks/useDnsInfo.ts`                  | New hook, mirrors `useContainerStatus`'s `enabled` gating pattern — skips the request entirely for non-admins instead of eating a guaranteed 403. Also exposes `verify()`/`isVerifying`/`verification` for the live-check button |
+| `apps/api/src/modules/system/service.ts`                  | `verifyDnsRecords()` — for a wildcard record, queries a fixed probe subdomain (`vexlyx-dns-check.<zone>`) instead of the literal `*.<zone>`, since a wildcard isn't directly resolvable                                          |
+| `apps/dashboard/src/app/(panel)/settings/page.tsx`        | Route (Server Component wrapper, metadata only)                                                                                                                                                                                  |
+| `apps/dashboard/src/components/settings/SettingsPage.tsx` | All interactive content                                                                                                                                                                                                          |
 
 No Prisma migration needed — password change reuses the existing `User.password` column.
 

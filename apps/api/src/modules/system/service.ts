@@ -9,6 +9,7 @@ import type {
   SystemSettingsResponse,
 } from "@vexlyx/shared";
 import { env } from "../../config/env.js";
+import { buildMailRoutingRecords } from "../mail/required-records.js";
 
 // Same public resolvers domains/dns-service.ts's checkPropagation() queries,
 // for the same reason: a single resolver's cache can be stale or geographically
@@ -27,16 +28,24 @@ export class SystemService {
   // timezone on first read (rather than a hardcoded "UTC"), since that's the
   // value an admin who never touches this setting would actually want.
   async getSettings(): Promise<SystemSettingsResponse> {
-    const existing = await this.prisma.systemSettings.findUnique({ where: { id: "default" } });
+    const existing = await this.prisma.systemSettings.findUnique({
+      where: { id: "default" },
+    });
     if (existing) {
-      return { timezone: existing.timezone, updatedAt: existing.updatedAt.toISOString() };
+      return {
+        timezone: existing.timezone,
+        updatedAt: existing.updatedAt.toISOString(),
+      };
     }
 
     const detected = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
     const created = await this.prisma.systemSettings.create({
       data: { id: "default", timezone: detected },
     });
-    return { timezone: created.timezone, updatedAt: created.updatedAt.toISOString() };
+    return {
+      timezone: created.timezone,
+      updatedAt: created.updatedAt.toISOString(),
+    };
   }
 
   async updateSettings(timezone: string): Promise<SystemSettingsResponse> {
@@ -45,7 +54,10 @@ export class SystemService {
       create: { id: "default", timezone },
       update: { timezone },
     });
-    return { timezone: updated.timezone, updatedAt: updated.updatedAt.toISOString() };
+    return {
+      timezone: updated.timezone,
+      updatedAt: updated.updatedAt.toISOString(),
+    };
   }
 
   // Builds the DNS/IP reference info an admin needs to point their domain(s)
@@ -59,21 +71,57 @@ export class SystemService {
 
     const records: DnsRecordSuggestion[] = [];
     if (domain && publicIp) {
-      records.push({ type: "A", host: domain, value: publicIp, purpose: "Panel" });
+      records.push({
+        type: "A",
+        host: domain,
+        value: publicIp,
+        purpose: "Panel",
+      });
       // The dashboard's browser JS calls https://api.<domain> directly
       // (NEXT_PUBLIC_API_URL, docker-compose.prod.yml) — this only happens to
       // work without its own record when baseDomain === domain, since the
       // wildcard below then incidentally covers it too. With a split base
       // domain (VEXLYX_BASE_DOMAIN != VEXLYX_DOMAIN) the wildcard lives in a
       // different zone entirely, so the API needs an explicit record either way.
-      records.push({ type: "A", host: `api.${domain}`, value: publicIp, purpose: "API" });
-      records.push({ type: "A", host: `webmail.${domain}`, value: publicIp, purpose: "Webmail" });
+      records.push({
+        type: "A",
+        host: `api.${domain}`,
+        value: publicIp,
+        purpose: "API",
+      });
+      records.push({
+        type: "A",
+        host: `webmail.${domain}`,
+        value: publicIp,
+        purpose: "Webmail",
+      });
       records.push({
         type: "A",
         host: `*.${baseDomain}`,
         value: publicIp,
         purpose: "Deployed project subdomains",
       });
+      if (env.HOSTED_MAIL_HOSTNAME && env.HOSTED_MAIL_DOMAIN) {
+        const mailHostname = env.HOSTED_MAIL_HOSTNAME;
+        const mailDomain = env.HOSTED_MAIL_DOMAIN;
+        const mailRecords = buildMailRoutingRecords(
+          mailDomain,
+          mailHostname,
+          publicIp,
+        );
+        records.push(
+          ...mailRecords.map((record): DnsRecordSuggestion => ({
+            type: record.type as "A" | "MX",
+            host: record.purpose === "HOST" ? mailHostname : mailDomain,
+            value: record.value,
+            priority: record.priority,
+            purpose:
+              record.purpose === "HOST"
+                ? "Inbound mail server"
+                : "Inbound mail routing",
+          })),
+        );
+      }
     }
 
     return { publicIp, domain, baseDomain, records };
@@ -94,7 +142,9 @@ export class SystemService {
     return { checkedAt: new Date().toISOString(), results };
   }
 
-  private async verifyOneRecord(record: DnsRecordSuggestion): Promise<DnsRecordVerification> {
+  private async verifyOneRecord(
+    record: DnsRecordSuggestion,
+  ): Promise<DnsRecordVerification> {
     const checkedHost = record.host.startsWith("*.")
       ? `vexlyx-dns-check.${record.host.slice(2)}`
       : record.host;
@@ -104,19 +154,35 @@ export class SystemService {
         try {
           const resolver = new dns.promises.Resolver();
           resolver.setServers([r.ip]);
-          const detectedValues = await resolver.resolve4(checkedHost);
-
-          const isMatch = detectedValues.some((v) => v === record.value);
+          const detectedValues =
+            record.type === "MX"
+              ? (await resolver.resolveMx(checkedHost)).map(
+                  (mx) =>
+                    `${mx.priority} ${mx.exchange.replace(/\.$/, "").toLowerCase()}`,
+                )
+              : await resolver.resolve4(checkedHost);
+          const expected =
+            record.type === "MX"
+              ? `${record.priority ?? 10} ${record.value.replace(/\.$/, "").toLowerCase()}`
+              : record.value;
+          const isMatch = detectedValues.includes(expected);
           return {
             resolver: r.name,
-            status: isMatch ? "MATCH" : detectedValues.length > 0 ? "MISMATCH" : "NOT_FOUND",
+            status: isMatch
+              ? "MATCH"
+              : detectedValues.length > 0
+                ? "MISMATCH"
+                : "NOT_FOUND",
             detectedValues,
           };
         } catch (err: unknown) {
           const errCode = (err as { code?: string })?.code;
           return {
             resolver: r.name,
-            status: errCode === "ENOTFOUND" || errCode === "ENODATA" ? "NOT_FOUND" : "ERROR",
+            status:
+              errCode === "ENOTFOUND" || errCode === "ENODATA"
+                ? "NOT_FOUND"
+                : "ERROR",
             detectedValues: [],
           };
         }
@@ -124,10 +190,13 @@ export class SystemService {
     );
 
     return {
+      type: record.type,
       host: record.host,
       checkedHost,
       expected: record.value,
-      isPropagated: resolverResults.length > 0 && resolverResults.every((r) => r.status === "MATCH"),
+      isPropagated:
+        resolverResults.length > 0 &&
+        resolverResults.every((r) => r.status === "MATCH"),
       resolvers: resolverResults,
     };
   }

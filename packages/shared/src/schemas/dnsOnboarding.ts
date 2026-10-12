@@ -5,9 +5,10 @@ import { z } from "zod";
 // ---------------------------------------------------------------------------
 
 export const DnsRecordSuggestionSchema = z.object({
-  type: z.literal("A"),
+  type: z.enum(["A", "MX"]),
   host: z.string(),
   value: z.string(),
+  priority: z.number().int().min(0).max(65535).optional(),
   // Human-readable note on what this record is for (panel, webmail,
   // deployed projects), shown alongside the record in the UI.
   purpose: z.string(),
@@ -38,6 +39,7 @@ export const DnsResolverCheckSchema = z.object({
 export type DnsResolverCheckResult = z.infer<typeof DnsResolverCheckSchema>;
 
 export const DnsRecordVerificationSchema = z.object({
+  type: z.enum(["A", "MX"]),
   host: z.string(),
   // The hostname actually queried — differs from `host` for a wildcard
   // record (`*.example.com`), since a literal `*` isn't resolvable; a probe
@@ -53,4 +55,6 @@ export const DnsVerificationResponseSchema = z.object({
   checkedAt: z.string().datetime(),
   results: z.array(DnsRecordVerificationSchema),
 });
-export type DnsVerificationResponse = z.infer<typeof DnsVerificationResponseSchema>;
+export type DnsVerificationResponse = z.infer<
+  typeof DnsVerificationResponseSchema
+>;

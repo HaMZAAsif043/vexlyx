@@ -18,6 +18,30 @@ export interface LiveMailRecordRow {
   priority: number | null;
 }
 
+export function buildMailRoutingRecords(
+  mailDomain: string,
+  mailHostname: string,
+  serverIp: string,
+): RequiredMailRecord[] {
+  const normalizedDomain = mailDomain.replace(/\.$/, "").toLowerCase();
+  const normalizedHostname = mailHostname.replace(/\.$/, "").toLowerCase();
+  const suffix = `.${normalizedDomain}`;
+  const hostName = normalizedHostname.endsWith(suffix)
+    ? normalizedHostname.slice(0, -suffix.length)
+    : normalizedHostname;
+
+  return [
+    {
+      purpose: "MX",
+      type: "MX",
+      name: "@",
+      value: normalizedHostname,
+      priority: 10,
+    },
+    { purpose: "HOST", type: "A", name: hostName, value: serverIp },
+  ];
+}
+
 const unquote = (value: string) => value.replace(/^"|"$/g, "").trim();
 const compact = (value: string) => value.replace(/\s+/g, "");
 
@@ -35,10 +59,13 @@ export function buildRequiredMailRecords(
   dkim?: { selector: string; value: string },
 ): RequiredMailRecord[] {
   const records: RequiredMailRecord[] = [
-    { purpose: "MX", type: "MX", name: "@", value: `mail.${hostname}`, priority: 10 },
-    // The MX target above must itself resolve to this server, or mail never arrives.
-    { purpose: "HOST", type: "A", name: "mail", value: serverIp },
-    { purpose: "SPF", type: "TXT", name: "@", value: `v=spf1 mx a ip4:${serverIp} ~all` },
+    ...buildMailRoutingRecords(hostname, `mail.${hostname}`, serverIp),
+    {
+      purpose: "SPF",
+      type: "TXT",
+      name: "@",
+      value: `v=spf1 mx a ip4:${serverIp} ~all`,
+    },
     {
       purpose: "DMARC",
       type: "TXT",
@@ -57,7 +84,9 @@ export function buildRequiredMailRecords(
   return records;
 }
 
-async function resolveAcross<T>(lookup: (resolver: dns.Resolver) => Promise<T[]>): Promise<T[]> {
+async function resolveAcross<T>(
+  lookup: (resolver: dns.Resolver) => Promise<T[]>,
+): Promise<T[]> {
   const perResolver = await Promise.all(
     PUBLIC_RESOLVER_IPS.map(async (ip) => {
       try {
@@ -83,7 +112,10 @@ export async function lookupLiveMailRecords(
   hostname: string,
   required: RequiredMailRecord[],
 ): Promise<LiveMailRecordRow[]> {
-  if (process.env.NODE_ENV === "test" || process.env.VEXLYX_MOCK_DNS === "true") {
+  if (
+    process.env.NODE_ENV === "test" ||
+    process.env.VEXLYX_MOCK_DNS === "true"
+  ) {
     return required.map((r) => ({
       type: r.type,
       name: r.name,
@@ -92,7 +124,8 @@ export async function lookupLiveMailRecords(
     }));
   }
 
-  const fqdn = (name: string) => (name === "@" ? hostname : `${name}.${hostname}`);
+  const fqdn = (name: string) =>
+    name === "@" ? hostname : `${name}.${hostname}`;
   const txt = async (name: string): Promise<string[]> =>
     resolveAcross(async (resolver) =>
       (await resolver.resolveTxt(fqdn(name))).map((chunks) => chunks.join("")),
@@ -110,17 +143,25 @@ export async function lookupLiveMailRecords(
   // Only an A record pointing at this server counts — mail must reach us.
   const expectedIp = required.find((r) => r.purpose === "HOST")?.value;
   for (const ip of new Set(mailHostIps)) {
-    if (ip === expectedIp) rows.push({ type: "A", name: "mail", value: ip, priority: null });
+    if (ip === expectedIp)
+      rows.push({ type: "A", name: "mail", value: ip, priority: null });
   }
 
   for (const value of new Set(apexTxt)) {
-    if (value.startsWith("v=spf1")) rows.push({ type: "TXT", name: "@", value, priority: null });
+    if (value.startsWith("v=spf1"))
+      rows.push({ type: "TXT", name: "@", value, priority: null });
   }
   for (const value of new Set(dmarcTxt)) {
-    if (value.startsWith("v=DMARC1")) rows.push({ type: "TXT", name: "_dmarc", value, priority: null });
+    if (value.startsWith("v=DMARC1"))
+      rows.push({ type: "TXT", name: "_dmarc", value, priority: null });
   }
   for (const record of mx) {
-    rows.push({ type: "MX", name: "@", value: record.exchange, priority: record.priority });
+    rows.push({
+      type: "MX",
+      name: "@",
+      value: record.exchange,
+      priority: record.priority,
+    });
   }
 
   const dkim = required.find((r) => r.purpose === "DKIM");
@@ -137,7 +178,10 @@ export async function lookupLiveMailRecords(
 }
 
 /** A required record is "live" when the lookup found a row serving its purpose. */
-export function isRecordLive(record: RequiredMailRecord, live: LiveMailRecordRow[]): boolean {
+export function isRecordLive(
+  record: RequiredMailRecord,
+  live: LiveMailRecordRow[],
+): boolean {
   switch (record.purpose) {
     case "MX":
       return live.some((r) => r.type === "MX");

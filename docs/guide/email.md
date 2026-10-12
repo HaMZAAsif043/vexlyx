@@ -5,9 +5,25 @@ can create real mailboxes on any domain you manage without a third-party mail pr
 
 ## Before you start
 
-The installer already set up a `webmail.<panel-domain>` DNS record and the mail stack itself
-(see [Getting started](/guide/getting-started)) — nothing extra to install. But for **other**
-domains you want to send/receive mail on:
+The installer sets up the mail stack itself, but the operator must publish the inbound routing
+records shown at the end of installation and in **Settings → DNS Records & Public IP**:
+
+```text
+A  <configured-mail-hostname>  → <server-public-ip>
+MX <configured-mail-domain>    → <configured-mail-hostname>  (priority 10)
+```
+
+The defaults are `mail.<panel-domain>` and `<panel-domain>`, but unattended installations may set
+different `VEXLYX_MAIL_HOSTNAME` and `VEXLYX_MAIL_DOMAIN` values. Do not replace configured values
+with assumptions based on the panel hostname.
+
+The hosting provider must also set PTR/reverse DNS for the server IP to the mail hostname and
+allow inbound TCP ports 25, 587, and 993. Many providers block outbound TCP/25; that affects
+server-to-server sending and may require the provider to remove the restriction. Panel
+transactional email can instead use the authenticated SMTP relay configured in **Settings →
+System Email**.
+
+For **other** domains you want to send or receive mail on:
 
 1. [Connect and verify the domain](/guide/domains-and-ssl) first — mail auth records are attached
    to the domain, so it needs to exist in Vexlyx before you create mailboxes on it.
@@ -75,10 +91,10 @@ since Vexlyx doesn't retain plaintext passwords to hand over automatically.
 Any IMAP/SMTP client (Apple Mail, Outlook, Thunderbird, the stock mail app on your phone) works
 with these settings:
 
-| | Host | Port | Security |
-|---|---|---|---|
-| Incoming (IMAP) | `mail.<your-panel-domain>` | `993` | SSL/TLS |
-| Outgoing (SMTP) | `mail.<your-panel-domain>` | `587` | STARTTLS |
+|                 | Host                          | Port  | Security |
+| --------------- | ----------------------------- | ----- | -------- |
+| Incoming (IMAP) | Your configured mail hostname | `993` | SSL/TLS  |
+| Outgoing (SMTP) | Your configured mail hostname | `587` | STARTTLS |
 
 Username is the full mailbox address (`jane@example.com`); password is the one shown at creation
 or reset. There's no POP3 — only IMAP.

@@ -22,6 +22,18 @@ afterEach(() => {
   vi.resetModules();
 });
 
+describe("Hosted mail DNS environment configuration", () => {
+  it("preserves the installer-configured mail hostname and domain", async () => {
+    const env = await loadEnv({
+      HOSTED_MAIL_HOSTNAME: "mx1.mailhost.net",
+      HOSTED_MAIL_DOMAIN: "example.org",
+    });
+
+    expect(env.HOSTED_MAIL_HOSTNAME).toBe("mx1.mailhost.net");
+    expect(env.HOSTED_MAIL_DOMAIN).toBe("example.org");
+  });
+});
+
 describe("Adminer environment configuration", () => {
   it("keeps the localhost default in development", async () => {
     const env = await loadEnv({
@@ -74,15 +86,23 @@ describe("Adminer environment configuration", () => {
 
 describe("System email environment configuration (F5.23)", () => {
   it("prints mail to the log outside production and uses SMTP in production", async () => {
-    const dev = await loadEnv({ NODE_ENV: "development", EMAIL_TRANSPORT: undefined });
+    const dev = await loadEnv({
+      NODE_ENV: "development",
+      EMAIL_TRANSPORT: undefined,
+    });
     expect(dev.EMAIL_TRANSPORT).toBe("log");
 
-    const prod = await loadEnv({ NODE_ENV: "production", EMAIL_TRANSPORT: undefined });
+    const prod = await loadEnv({
+      NODE_ENV: "production",
+      EMAIL_TRANSPORT: undefined,
+    });
     expect(prod.EMAIL_TRANSPORT).toBe("smtp");
   });
 
   it("refuses the log transport in production, where it would print reset links", async () => {
-    await expect(loadEnv({ NODE_ENV: "production", EMAIL_TRANSPORT: "log" })).rejects.toThrow(/EMAIL_TRANSPORT/);
+    await expect(
+      loadEnv({ NODE_ENV: "production", EMAIL_TRANSPORT: "log" }),
+    ).rejects.toThrow(/EMAIL_TRANSPORT/);
   });
 
   it("derives the sender from the panel domain with no configuration", async () => {
@@ -96,11 +116,19 @@ describe("System email environment configuration (F5.23)", () => {
   });
 
   it("requires SMTP username and password together", async () => {
-    await expect(loadEnv({ EMAIL_SMTP_USER: "resend", EMAIL_SMTP_PASS: undefined })).rejects.toThrow(/EMAIL_SMTP_USER/);
+    await expect(
+      loadEnv({ EMAIL_SMTP_USER: "resend", EMAIL_SMTP_PASS: undefined }),
+    ).rejects.toThrow(/EMAIL_SMTP_USER/);
   });
 
   it("keeps admin email reset off unless explicitly enabled", async () => {
-    expect((await loadEnv({ ALLOW_ADMIN_EMAIL_RESET: undefined })).ALLOW_ADMIN_EMAIL_RESET).toBe(false);
-    expect((await loadEnv({ ALLOW_ADMIN_EMAIL_RESET: "true" })).ALLOW_ADMIN_EMAIL_RESET).toBe(true);
+    expect(
+      (await loadEnv({ ALLOW_ADMIN_EMAIL_RESET: undefined }))
+        .ALLOW_ADMIN_EMAIL_RESET,
+    ).toBe(false);
+    expect(
+      (await loadEnv({ ALLOW_ADMIN_EMAIL_RESET: "true" }))
+        .ALLOW_ADMIN_EMAIL_RESET,
+    ).toBe(true);
   });
 });

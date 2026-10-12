@@ -30,12 +30,17 @@ vi.mock("node:dns/promises", () => {
 });
 
 // config/env.ts validates process.env at import time (dns-service imports it)
-process.env.DATABASE_URL ??= "postgresql://user:pass@localhost:5432/vexlyx_test";
-process.env.SESSION_SECRET ??= "test-session-secret-at-least-32-characters-long";
+process.env.DATABASE_URL ??=
+  "postgresql://user:pass@localhost:5432/vexlyx_test";
+process.env.SESSION_SECRET ??=
+  "test-session-secret-at-least-32-characters-long";
 
-const { buildRequiredMailRecords, isRecordLive, lookupLiveMailRecords } = await import(
-  "./required-records.js"
-);
+const {
+  buildMailRoutingRecords,
+  buildRequiredMailRecords,
+  isRecordLive,
+  lookupLiveMailRecords,
+} = await import("./required-records.js");
 const { DnsService } = await import("../domains/dns-service.js");
 
 const DKIM_VALUE = "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A";
@@ -46,15 +51,56 @@ const required = buildRequiredMailRecords("example.com", "203.0.113.5", {
 
 describe("buildRequiredMailRecords", () => {
   it("returns MX, SPF, DMARC and DKIM records for the domain", () => {
-    expect(required.map((r) => r.purpose)).toEqual(["MX", "HOST", "SPF", "DMARC", "DKIM"]);
-    expect(required.find((r) => r.purpose === "HOST")).toMatchObject({ type: "A", name: "mail", value: "203.0.113.5" });
-    expect(required.find((r) => r.purpose === "SPF")?.value).toBe("v=spf1 mx a ip4:203.0.113.5 ~all");
-    expect(required.find((r) => r.purpose === "MX")).toMatchObject({ value: "mail.example.com", priority: 10 });
-    expect(required.find((r) => r.purpose === "DKIM")?.name).toBe("default._domainkey");
+    expect(required.map((r) => r.purpose)).toEqual([
+      "MX",
+      "HOST",
+      "SPF",
+      "DMARC",
+      "DKIM",
+    ]);
+    expect(required.find((r) => r.purpose === "HOST")).toMatchObject({
+      type: "A",
+      name: "mail",
+      value: "203.0.113.5",
+    });
+    expect(required.find((r) => r.purpose === "SPF")?.value).toBe(
+      "v=spf1 mx a ip4:203.0.113.5 ~all",
+    );
+    expect(required.find((r) => r.purpose === "MX")).toMatchObject({
+      value: "mail.example.com",
+      priority: 10,
+    });
+    expect(required.find((r) => r.purpose === "DKIM")?.name).toBe(
+      "default._domainkey",
+    );
   });
 
   it("omits DKIM when no key exists yet", () => {
-    expect(buildRequiredMailRecords("example.com", "203.0.113.5").map((r) => r.purpose)).not.toContain("DKIM");
+    expect(
+      buildRequiredMailRecords("example.com", "203.0.113.5").map(
+        (r) => r.purpose,
+      ),
+    ).not.toContain("DKIM");
+  });
+
+  it("builds routing records for a custom mail hostname and domain", () => {
+    expect(
+      buildMailRoutingRecords("example.org", "mx1.mailhost.net", "203.0.113.8"),
+    ).toEqual([
+      {
+        purpose: "MX",
+        type: "MX",
+        name: "@",
+        value: "mx1.mailhost.net",
+        priority: 10,
+      },
+      {
+        purpose: "HOST",
+        type: "A",
+        name: "mx1.mailhost.net",
+        value: "203.0.113.8",
+      },
+    ]);
   });
 });
 
@@ -72,9 +118,13 @@ describe("lookupLiveMailRecords", () => {
     answers.txt = {
       "example.com": [["v=spf1 include:_spf.google.com ~all"]],
       "_dmarc.example.com": [["v=DMARC1; p=none"]],
-      "default._domainkey.example.com": [["v=DKIM1; k=rsa; ", "p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A"]],
+      "default._domainkey.example.com": [
+        ["v=DKIM1; k=rsa; ", "p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A"],
+      ],
     };
-    answers.mx = { "example.com": [{ exchange: "mail.example.com", priority: 10 }] };
+    answers.mx = {
+      "example.com": [{ exchange: "mail.example.com", priority: 10 }],
+    };
     answers.a = { "mail.example.com": ["203.0.113.5"] };
 
     const live = await lookupLiveMailRecords("example.com", required);
@@ -94,27 +144,56 @@ describe("lookupLiveMailRecords", () => {
 
     const live = await lookupLiveMailRecords("example.com", required);
 
-    expect(isRecordLive(required.find((r) => r.purpose === "HOST")!, live)).toBe(false);
+    expect(
+      isRecordLive(
+        required.find((r) => r.purpose === "HOST")!,
+        live,
+      ),
+    ).toBe(false);
   });
 
   it("does not count a DKIM record carrying a different public key", async () => {
-    answers.txt = { "default._domainkey.example.com": [["v=DKIM1; k=rsa; p=DIFFERENTKEYVALUE"]] };
+    answers.txt = {
+      "default._domainkey.example.com": [
+        ["v=DKIM1; k=rsa; p=DIFFERENTKEYVALUE"],
+      ],
+    };
 
     const live = await lookupLiveMailRecords("example.com", required);
 
-    expect(isRecordLive(required.find((r) => r.purpose === "DKIM")!, live)).toBe(false);
+    expect(
+      isRecordLive(
+        required.find((r) => r.purpose === "DKIM")!,
+        live,
+      ),
+    ).toBe(false);
   });
 });
 
 describe("DnsService.initializeEmailAuthRecords", () => {
   it("writes no records for a CONNECTED domain", async () => {
-    const dnsRecord = { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn() };
+    const dnsRecord = {
+      create: vi.fn(),
+      findFirst: vi.fn(),
+      findMany: vi.fn(),
+    };
     const prisma = {
-      domain: { findFirst: vi.fn().mockResolvedValue({ id: "d1", hostname: "example.com", dnsMode: "CONNECTED" }) },
+      domain: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({
+            id: "d1",
+            hostname: "example.com",
+            dnsMode: "CONNECTED",
+          }),
+      },
       dnsRecord,
     } as unknown as PrismaClient;
 
-    const result = await new DnsService(prisma).initializeEmailAuthRecords("u1", "d1");
+    const result = await new DnsService(prisma).initializeEmailAuthRecords(
+      "u1",
+      "d1",
+    );
 
     expect(result).toEqual([]);
     expect(dnsRecord.create).not.toHaveBeenCalled();
@@ -128,7 +207,13 @@ describe("DnsService.initializeEmailAuthRecords", () => {
     };
     const prisma = {
       domain: {
-        findFirst: vi.fn().mockResolvedValue({ id: "d1", hostname: "example.com", dnsMode: "MANAGED" }),
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({
+            id: "d1",
+            hostname: "example.com",
+            dnsMode: "MANAGED",
+          }),
         findUnique: vi.fn().mockResolvedValue({ dnsMode: "MANAGED" }),
       },
       dnsRecord,

@@ -19,18 +19,33 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useAuth } from "@/hooks/useAuth";
 import { useDnsInfo } from "@/hooks/useDnsInfo";
 import { useSystemSettings } from "@/hooks/useSystemSettings";
 import { ApiRequestError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { formatTime } from "@/lib/datetime";
-import { useRefreshAnimation, refreshIconClassName } from "@/hooks/useRefreshAnimation";
+import {
+  useRefreshAnimation,
+  refreshIconClassName,
+} from "@/hooks/useRefreshAnimation";
 import { TwoFactorCard } from "./TwoFactorCard";
 import { SystemEmailCard } from "./SystemEmailCard";
 import { GitHubCard } from "./GitHubCard";
@@ -43,7 +58,14 @@ function listTimezones(): string[] {
   try {
     return Intl.supportedValuesOf("timeZone");
   } catch {
-    return ["UTC", "America/New_York", "America/Los_Angeles", "Europe/London", "Europe/Berlin", "Asia/Tokyo"];
+    return [
+      "UTC",
+      "America/New_York",
+      "America/Los_Angeles",
+      "Europe/London",
+      "Europe/Berlin",
+      "Asia/Tokyo",
+    ];
   }
 }
 
@@ -63,8 +85,12 @@ export function SettingsPage() {
     isVerifying,
     verify: verifyDns,
   } = useDnsInfo(isAdmin);
-  const { settings: tzSettings, isLoading: isTzLoading, updateTimezone, isSaving: isSavingTz } =
-    useSystemSettings();
+  const {
+    settings: tzSettings,
+    isLoading: isTzLoading,
+    updateTimezone,
+    isSaving: isSavingTz,
+  } = useSystemSettings();
   const [timezone, setTimezone] = useState<string | null>(null);
 
   useEffect(() => {
@@ -79,7 +105,8 @@ export function SettingsPage() {
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
 
-  const { isRefreshing: isRefreshingDns, refresh: refreshDnsAnimation } = useRefreshAnimation();
+  const { isRefreshing: isRefreshingDns, refresh: refreshDnsAnimation } =
+    useRefreshAnimation();
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
   const handleChangePassword = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -103,7 +130,10 @@ export function SettingsPage() {
       setNewPassword("");
       setConfirmNewPassword("");
     } catch (err) {
-      const message = err instanceof ApiRequestError ? err.message : "Failed to change password";
+      const message =
+        err instanceof ApiRequestError
+          ? err.message
+          : "Failed to change password";
       setPasswordError(message);
       toast.error(message);
     } finally {
@@ -131,21 +161,28 @@ export function SettingsPage() {
       if (allPropagated) {
         toast.success("All DNS records are live");
       } else {
-        toast.info("Some records haven't propagated yet — this can take a few minutes to hours");
+        toast.info(
+          "Some records haven't propagated yet — this can take a few minutes to hours",
+        );
       }
     } catch {
       toast.error("Failed to check DNS records");
     }
   };
 
-  const verificationFor = (host: string): DnsRecordVerification | undefined =>
-    verification?.results.find((r) => r.host === host);
+  const verificationFor = (
+    type: "A" | "MX",
+    host: string,
+  ): DnsRecordVerification | undefined =>
+    verification?.results.find((r) => r.type === type && r.host === host);
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
-        <p className="text-muted-foreground">Account details and server reference info.</p>
+        <p className="text-muted-foreground">
+          Account details and server reference info.
+        </p>
       </div>
 
       {/* Account Info */}
@@ -180,7 +217,9 @@ export function SettingsPage() {
             <KeyRound className="h-4 w-4" />
             Change Password
           </CardTitle>
-          <CardDescription>Update the password used to sign in to this panel.</CardDescription>
+          <CardDescription>
+            Update the password used to sign in to this panel.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleChangePassword} className="max-w-sm space-y-4">
@@ -272,7 +311,9 @@ export function SettingsPage() {
               <Button
                 size="sm"
                 onClick={handleSaveTimezone}
-                disabled={isSavingTz || !timezone || timezone === tzSettings?.timezone}
+                disabled={
+                  isSavingTz || !timezone || timezone === tzSettings?.timezone
+                }
                 className="gap-1.5"
               >
                 {isSavingTz && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
@@ -298,7 +339,8 @@ export function SettingsPage() {
                 DNS Records &amp; Public IP
               </CardTitle>
               <CardDescription>
-                Reference info from the installer — point these DNS records at your server.
+                Reference info from the installer — point these DNS records at
+                your server.
               </CardDescription>
             </div>
             <Button
@@ -307,7 +349,9 @@ export function SettingsPage() {
               onClick={() => void handleRefreshDns()}
               disabled={isRefreshingDns || isDnsLoading}
             >
-              <RefreshCw className={refreshIconClassName(isRefreshingDns, "h-4 w-4")} />
+              <RefreshCw
+                className={refreshIconClassName(isRefreshingDns, "h-4 w-4")}
+              />
             </Button>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -320,22 +364,33 @@ export function SettingsPage() {
             ) : !info?.publicIp ? (
               <p className="text-sm text-muted-foreground">
                 No public IP was detected for this server during install. Set{" "}
-                <code className="rounded bg-muted px-1 py-0.5 text-xs">VEXLYX_PUBLIC_IP</code> manually
-                in <code className="rounded bg-muted px-1 py-0.5 text-xs">/etc/vexlyx/vexlyx.env</code>{" "}
+                <code className="rounded bg-muted px-1 py-0.5 text-xs">
+                  VEXLYX_PUBLIC_IP
+                </code>{" "}
+                manually in{" "}
+                <code className="rounded bg-muted px-1 py-0.5 text-xs">
+                  /etc/vexlyx/vexlyx.env
+                </code>{" "}
                 if you know it, then re-run the installer.
               </p>
             ) : (
               <>
                 <div>
-                  <span className="text-xs text-muted-foreground">Server public IP</span>
-                  <p className="mt-1 font-mono text-sm font-medium">{info.publicIp}</p>
+                  <span className="text-xs text-muted-foreground">
+                    Server public IP
+                  </span>
+                  <p className="mt-1 font-mono text-sm font-medium">
+                    {info.publicIp}
+                  </p>
                 </div>
 
                 <div className="rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
-                  Log in to your domain registrar or DNS provider (e.g. Cloudflare, Namecheap,
-                  Route 53) and add each record below as an <span className="font-medium">A record</span>.
-                  Propagation usually takes a few minutes, but can take up to 48 hours depending on
-                  your provider — use <span className="font-medium">Verify</span> below to check.
+                  Log in to your domain registrar or DNS provider (e.g.
+                  Cloudflare, Namecheap, Route 53) and add each record below
+                  with the displayed type and value. Propagation usually takes a
+                  few minutes, but can take up to 48 hours depending on your
+                  provider — use <span className="font-medium">Verify</span>{" "}
+                  below to check.
                 </div>
 
                 <Separator />
@@ -352,24 +407,38 @@ export function SettingsPage() {
                     onClick={() => void handleVerifyDns()}
                     disabled={isVerifying}
                   >
-                    <ShieldQuestion className={cn("h-3.5 w-3.5", isVerifying && "animate-pulse")} />
+                    <ShieldQuestion
+                      className={cn(
+                        "h-3.5 w-3.5",
+                        isVerifying && "animate-pulse",
+                      )}
+                    />
                     {isVerifying ? "Checking…" : "Verify DNS"}
                   </Button>
                 </div>
 
                 <div className="space-y-2">
                   {info.records.map((record, i) => {
-                    const line = `${record.type} ${record.host} -> ${record.value}`;
-                    const result = verificationFor(record.host);
+                    const priority =
+                      record.priority === undefined
+                        ? ""
+                        : ` priority ${record.priority}`;
+                    const line = `${record.type} ${record.host} -> ${record.value}${priority}`;
+                    const result = verificationFor(record.type, record.host);
                     return (
                       <div
                         key={`${record.host}-${i}`}
                         className="flex items-center justify-between gap-3 rounded-lg border border-border bg-card p-3"
                       >
                         <div className="min-w-0">
-                          <p className="truncate font-mono text-xs font-medium">{record.host}</p>
+                          <p className="truncate font-mono text-xs font-medium">
+                            {record.host}
+                          </p>
                           <p className="text-xs text-muted-foreground">
                             {record.purpose} — {record.type} → {record.value}
+                            {record.priority === undefined
+                              ? ""
+                              : ` (priority ${record.priority})`}
                           </p>
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
@@ -389,6 +458,15 @@ export function SettingsPage() {
                       </div>
                     );
                   })}
+                </div>
+                <div className="rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+                  The mail-host A and mail-domain MX records enable inbound
+                  delivery. Publish SPF, DKIM, and DMARC from{" "}
+                  <span className="font-medium">Settings → System Email</span>.
+                  Configure PTR/reverse DNS with your hosting provider and allow
+                  inbound TCP ports 25, 587, and 993. If outbound TCP/25 is
+                  blocked, configure an authenticated SMTP relay for panel
+                  email.
                 </div>
               </>
             )}
@@ -416,7 +494,9 @@ function DnsVerificationBadge({ result }: { result: DnsRecordVerification }) {
     );
   }
 
-  const hasAnyResponse = result.resolvers.some((r) => r.detectedValues.length > 0);
+  const hasAnyResponse = result.resolvers.some(
+    (r) => r.detectedValues.length > 0,
+  );
   if (hasAnyResponse) {
     return (
       <Badge

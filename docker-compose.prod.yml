@@ -184,6 +184,8 @@ services:
       # DNS Records & Public IP Onboarding (F5.9)
       PANEL_DOMAIN: ${VEXLYX_DOMAIN}
       PUBLIC_IP: ${VEXLYX_PUBLIC_IP:-}
+      HOSTED_MAIL_HOSTNAME: ${VEXLYX_MAIL_HOSTNAME}
+      HOSTED_MAIL_DOMAIN: ${VEXLYX_MAIL_DOMAIN}
       # Nameservers users delegate to for hosted DNS (F5.25/F5.27)
       DNS_NAMESERVERS: ${DNS_NAMESERVERS:-ns1.vexlyx.com,ns2.vexlyx.com}
       POSTGRES_HOST: postgres

@@ -8,7 +8,9 @@
 ## What It Does
 
 - The installer auto-detects the server's public IPv4 address (external IP-echo services, falling back to the local route's source address) and persists it to `/etc/vexlyx/vexlyx.env` as `VEXLYX_PUBLIC_IP`, re-detecting on every run since it can legitimately change (e.g. after migrating hosts).
-- The final install-summary step prints every DNS record the admin needs: `A <domain> -> <ip>`, `A api.<domain> -> <ip>`, `A webmail.<domain> -> <ip>`, and `A *.<base-domain> -> <ip>` for deployed project subdomains.
+- The final install-summary step prints every DNS record the admin needs: panel, API, webmail and
+  project-wildcard A records, plus `A <mail-hostname> -> <ip>` and
+  `MX <mail-domain> -> <mail-hostname>` (priority 10) for inbound hosted mail.
 - A new `VEXLYX_BASE_DOMAIN` install variable (defaults to `VEXLYX_DOMAIN`) lets the panel domain and the deployed-project base domain live in separate DNS zones — the wildcard record follows whichever is configured.
 - `GET /api/system/dns-info` (ADMIN-only) returns the same `{ publicIp, domain, baseDomain, records }` shape, surfaced on `/settings` with a live "Verify DNS" propagation check (F5.11).
 
@@ -29,6 +31,8 @@ docker-compose.prod.yml (api service)
   PANEL_DOMAIN=${VEXLYX_DOMAIN}
   PUBLIC_IP=${VEXLYX_PUBLIC_IP:-}
   BASE_DOMAIN=${VEXLYX_BASE_DOMAIN}
+  HOSTED_MAIL_HOSTNAME=${VEXLYX_MAIL_HOSTNAME}
+  HOSTED_MAIL_DOMAIN=${VEXLYX_MAIL_DOMAIN}
        │
        ▼
 apps/api/src/modules/system/{service,routes}.ts
@@ -37,17 +41,18 @@ apps/api/src/modules/system/{service,routes}.ts
 
 ### Key Files
 
-| File | Purpose |
-|------|---------|
-| `system/scripts/install/lib.sh` | `detect_public_ip()` (external services + local route fallback), `upsert_secret()` (update-in-place for values that change across re-runs) |
-| `system/scripts/install/config.sh` | Prompts + persists `VEXLYX_BASE_DOMAIN` |
-| `system/scripts/install/steps/08-network.sh` | Detects and persists `VEXLYX_PUBLIC_IP` on every run |
-| `system/scripts/install/steps/16-summary.sh` | Prints the IP + DNS records at the end of install |
-| `docker-compose.prod.yml` | Wires `PANEL_DOMAIN` / `PUBLIC_IP` / `BASE_DOMAIN` into the `api` container |
-| `apps/api/src/config/env.ts` | `PANEL_DOMAIN`, `PUBLIC_IP` (both optional — unset in dev) |
-| `apps/api/src/modules/system/service.ts` | Builds the record list; returns an empty list rather than guessing if domain/IP are unknown |
-| `apps/api/src/modules/system/routes.ts` | `GET /api/system/dns-info` |
-| `packages/shared/src/schemas/dnsOnboarding.ts` | `DnsOnboardingInfoSchema` / `DnsRecordSuggestionSchema`, shared between API and dashboard |
+| File                                            | Purpose                                                                                                                                    |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `system/scripts/install/lib.sh`                 | `detect_public_ip()` (external services + local route fallback), `upsert_secret()` (update-in-place for values that change across re-runs) |
+| `system/scripts/install/config.sh`              | Prompts + persists `VEXLYX_BASE_DOMAIN`                                                                                                    |
+| `system/scripts/install/steps/08-network.sh`    | Detects and persists `VEXLYX_PUBLIC_IP` on every run                                                                                       |
+| `system/scripts/install/steps/16-summary.sh`    | Prints the IP + DNS records at the end of install                                                                                          |
+| `docker-compose.prod.yml`                       | Wires `PANEL_DOMAIN` / `PUBLIC_IP` / `BASE_DOMAIN` into the `api` container                                                                |
+| `apps/api/src/config/env.ts`                    | Panel, public-IP and hosted-mail onboarding configuration                                                                                  |
+| `apps/api/src/modules/system/service.ts`        | Builds and verifies A/MX records; returns an empty list rather than guessing if domain/IP are unknown                                      |
+| `apps/api/src/modules/mail/required-records.ts` | Shared source of truth for the inbound mail A/MX pair                                                                                      |
+| `apps/api/src/modules/system/routes.ts`         | `GET /api/system/dns-info`                                                                                                                 |
+| `packages/shared/src/schemas/dnsOnboarding.ts`  | `DnsOnboardingInfoSchema` / `DnsRecordSuggestionSchema`, shared between API and dashboard                                                  |
 
 See `docs/dev/settings-page.md` for how `/settings` consumes this endpoint (F5.11).
 
@@ -55,7 +60,7 @@ See `docs/dev/settings-page.md` for how `/settings` consumes this endpoint (F5.1
 
 ## Why Re-Detect the IP Every Run
 
-`generate_secrets()` in `config.sh` is deliberately write-once — it never touches `SESSION_SECRET`, `ENCRYPTION_KEY`, or the DB passwords again once they exist, since rotating them out from under a running install would invalidate every session and encrypted env var. A public IP has no such constraint and *can* legitimately change (server migration, cloud provider reassigning addresses), so `upsert_secret()` gives it different semantics: update the persisted value in place on every run instead of leaving a stale one behind.
+`generate_secrets()` in `config.sh` is deliberately write-once — it never touches `SESSION_SECRET`, `ENCRYPTION_KEY`, or the DB passwords again once they exist, since rotating them out from under a running install would invalidate every session and encrypted env var. A public IP has no such constraint and _can_ legitimately change (server migration, cloud provider reassigning addresses), so `upsert_secret()` gives it different semantics: update the persisted value in place on every run instead of leaving a stale one behind.
 
 ## Why Local-Route Fallback
 
@@ -65,12 +70,15 @@ Most cloud VPS network stacks expose a public IP directly on the primary interfa
 
 ## How to Test
 
-1. Run the installer against a fresh server → the final summary lists the detected public IP and the four DNS `A` records (panel, api, webmail, wildcard) before finishing.
+1. Run the installer against a fresh server → the final summary lists the detected public IP,
+   four application A records, the mail-host A record and the priority-10 mail-domain MX record.
 2. Block outbound HTTP on a test VM before installing → IP detection falls back to the local route address (or prints a warning if that fails too), install still completes.
 3. Set `VEXLYX_BASE_DOMAIN` to a different domain than `VEXLYX_DOMAIN` → the wildcard record in the summary uses the base domain; the panel, api, and webmail records use the panel domain regardless.
 4. `curl` (as an authenticated ADMIN) `GET /api/system/dns-info` on a production install → same IP/records as the installer printed. As a non-ADMIN user → `403`.
 5. In local dev (`PANEL_DOMAIN`/`PUBLIC_IP` unset) → the endpoint returns `records: []` rather than guessing.
-6. Deployed and verified live against a real server (`panel.mindgera.site`, fresh install + `git clone` deploy) — confirmed the installer detects the correct public IP and prints all four records.
+6. Set custom `VEXLYX_MAIL_HOSTNAME` and `VEXLYX_MAIL_DOMAIN` values → the installer and Settings
+   show those exact values, and Verify DNS checks A and MX using the appropriate resolver methods.
+7. Deployed and verified live against a real server (`panel.mindgera.site`, fresh install + `git clone` deploy) — confirmed the installer detects the correct public IP and prints the application records.
 
 ---
 

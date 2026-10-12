@@ -4,7 +4,7 @@
 > **Status:** 🟢 COMPLETED  
 > **Package:** `@vexlyx/api`, `@vexlyx/dashboard`, `@vexlyx/shared`  
 > **Prisma Models:** `Domain`, `DnsRecord`, `Mailbox`  
-> **Infrastructure:** Postfix 3.x MTA, OpenDKIM Milter, RFC 6409 Submission  
+> **Infrastructure:** Postfix 3.x MTA, OpenDKIM Milter, RFC 6409 Submission
 
 ---
 
@@ -27,7 +27,14 @@ reachable for the initial HTTP-01 challenge. To retry after correcting DNS:
 sudo /usr/local/sbin/vexlyx-sync-mail-tls
 ```
 
+Inbound delivery also requires an MX record at `VEXLYX_MAIL_DOMAIN` targeting
+`VEXLYX_MAIL_HOSTNAME` with priority 10. Both values are independently configurable; code and
+operator guidance must not assume they are always `mail.$VEXLYX_DOMAIN` and `$VEXLYX_DOMAIN`.
+PTR/reverse DNS is configured at the hosting provider, not by Vexlyx. Public mail operation also
+requires inbound TCP ports 25, 587 and 993, while outbound TCP/25 may require provider approval.
+
 Drawing from modern cloud-native standards (Mailcow, Plesk, CloudPanel, Resend), Vexlyx decouples outgoing mail into:
+
 1. **RFC 6409 Port Separation**: Clear segregation between port 25 (server-to-server relay/delivery with strict open relay denial) and port 587 (authenticated client submission with mandatory TLS encryption).
 2. **Cryptographic DKIM Signing via OpenDKIM**: Automated 2048-bit RSA key pair generation per domain, auto-configuring `KeyTable`, `SigningTable`, and `TrustedHosts`, with direct integration into Vexlyx CoreDNS (F3.3) for instant one-click DNS TXT record deployment.
 3. **Decoupled Virtual Domain Sync**: Virtual domain tables (`/etc/postfix/virtual_domains`, `virtual_mailbox_maps`) synchronized as flat hash maps via `postfix_manager.py`, isolating mail delivery from runtime database schema changes.
@@ -82,6 +89,7 @@ Drawing from modern cloud-native standards (Mailcow, Plesk, CloudPanel, Resend),
 ## 3. Configuration Specifications
 
 ### Postfix `main.cf` (`docker/postfix/main.cf`)
+
 ```text
 # Identity
 myhostname = mail.vexlyx.local
@@ -116,6 +124,7 @@ milter_protocol = 6
 ```
 
 ### Postfix `master.cf` (`docker/postfix/master.cf`)
+
 ```text
 # Standard SMTP MTA
 smtp      inet  n       -       n       -       -       smtpd
@@ -150,11 +159,13 @@ submission inet n       -       n       -       -       smtpd
 ## 5. Testing & Verification
 
 Run the dedicated test suite:
+
 ```bash
 python tests/test_postfix_smtp.py
 ```
 
 Covered tests:
+
 - `test_01_generate_dkim_keys_and_dns_record`: Verifies 2048-bit key generation and `v=DKIM1; k=rsa; p=...` format.
 - `test_02_opendkim_tables_updated`: Verifies `KeyTable`, `SigningTable`, and `TrustedHosts`.
 - `test_03_get_dkim_existing`: Checks retrieving existing DKIM keys from disk.

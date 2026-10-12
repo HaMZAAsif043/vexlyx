@@ -4,11 +4,11 @@ Vexlyx is self-hosted. The supported production path installs the panel and its 
 
 ## Choose an installation path
 
-| Goal | Use | Support level |
-|---|---|---|
-| Run a production panel | [Ubuntu server installer](#production-ubuntu-server) | Supported |
-| Contribute or evaluate locally | [Local development with Docker](#local-development-with-docker) | Supported for development |
-| Build a custom production image or Compose stack | Existing Compose files as a starting point | Advanced; you own upgrades and hardening |
+| Goal                                             | Use                                                             | Support level                            |
+| ------------------------------------------------ | --------------------------------------------------------------- | ---------------------------------------- |
+| Run a production panel                           | [Ubuntu server installer](#production-ubuntu-server)            | Supported                                |
+| Contribute or evaluate locally                   | [Local development with Docker](#local-development-with-docker) | Supported for development                |
+| Build a custom production image or Compose stack | Existing Compose files as a starting point                      | Advanced; you own upgrades and hardening |
 
 ## Production: Ubuntu server
 
@@ -30,7 +30,7 @@ Create an A record for the panel hostname before installation:
 panel.example.com  A  203.0.113.10
 ```
 
-Wait until the record resolves to the server. The installer uses that hostname to obtain a Let's Encrypt certificate. Project wildcard DNS, hosted DNS, and mail records can be configured after the panel is running.
+Wait until the record resolves to the server. The installer uses that hostname to obtain a Let's Encrypt certificate. Project wildcard DNS and hosted DNS can be configured after the panel is running. The final installer summary prints the mail records too; publish them promptly so inbound delivery works and the mail-host certificate can be issued (the certificate job retries automatically after DNS propagates).
 
 ### 2. Review and run the installer
 
@@ -70,8 +70,16 @@ Keep `/etc/vexlyx/vexlyx.env` private. It contains installation secrets.
 
 ### 4. Finish production setup
 
-- Configure wildcard or per-project DNS records.
-- Publish SPF, DKIM, and DMARC records before sending production mail.
+- Publish the panel, API, webmail, project wildcard, and hosted-mail records printed by the
+  installer. The hosted-mail records are `A <mail-hostname> → <server-ip>` and
+  `MX <mail-domain> → <mail-hostname>` with priority 10. The same checklist remains available in
+  **Settings → DNS Records & Public IP**.
+- Publish the separate SPF, DKIM, and DMARC records shown in **Settings → System Email** before
+  sending panel notifications in production.
+- Ask the hosting provider to set PTR/reverse DNS for the server IP to the configured mail
+  hostname. Make sure inbound TCP ports 25, 587, and 993 are allowed.
+- Check whether the provider blocks outbound TCP/25. If it does, configure an authenticated SMTP
+  relay for panel transactional email.
 - Confirm backup storage and run a restore test.
 - Enable two-factor authentication for administrator accounts.
 - Review firewall rules and expose only the services you use.

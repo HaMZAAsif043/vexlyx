@@ -115,6 +115,8 @@ const envSchema = z
     // env var but to an empty string — coerce that to undefined rather than
     // failing validation. Both unset in local dev, where DNS onboarding is moot.
     PANEL_DOMAIN: z.string().min(1).optional(),
+    HOSTED_MAIL_HOSTNAME: z.string().min(1).optional(),
+    HOSTED_MAIL_DOMAIN: z.string().min(1).optional(),
     PUBLIC_IP: z
       .string()
       .optional()
@@ -179,7 +181,8 @@ const envSchema = z
       ctx.addIssue({
         code: "custom",
         path: ["EMAIL_TRANSPORT"],
-        message: "EMAIL_TRANSPORT=log prints mail (including reset links) to the log and is not allowed in production",
+        message:
+          "EMAIL_TRANSPORT=log prints mail (including reset links) to the log and is not allowed in production",
       });
     }
     if (Boolean(value.EMAIL_SMTP_USER) !== Boolean(value.EMAIL_SMTP_PASS)) {
@@ -225,13 +228,18 @@ function validateEnv() {
     throw new Error(`Invalid environment variables:\n${formatted}`);
   }
 
-  const mailDomain = result.data.MAIL_DOMAIN ?? result.data.PANEL_DOMAIN ?? result.data.BASE_DOMAIN;
+  const mailDomain =
+    result.data.MAIL_DOMAIN ??
+    result.data.PANEL_DOMAIN ??
+    result.data.BASE_DOMAIN;
 
   return {
     ...result.data,
     EMAIL_TRANSPORT:
       result.data.EMAIL_TRANSPORT ??
-      (result.data.NODE_ENV === "production" ? ("smtp" as const) : ("log" as const)),
+      (result.data.NODE_ENV === "production"
+        ? ("smtp" as const)
+        : ("log" as const)),
     MAIL_DOMAIN: mailDomain,
     MAIL_FROM: result.data.MAIL_FROM ?? `notifications@${mailDomain}`,
     ADMINER_URL:
