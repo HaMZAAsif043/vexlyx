@@ -5,14 +5,14 @@
 # Docs: https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
 
 # Default owner for everything.
-*                         @getatlantiqs
+*                         @getatlantiqs @aliahmed-codes
 
 # Paths that change what runs on the server or in CI. Listed explicitly so a
 # future owner split starts from the sensitive areas.
-/.github/                 @getatlantiqs
-/system/                  @getatlantiqs
-/docker/                  @getatlantiqs
-/docker-compose*.yml      @getatlantiqs
-/apps/api/prisma/         @getatlantiqs
-/install.sh               @getatlantiqs
-/SECURITY.md              @getatlantiqs
+/.github/                 @getatlantiqs @aliahmed-codes
+/system/                  @getatlantiqs @aliahmed-codes
+/docker/                  @getatlantiqs @aliahmed-codes
+/docker-compose*.yml      @getatlantiqs @aliahmed-codes
+/apps/api/prisma/         @getatlantiqs @aliahmed-codes
+/install.sh               @getatlantiqs @aliahmed-codes
+/SECURITY.md              @getatlantiqs @aliahmed-codes
