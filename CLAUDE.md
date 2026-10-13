@@ -242,7 +242,7 @@ Use ONLY these CSS variables (defined in `globals.css`):
 ### Code Anti-Patterns
 - **DO NOT** use `any` type. Use `unknown` and narrow with Zod or type guards.
 - **DO NOT** add barrel exports (`index.ts` re-exports). Import directly from source files.
-- **DO NOT** use default exports except for Next.js pages and layouts.
+- **DO NOT** use default exports except for Next.js pages and layouts, or tool configuration files that require them (such as `prisma.config.ts`).
 - **DO NOT** install new dependencies without confirming with the user first.
 - **DO NOT** use `console.log` in production code. Use the Pino logger in API, `console.error` only in catch blocks.
 - **DO NOT** write raw SQL. Use Prisma for all database operations.
