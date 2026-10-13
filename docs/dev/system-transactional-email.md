@@ -31,7 +31,7 @@ This is separate from the customer mail-hosting stack ([Postfix](email/postfix.m
               OpenDKIM signs notifications@MAIL_DOMAIN                 Resend, Postmark, SES, Mailgun, ...
 ```
 
-- `modules/system-email/notifier.ts` is a module-level singleton, so any service sends a notification with one line and tests that never register it get a silent no-op.
+- `modules/system-email/notifier.ts` is a module-level singleton, so any service sends a notification with one line and calls made before registration are silent no-ops. The notifier catches and structurally logs dispatch failures with the event and target (plus the recipient for user notifications), without logging template parameters or failing the business operation that triggered the email.
 - Sending is always queued, so a slow or unreachable SMTP server never blocks a request. Failures are retried, logged, and shown on the admin card.
 - `modules/system-email/templates.ts` holds one typed function per event returning subject, plain text and a minimal HTML body. There is no template builder by design. Links are built from `PANEL_DOMAIN` (or `CORS_ORIGIN`), never from a request's `Host` header.
 - On API start (bundled transport only) `ensureSenderIdentity()` calls the existing `generate_dkim` command in `postfix_manager.py` for `MAIL_DOMAIN`, which is idempotent, so OpenDKIM signs panel mail. The panel domain is not a customer `Domain`, so no database row is created.

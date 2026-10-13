@@ -3,7 +3,7 @@ import { createQueue, createWorker } from "../../config/queue.js";
 import { AuditLogService } from "../audit-log/service.js";
 import { SystemEmailTestSchema } from "./schema.js";
 import { SYSTEM_EMAIL_QUEUE, SystemEmailService, type SystemEmailJob } from "./service.js";
-import { registerSystemEmail } from "./notifier.js";
+import { registerSystemEmail, unregisterSystemEmail } from "./notifier.js";
 
 export async function systemEmailRoutes(app: FastifyInstance) {
   const auditLog = new AuditLogService(app.prisma, app.log);
@@ -15,7 +15,8 @@ export async function systemEmailRoutes(app: FastifyInstance) {
   });
 
   app.registerQueue(queue, worker);
-  registerSystemEmail(service);
+  registerSystemEmail(service, app.log);
+  app.addHook("onClose", async () => unregisterSystemEmail(service));
   void service.ensureSenderIdentity();
 
   // GET /api/system-email/status
