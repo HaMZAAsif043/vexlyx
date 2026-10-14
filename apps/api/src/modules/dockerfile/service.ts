@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { PrismaClient } from "@prisma/client";
 import { env } from "../../config/env.js";
 import type { SaveDockerfileInput, DockerfileStatus, DockerfileTemplate } from "./schema.js";
+import { getPythonBin } from "../../utils/pythonBin.js";
 
 // ---------------------------------------------------------------------------
 // Error definition
@@ -44,7 +45,7 @@ function getBuildManagerScriptPath(): string {
 function runPythonCommand<T>(payload: Record<string, unknown>): Promise<T> {
   return new Promise((resolveP, rejectP) => {
     const scriptPath = getBuildManagerScriptPath();
-    const child = spawn("python", [scriptPath], {
+    const child = spawn(getPythonBin(), [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
 

@@ -44,7 +44,7 @@ function getSftpManagerPath(): string {
 function runSftpCommand<T>(payload: Record<string, unknown>): Promise<T> {
   return new Promise((resolveP, rejectP) => {
     const scriptPath = getSftpManagerPath();
-    const child = spawn("python", [scriptPath], {
+    const child = spawn(getPythonBin(), [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -115,6 +115,7 @@ function runSftpCommand<T>(payload: Record<string, unknown>): Promise<T> {
 }
 
 import { encrypt, decrypt } from "../../utils/encryption.js";
+import { getPythonBin } from "../../utils/pythonBin.js";
 
 function decryptPasswordWithFallback(stored: string): { password: string | null; needsUpgrade: boolean } {
   // 1. Try modern SHA-256 derived key

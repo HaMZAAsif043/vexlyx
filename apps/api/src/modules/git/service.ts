@@ -10,6 +10,7 @@ import type { ConnectRepoInput } from "./schema.js";
 import type { ConnectGitHubRepositoryInput } from "@vexlyx/shared";
 import type { GitHubService } from "../github/service.js";
 import type { AuditLogService } from "../audit-log/service.js";
+import { getPythonBin } from "../../utils/pythonBin.js";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -75,7 +76,7 @@ export function runGitManager(payload: GitManagerPayload): Promise<GitManagerRes
   return new Promise((resolveP, rejectP) => {
     const scriptPath = getGitManagerScriptPath();
 
-    const child = spawn("python", [scriptPath], {
+    const child = spawn(getPythonBin(), [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
 

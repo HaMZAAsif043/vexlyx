@@ -12,6 +12,7 @@ import type {
 } from "@vexlyx/shared";
 import { env } from "../../config/env.js";
 import type { AuditLogService } from "../audit-log/service.js";
+import { getPythonBin } from "../../utils/pythonBin.js";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -62,7 +63,7 @@ function runFirewallCommand<T>(payload: Record<string, unknown>, logger: Fastify
       ...payload,
     });
 
-    const pythonBin = process.env.PYTHON_BIN ?? (process.platform === "win32" ? "python" : "python3");
+    const pythonBin = getPythonBin();
 
     const child = spawn(pythonBin, [scriptPath], { stdio: ["pipe", "pipe", "pipe"] });
 

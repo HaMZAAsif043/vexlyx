@@ -11,6 +11,7 @@ import type {
   ServiceLogsResponse,
 } from "@vexlyx/shared";
 import { env } from "../../config/env.js";
+import { getPythonBin } from "../../utils/pythonBin.js";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -71,7 +72,7 @@ function runServiceStatusCommand<T>(payload: Record<string, unknown>, logger: Fa
       ...payload,
     });
 
-    const pythonBin = process.env.PYTHON_BIN ?? (process.platform === "win32" ? "python" : "python3");
+    const pythonBin = getPythonBin();
 
     const child = spawn(pythonBin, [scriptPath], { stdio: ["pipe", "pipe", "pipe"] });
 

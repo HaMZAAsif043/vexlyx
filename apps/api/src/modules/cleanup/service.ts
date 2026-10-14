@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { PrismaClient } from "@prisma/client";
 import type { FastifyBaseLogger } from "fastify";
 import type { DiskUsageResponse, CleanupTrigger } from "@vexlyx/shared";
-import { env } from "../../config/env.js";
+import { getPythonBin } from "../../utils/pythonBin.js";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -55,7 +55,7 @@ function runDockerManagerCommand<T>(
   return new Promise((resolvePromise, reject) => {
     const scriptPath = getDockerManagerScriptPath();
     const body = JSON.stringify(payload);
-    const pythonBin = env.PYTHON_BIN ?? (process.platform === "win32" ? "python" : "python3");
+    const pythonBin = getPythonBin();
 
     const child = spawn(pythonBin, [scriptPath], { stdio: ["pipe", "pipe", "pipe"] });
 

@@ -207,6 +207,8 @@ As of F5.14, the rejected `BackupError` includes the captured stderr when presen
 
 The API spawns `system/python/*.py` scripts using `env.PYTHON_BIN` if set, otherwise `python` on Windows / `python3` elsewhere (see `apps/api/.env.example`). Only set `PYTHON_BIN` if that default isn't the right interpreter on your host — e.g. a virtualenv, or a distro that ships neither `python` nor `python3` under those exact names.
 
+This applies to **every** module that runs a Python script (build, deploy, git, databases, dockerfile, logs, sftp, wordpress, backups, cleanup, firewall, services, monitoring, mail, SSL). They all resolve the interpreter through `getPythonBin()` in `apps/api/src/utils/pythonBin.ts`; never hardcode `"python"` or read `process.env.PYTHON_BIN` directly (a hardcoded `python` fails with `ENOENT` on hosts where only `python3` exists, #53). `apps/api/src/utils/pythonBin.test.ts` fails if a module bypasses the helper. The mail and SSL managers additionally honor a `PYTHON_PATH` override and a Windows development-interpreter search before falling back to `getPythonBin()`.
+
 ### Startup health check
 
 On every API boot, `checkBackupScriptHealth()` (`backups/service.ts`) verifies `backup_manager.py` resolves to a real file and that the configured Python interpreter actually runs (`--version`). If either fails, the API logs a loud error (`Backup system misconfigured: ...`) at startup instead of only surfacing the problem the next time a scheduled or manual backup runs. This check is diagnostic only — it doesn't block the API from starting, since the rest of the panel doesn't depend on backups working.

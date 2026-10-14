@@ -11,6 +11,7 @@ import { env } from "../../config/env.js";
 import { DeployService, runDockerStopByProject } from "../deploy/service.js";
 import { DnsService } from "../domains/dns-service.js";
 import type { AuditLogService } from "../audit-log/service.js";
+import { getPythonBin } from "../../utils/pythonBin.js";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -55,7 +56,7 @@ function getBackupScriptPath(): string {
 
 export function checkBackupScriptHealth(): Promise<{ ok: true } | { ok: false; error: string }> {
   const scriptPath = getBackupScriptPath();
-  const pythonBin = env.PYTHON_BIN ?? (process.platform === "win32" ? "python" : "python3");
+  const pythonBin = getPythonBin();
 
   if (!existsSync(scriptPath)) {
     return Promise.resolve({
@@ -100,7 +101,7 @@ function runBackupCommand<T>(
     const scriptPath = getBackupScriptPath();
     const body = JSON.stringify(payload);
 
-    const pythonBin = env.PYTHON_BIN ?? (process.platform === "win32" ? "python" : "python3");
+    const pythonBin = getPythonBin();
 
     const child = spawn(pythonBin, [scriptPath], { stdio: ["pipe", "pipe", "pipe"] });
 

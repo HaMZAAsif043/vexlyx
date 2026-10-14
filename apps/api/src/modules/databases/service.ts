@@ -9,6 +9,7 @@ import { encrypt, decrypt } from "../../utils/encryption.js";
 import { assertUnderQuota, notifyQuotaThreshold } from "../../utils/quota.js";
 import { EnvService } from "../env/service.js";
 import type { AuditLogService } from "../audit-log/service.js";
+import { getPythonBin } from "../../utils/pythonBin.js";
 import type {
   CreateDatabaseInput,
   DatabaseListQuery,
@@ -56,7 +57,7 @@ function getDatabaseManagerScriptPath(): string {
 function runPythonCommand<T>(payload: Record<string, unknown>): Promise<T> {
   return new Promise((resolveP, rejectP) => {
     const scriptPath = getDatabaseManagerScriptPath();
-    const child = spawn("python", [scriptPath], {
+    const child = spawn(getPythonBin(), [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
 

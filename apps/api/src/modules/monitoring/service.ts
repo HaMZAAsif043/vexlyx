@@ -6,6 +6,7 @@ import type { PrismaClient } from "@prisma/client";
 import type { FastifyBaseLogger } from "fastify";
 import type { ServerMetrics, ContainerMetric, MetricsRange } from "@vexlyx/shared";
 import { ServerMetricsSchema, ContainerMetricSchema } from "@vexlyx/shared";
+import { getPythonBin } from "../../utils/pythonBin.js";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -53,9 +54,7 @@ function runMonitorCommand<T>(command: string, logger: FastifyBaseLogger): Promi
     const scriptPath = getSystemMonitorScriptPath();
     const payload = JSON.stringify({ command });
 
-    const pythonBin =
-      process.env.PYTHON_BIN ??
-      (process.platform === "win32" ? "python" : "python3");
+    const pythonBin = getPythonBin();
 
     const child = spawn(pythonBin, [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],

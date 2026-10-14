@@ -25,6 +25,7 @@ import type {
 import { env } from "../../config/env.js";
 import { DnsService } from "../domains/dns-service.js";
 import { getServerIp } from "../domains/resolvers.js";
+import { getPythonBin } from "../../utils/pythonBin.js";
 import {
   buildRequiredMailRecords,
   isRecordLive,
@@ -114,7 +115,7 @@ function getPythonExe(): string {
       }
     }
   }
-  return process.platform === "win32" ? "python" : "python3";
+  return getPythonBin();
 }
 
 export async function runPostfixManager<T = Record<string, unknown>>(

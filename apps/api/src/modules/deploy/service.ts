@@ -6,6 +6,7 @@ import type { PrismaClient } from "@prisma/client";
 import { env } from "../../config/env.js";
 import { EnvService, EnvError } from "../env/service.js";
 import type { DeployBody } from "./schema.js";
+import { getPythonBin } from "../../utils/pythonBin.js";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -93,7 +94,7 @@ export function runDockerDeploy(
       ...payload,
     });
 
-    const child = spawn("python", [scriptPath], {
+    const child = spawn(getPythonBin(), [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -219,7 +220,7 @@ function runDockerManagerCommand(
     const scriptPath = getDockerManagerScriptPath();
     const payload = JSON.stringify(request);
 
-    const child = spawn("python", [scriptPath], {
+    const child = spawn(getPythonBin(), [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -300,7 +301,7 @@ export function runDockerStatus(
     const scriptPath = getDockerManagerScriptPath();
     const payload = JSON.stringify({ command: "status", projectDir, projectType });
 
-    const child = spawn("python", [scriptPath], {
+    const child = spawn(getPythonBin(), [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -376,7 +377,7 @@ export function runDockerLogs(
     const scriptPath = getDockerManagerScriptPath();
     const payload = JSON.stringify({ command: "logs", projectDir, projectType, tail });
 
-    const child = spawn("python", [scriptPath], {
+    const child = spawn(getPythonBin(), [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
 

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { Socket, Server as SocketIOServer } from "socket.io";
 import type { PrismaClient } from "@prisma/client";
 import type { FastifyBaseLogger } from "fastify";
+import { getPythonBin } from "../../utils/pythonBin.js";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -99,7 +100,7 @@ export function startRuntimeLogStream(
   const scriptPath = getDockerManagerScriptPath();
   const payload = JSON.stringify({ command: "logs_follow", projectDir, projectType });
 
-  const child = spawn("python", [scriptPath], {
+  const child = spawn(getPythonBin(), [scriptPath], {
     stdio: ["pipe", "pipe", "pipe"],
   });
 

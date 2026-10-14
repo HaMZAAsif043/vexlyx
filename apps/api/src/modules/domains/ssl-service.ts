@@ -13,6 +13,7 @@ import type {
 } from "@vexlyx/shared";
 import { DomainError, DomainService } from "./service.js";
 import { encrypt } from "../../utils/encryption.js";
+import { getPythonBin } from "../../utils/pythonBin.js";
 
 // ---------------------------------------------------------------------------
 // Python Script Locator
@@ -103,7 +104,7 @@ function getPythonExe(): string {
       }
     }
   }
-  return process.platform === "win32" ? "python" : "python3";
+  return getPythonBin();
 }
 
 async function runSslManager(

@@ -13,6 +13,7 @@ import { getGitHubInstallationToken } from "../github/service.js";
 import { CleanupService } from "../cleanup/service.js";
 import { getIO } from "../../plugins/socket.js";
 import type { BuildJobData, DeploymentListQuery, TriggerBuildBody } from "./schema.js";
+import { getPythonBin } from "../../utils/pythonBin.js";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -85,7 +86,7 @@ function runBuildPlan(
     const scriptPath = getBuildManagerScriptPath();
     const payload = JSON.stringify({ command: "plan", projectDir, envVars });
 
-    const child = spawn("python", [scriptPath], {
+    const child = spawn(getPythonBin(), [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -166,7 +167,7 @@ function runBuildImage(
       envVars: options.envVars,
     });
 
-    const child = spawn("python", [scriptPath], {
+    const child = spawn(getPythonBin(), [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -256,7 +257,7 @@ function runExtractStaticOutput(
       imageName: options.imageName,
     });
 
-    const child = spawn("python", [scriptPath], {
+    const child = spawn(getPythonBin(), [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
