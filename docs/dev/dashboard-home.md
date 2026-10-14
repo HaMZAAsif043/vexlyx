@@ -41,7 +41,7 @@ Prisma / system_monitor.py
    - Recent deployments, via `prisma.deployment.findMany({ where: { project: { userId } } })` (deployments have no `userId` of their own).
    - Recent backups, only when the caller's role is `ADMIN` (looked up separately, since `BackupSnapshot` has no `userId` at all and is fully global — this mirrors the existing `requireRole("ADMIN")` boundary on `GET /api/backups`).
 4. **`sslExpiringCount`** — counted from the *full* (unfiltered-by-cap) SSL alert list returned alongside the activity sources, so it stays accurate even if SSL alerts get pushed out of the merged feed's top 15 by other activity. Drives the amber banner on the frontend independently of the activity feed.
-   - SSL expiry alerts, via `SslService.checkExpiryAlerts()` (which also refreshes certificate status as a side effect), filtered down to the caller's own domain IDs.
+   - SSL expiry alerts, via `SslService.checkExpiryAlerts()` (which also refreshes certificate status as a side effect), scoped by the service to the caller's own domains (`checkExpiryAlerts(userId)`).
 
 The route (`GET /api/dashboard/summary`) requires only `app.requireAuth` — the backup-visibility check happens inside the service, not as a route-level role gate, since everything except backups should still be visible to non-admins.
 

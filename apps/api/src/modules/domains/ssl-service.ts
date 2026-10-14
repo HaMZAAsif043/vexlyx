@@ -732,15 +732,18 @@ export class SslService {
   }
 
   /**
-   * Batch audits all certificates for upcoming expiration (<= 7 days alert threshold).
+   * Audits the caller's own certificates for upcoming expiration (<= 7 days alert threshold).
+   * Scoped to `userId` like every other SSL operation, so one tenant can never
+   * see (or trigger status refreshes for) another tenant's certificates.
    */
-  public async checkExpiryAlerts(): Promise<{
+  public async checkExpiryAlerts(userId: string): Promise<{
     totalChecked: number;
     expiringSoon: number;
     expired: number;
     alerts: Array<{ domainId: string; hostname: string; daysRemaining: number | null; status: CertStatus }>;
   }> {
     const certificates = await this.prisma.certificate.findMany({
+      where: { domain: { userId } },
       include: { domain: true },
     });
 

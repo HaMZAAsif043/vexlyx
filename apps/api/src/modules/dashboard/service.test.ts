@@ -142,22 +142,21 @@ describe("DashboardService.getSummary", () => {
     });
   });
 
-  it("scopes SSL alerts to the caller's own domains only", async () => {
+  it("asks the SSL service for the caller's alerts only and maps them to feed items", async () => {
     const prisma = createPrismaMock();
-    prisma.domain.findMany.mockResolvedValue([{ id: "domain-1" }]);
     mockCheckExpiryAlerts.mockResolvedValue({
-      totalChecked: 2,
+      totalChecked: 1,
       expiringSoon: 1,
-      expired: 1,
+      expired: 0,
       alerts: [
         { domainId: "domain-1", hostname: "mine.example.com", daysRemaining: 3, status: "EXPIRING_SOON" },
-        { domainId: "someone-elses-domain", hostname: "other.example.com", daysRemaining: 1, status: "EXPIRED" },
       ],
     });
     const service = new DashboardService(prisma as unknown as PrismaClient, noopLogger);
 
     const summary = await service.getSummary(USER_ID);
 
+    expect(mockCheckExpiryAlerts).toHaveBeenCalledWith(USER_ID);
     const sslAlerts = summary.activity.filter((item) => item.type === "ssl_alert");
     expect(sslAlerts).toHaveLength(1);
     expect(sslAlerts[0]?.title).toContain("mine.example.com");

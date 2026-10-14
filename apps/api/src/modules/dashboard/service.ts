@@ -114,29 +114,21 @@ export class DashboardService {
   }
 
   private async recentSslAlerts(userId: string): Promise<ActivityItem[]> {
-    const userDomains = await this.prisma.domain.findMany({
-      where: { userId },
-      select: { id: true },
-    });
-    const userDomainIds = new Set(userDomains.map((d) => d.id));
-    if (userDomainIds.size === 0) return [];
-
     // Reuses SslService's existing expiry-audit logic (it also refreshes
     // cert status as a side effect) rather than reimplementing days-remaining math.
-    const { alerts } = await this.sslService.checkExpiryAlerts();
+    // The service scopes the audit to this user's own domains.
+    const { alerts } = await this.sslService.checkExpiryAlerts(userId);
 
-    return alerts
-      .filter((a) => userDomainIds.has(a.domainId))
-      .map((a) => ({
-        id: `ssl-${a.domainId}`,
-        type: "ssl_alert" as const,
-        title: `SSL ${a.status === "EXPIRED" ? "expired" : "expiring soon"}: ${a.hostname}`,
-        description: a.daysRemaining !== null ? `${a.daysRemaining} day(s) remaining` : null,
-        status: a.status,
-        // SSL alerts have no natural "event time" — use now() so an active
-        // alert always surfaces near the top of the feed while it's active.
-        timestamp: new Date().toISOString(),
-        href: `/domains/${a.domainId}/ssl`,
-      }));
+    return alerts.map((a) => ({
+      id: `ssl-${a.domainId}`,
+      type: "ssl_alert" as const,
+      title: `SSL ${a.status === "EXPIRED" ? "expired" : "expiring soon"}: ${a.hostname}`,
+      description: a.daysRemaining !== null ? `${a.daysRemaining} day(s) remaining` : null,
+      status: a.status,
+      // SSL alerts have no natural "event time" — use now() so an active
+      // alert always surfaces near the top of the feed while it's active.
+      timestamp: new Date().toISOString(),
+      href: `/domains/${a.domainId}/ssl`,
+    }));
   }
 }

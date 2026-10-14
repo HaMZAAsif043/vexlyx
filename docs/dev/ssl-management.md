@@ -177,6 +177,12 @@ tls:
    - Status transitions to `EXPIRED`.
    - Rose alert banner displayed with one-click renew trigger.
 
+### Tenant scoping of the batch audit
+
+`GET /api/domains/ssl/alerts` (and the dashboard SSL banner/feed built on `SslService.checkExpiryAlerts(userId)`) only audits certificates of domains owned by the caller (`where: { domain: { userId } }`) — the same owner-only rule every other SSL operation uses. It previously scanned every certificate in the database, so any authenticated account could list other tenants' hostnames and expiry dates (#43), and each call also refreshed other tenants' certificate status as a side effect. The admin role does not widen this: admins cannot read other users' certificates through `GET /api/domains/:id/ssl` either, so the audit stays consistent with it. If a server-wide expiry view is ever needed, add it as an explicit ADMIN-only endpoint rather than loosening this one.
+
+Automated: `apps/api/src/modules/domains/ssl-service.test.ts` (query is scoped to the user, alert thresholds, status refresh only on change) and `routes.test.ts` (401 without a session; service called with the authenticated user id).
+
 ---
 
 ## 6. How to Test

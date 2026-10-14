@@ -8,6 +8,7 @@ process.env.SESSION_SECRET ??=
   "test-session-secret-at-least-32-characters-long";
 const { domainRoutes } = await import("./routes.js");
 const { DomainService, DomainError } = await import("./service.js");
+const { SslService } = await import("./ssl-service.js");
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -98,6 +99,38 @@ describe("PATCH /api/domains/:id", () => {
         code: "DOMAIN_NOT_FOUND",
         details: {},
       });
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe("GET /api/domains/ssl/alerts", () => {
+  it("requires authentication", async () => {
+    const check = vi.spyOn(SslService.prototype, "checkExpiryAlerts");
+    const app = await appFixture();
+    try {
+      const response = await app.inject({ method: "GET", url: "/api/domains/ssl/alerts" });
+      expect(response.statusCode).toBe(401);
+      expect(check).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("scopes the audit to the authenticated user", async () => {
+    const result = { totalChecked: 0, expiringSoon: 0, expired: 0, alerts: [] };
+    const check = vi.spyOn(SslService.prototype, "checkExpiryAlerts").mockResolvedValue(result);
+    const app = await appFixture();
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/domains/ssl/alerts",
+        headers: { authorization: "test-session" },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual(result);
+      expect(check).toHaveBeenCalledWith("u1");
     } finally {
       await app.close();
     }

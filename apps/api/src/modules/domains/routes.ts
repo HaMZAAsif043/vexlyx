@@ -362,9 +362,9 @@ export async function domainRoutes(app: FastifyInstance) {
   app.get(
     "/ssl/alerts",
     { preHandler: [app.requireAuth] },
-    async (_request, reply) => {
+    async (request, reply) => {
       try {
-        return await sslService.checkExpiryAlerts();
+        return await sslService.checkExpiryAlerts(request.userId!);
       } catch (err) {
         handleDomainError(err, reply);
       }
