@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import rateLimit from "@fastify/rate-limit";
 import { RegisterSchema, LoginSchema, ChangePasswordSchema, TwoFactorChallengeSchema, VerifyTotpSetupSchema, DisableTwoFactorSchema, ForgotPasswordSchema, ResetPasswordSchema } from "./schema.js";
-import { AuthService, AuthError } from "./service.js";
+import { AuthService, AuthError, prepareLoginDecoy } from "./service.js";
 import { TwoFactorService } from "./two-factor-service.js";
 import { PasswordResetService } from "./password-reset-service.js";
 import { AuditLogService } from "../audit-log/service.js";
@@ -11,6 +11,8 @@ import { env } from "../../config/env.js";
 
 export async function authRoutes(app: FastifyInstance) {
   const service = new AuthService(app.prisma);
+  // Warm the login decoy hash before any request is served (see #44).
+  await prepareLoginDecoy();
   const twoFactor = new TwoFactorService(app.prisma, app.redis, new AuditLogService(app.prisma, app.log));
   const passwordReset = new PasswordResetService(app.prisma, app.redis, new AuditLogService(app.prisma, app.log));
 

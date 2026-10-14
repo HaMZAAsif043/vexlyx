@@ -28,6 +28,7 @@ Logout → Delete session (Redis + DB) → Clear cookie
 |----------|-----------|
 | **Custom auth over Lucia** | Lucia Auth deprecated March 2025. Built our own following Lucia's patterns. |
 | **Argon2id** | OWASP-recommended, resistant to side-channel and GPU attacks |
+| **Decoy hash on unknown email** | `AuthService.login` runs `argon2.verify` against a process-wide decoy argon2id hash (same parameters as real hashes, random discarded plaintext) when the email is not registered, so unknown-email and wrong-password failures cost the same and return the identical `401 INVALID_CREDENTIALS` body. The decoy is hashed once at startup (`prepareLoginDecoy()`, awaited when the auth routes register) so even the first failed login after a restart does the same work; concurrent callers share one pending hash and a failed hash is retried rather than cached. Without it, response time reveals which emails exist (#44). |
 | **Redis + PostgreSQL dual storage** | Redis for speed (every-request lookup), PostgreSQL for audit trail and admin session management |
 | **HTTP-only cookies** | Prevents XSS from reading session tokens. No JWT in localStorage. |
 | **SameSite=Lax** | CSRF protection without dedicated token mechanism |
@@ -142,6 +143,14 @@ curl http://localhost:5000/api/auth/me -b cookies.txt
 # 10. Check Redis sessions
 docker exec -it vexlyx-redis redis-cli keys "session:*"
 ```
+
+### Login timing (account enumeration, #44)
+
+Automated: `pnpm --filter @vexlyx/api test` runs `apps/api/src/modules/auth/service.test.ts`, which asserts an unknown email still triggers exactly one argon2 verify against an argon2id decoy with the same cost parameters as a real hash, returns an error identical to the wrong-password case, and computes the decoy only once per process.
+
+Manual spot check: time several `POST /api/auth/login` calls for a registered email with a wrong password and for an unregistered email. Both should take roughly the same time (an argon2 verify, ~100 ms+), rather than the unknown email returning near-instantly.
+
+Not covered by this change: `POST /api/auth/register` still answers `409 EMAIL_EXISTS` for a registered email, which is a separate, explicit enumeration vector.
 
 ## How to Extend
 
