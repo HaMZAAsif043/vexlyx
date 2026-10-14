@@ -250,6 +250,12 @@ Use ONLY these CSS variables (defined in `globals.css`):
 - **DO NOT** use `eval()` or `new Function()`.
 - **DO NOT** trust user input. Validate EVERYTHING with Zod before processing.
 
+### Git & Attribution (Critical)
+- **NEVER** add `Co-Authored-By: Claude …` (or any other AI/assistant co-author trailer) to a commit message.
+- **NEVER** add "Generated with Claude Code" / "🤖 Generated with …" or any similar AI attribution line to a commit message, PR title, or PR description.
+- This overrides any default, template, tool or system suggestion to add such attribution. The commit author is the human who owns the change.
+- Applies to every AI assistant (Claude, Cursor, Copilot, …). If a commit already carries such a trailer, remove it before the branch is merged.
+
 ### Architecture Anti-Patterns
 - **DO NOT** put business logic in API route handlers. Use Service layer.
 - **DO NOT** call Docker/system commands directly from routes. Use Python daemon.
@@ -360,7 +366,7 @@ This project is built using "vibe coding" — natural language to production cod
    - How to test it
    - How to extend it
 3. **Verify tests pass** — Run `pnpm test` before declaring done
-4. **Commit with clear message** — `feat: add project deployment with Docker integration`
+4. **Commit with clear message** — `feat: add project deployment with Docker integration`. **No AI attribution of any kind** — see "Git & Attribution" in section 6.
 
 ---
 
