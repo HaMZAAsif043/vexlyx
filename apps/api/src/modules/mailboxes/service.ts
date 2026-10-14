@@ -10,6 +10,7 @@ import type {
 import { runDovecotManager, MailService } from "../mail/service.js";
 import { assertUnderQuota, notifyQuotaThreshold } from "../../utils/quota.js";
 import type { AuditLogService } from "../audit-log/service.js";
+import type { FastifyBaseLogger } from "fastify";
 
 export class MailboxError extends Error {
   constructor(
@@ -32,8 +33,9 @@ export class MailboxService {
   constructor(
     private readonly prisma: PrismaClient,
     private readonly auditLog: AuditLogService,
+    logger?: Pick<FastifyBaseLogger, "error" | "warn">,
   ) {
-    this.mailService = new MailService(prisma);
+    this.mailService = new MailService(prisma, logger);
   }
 
   /**

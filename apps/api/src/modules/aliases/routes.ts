@@ -26,7 +26,7 @@ function handleAliasError(err: unknown, reply: FastifyReply): void {
 }
 
 export async function aliasRoutes(app: FastifyInstance) {
-  const service = new AliasService(app.prisma);
+  const service = new AliasService(app.prisma, app.log);
 
   // ---------------------------------------------------------------------------
   // GET /api/aliases — list aliases (optionally filtered by domainId)

@@ -6,6 +6,7 @@ import type {
   AliasResponse,
 } from "@vexlyx/shared";
 import { MailService } from "../mail/service.js";
+import type { FastifyBaseLogger } from "fastify";
 
 export class AliasError extends Error {
   constructor(
@@ -21,8 +22,11 @@ export class AliasError extends Error {
 export class AliasService {
   private readonly mailService: MailService;
 
-  constructor(private readonly prisma: PrismaClient) {
-    this.mailService = new MailService(prisma);
+  constructor(
+    private readonly prisma: PrismaClient,
+    logger?: Pick<FastifyBaseLogger, "error" | "warn">,
+  ) {
+    this.mailService = new MailService(prisma, logger);
   }
 
   /**

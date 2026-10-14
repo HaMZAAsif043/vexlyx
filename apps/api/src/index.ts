@@ -24,7 +24,7 @@ import { dockerfileRoutes } from "./modules/dockerfile/routes.js";
 import { databaseRoutes } from "./modules/databases/routes.js";
 import { webhookRoutes } from "./modules/webhooks/routes.js";
 import { domainRoutes } from "./modules/domains/routes.js";
-import { DnsService } from "./modules/domains/dns-service.js";
+import { DnsService, checkDnsZonesDirWritable } from "./modules/domains/dns-service.js";
 import { mailRoutes } from "./modules/mail/routes.js";
 import { mailboxRoutes } from "./modules/mailboxes/routes.js";
 import { aliasRoutes } from "./modules/aliases/routes.js";
@@ -138,6 +138,15 @@ async function start() {
     );
   }
 
+  // A missing/read-only zones directory would otherwise only show up as a
+  // failed write on every DNS record change.
+  const zonesDir = checkDnsZonesDirWritable();
+  if (!zonesDir.ok) {
+    app.log.error(
+      `DNS zones directory ${zonesDir.path} is not writable: ${zonesDir.error}. Hosted DNS changes will not be served until this is fixed.`,
+    );
+  }
+
   const shutdown = async (signal: string) => {
     app.log.info(`Received ${signal}, shutting down gracefully…`);
     await app.close();
@@ -155,7 +164,7 @@ async function start() {
 
     // Zone files are derived from the database, so rebuild them on boot: picks up
     // generator fixes and restores zones if the zones volume was ever lost.
-    new DnsService(app.prisma)
+    new DnsService(app.prisma, app.log)
       .syncAllManagedZones()
       .then((count) => app.log.info(`Synced ${count} hosted DNS zone(s)`))
       .catch((err: unknown) => app.log.error(err, "Failed to sync hosted DNS zones"));

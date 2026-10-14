@@ -41,7 +41,7 @@ function handleDomainError(err: unknown, reply: FastifyReply): void {
 export async function domainRoutes(app: FastifyInstance) {
   const auditLog = new AuditLogService(app.prisma, app.log);
   const service = new DomainService(app.prisma, auditLog);
-  const dnsService = new DnsService(app.prisma);
+  const dnsService = new DnsService(app.prisma, app.log);
   const sslService = new SslService(app.prisma);
 
   app.patch("/:id", { preHandler: [app.requireAuth] }, async (request, reply) => {
@@ -289,6 +289,24 @@ export async function domainRoutes(app: FastifyInstance) {
         const { id, recordId } = DomainRecordParamSchema.parse(request.params);
         await dnsService.deleteRecord(request.userId!, id, recordId);
         reply.status(204).send();
+      } catch (err) {
+        handleDomainError(err, reply);
+      }
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // POST /api/domains/:id/dns/sync — rewrite the served zone from the database.
+  // The retry path after DNS_ZONE_WRITE_FAILED: record changes are already
+  // saved, so repeating them cannot repair a zone that failed to write.
+  // ---------------------------------------------------------------------------
+  app.post(
+    "/:id/dns/sync",
+    { preHandler: [app.requireAuth, requireManagedDns] },
+    async (request, reply) => {
+      try {
+        const { id } = DomainIdParamSchema.parse(request.params);
+        return await dnsService.resyncZone(request.userId!, id);
       } catch (err) {
         handleDomainError(err, reply);
       }

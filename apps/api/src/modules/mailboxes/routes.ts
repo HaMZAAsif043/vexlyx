@@ -28,7 +28,7 @@ function handleMailboxError(err: unknown, reply: FastifyReply): void {
 
 export async function mailboxRoutes(app: FastifyInstance) {
   const auditLog = new AuditLogService(app.prisma, app.log);
-  const service = new MailboxService(app.prisma, auditLog);
+  const service = new MailboxService(app.prisma, auditLog, app.log);
 
   // ---------------------------------------------------------------------------
   // GET /api/mailboxes — list mailboxes (optionally filtered by domainId)

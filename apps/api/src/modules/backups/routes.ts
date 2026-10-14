@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { BackupService, BackupError } from "./service.js";
+import { DomainError } from "../domains/service.js";
 import { AuditLogService } from "../audit-log/service.js";
 import { RestoreItemSchema, UpdateBackupSettingsSchema, SnapshotIdParamSchema } from "./schema.js";
 import { registerBackupSocketHandlers } from "./socket.js";
@@ -15,7 +16,7 @@ import { BACKUPS_ACCESS } from "./access.js";
 // ---------------------------------------------------------------------------
 
 function handleBackupError(err: unknown, reply: FastifyReply): void {
-  if (err instanceof BackupError) {
+  if (err instanceof BackupError || err instanceof DomainError) {
     reply.status(err.statusCode).send({ error: err.message, code: err.code, details: {} });
     return;
   }

@@ -39,6 +39,7 @@ Drawing from modern cloud-native standards (Cloudflare, CoreDNS, Kubernetes) and
 │  - POST   /api/domains/:id/dns/defaults (Setup template)    │
 │  - PATCH  /api/domains/:id/dns/:recId   (Update record)     │
 │  - DELETE /api/domains/:id/dns/:recId   (Delete record)     │
+│  - POST   /api/domains/:id/dns/sync     (re-sync zone)      │
 │  - GET    /api/domains/:id/dns/export   (RFC 1035 export)   │
 │  - POST   /api/domains/:id/dns/import   (RFC 1035 import)   │
 │  - POST   /api/domains/:id/dns/:recId/propagation (Test)    │
@@ -118,6 +119,20 @@ mail                 3600     IN  A      192.0.2.2
 @                    3600     IN  TXT   "v=spf1 mx ~all"
 _sip._tcp            3600     IN  SRV   10 50 5060 sip.example.com
 ```
+
+### Zone write failures (#50)
+
+The zone file write is the point where a record change actually reaches CoreDNS, so a failure is never swallowed:
+
+| Situation | Behaviour |
+|-----------|-----------|
+| A record mutation (create / update / delete / import / defaults), a DKIM publish or a DNS restore cannot write the zone file | The request fails with `500 DNS_ZONE_WRITE_FAILED`. The message states that the change **was saved** but is not being served yet, with the OS error code (e.g. `EACCES`, `ENOSPC`). The error is logged with the hostname and zone file path (including from the mail and mailbox services). The mail and backup routes pass this error through to the client instead of masking it as `INTERNAL_ERROR`. |
+| Retrying | Repeating the mutation does **not** repair the zone (a delete would now report `RECORD_NOT_FOUND`, a CNAME create `CNAME_CONFLICT`). Use `POST /api/domains/:id/dns/sync`, which rewrites the served zone from the saved records without changing them. It returns `{ "synced": true }`, or the same `DNS_ZONE_WRITE_FAILED` if the directory is still unusable. |
+| Boot-time re-sync (`syncAllManagedZones`) | One failing zone does not stop the others; each failure is logged and a single `DNS_ZONE_WRITE_FAILED` summary is reported in the boot log. |
+| Zone file removal when a domain is switched back to `CONNECTED` | Non-fatal, but a failure to remove the file is logged as a warning instead of staying silent. |
+| API startup | `checkDnsZonesDirWritable()` logs an error unless the zones path is an existing **directory** that the API can write to and search (`W_OK | X_OK`), so a read-only or mis-typed path is visible once at boot. |
+
+**Not covered:** deleting a domain removes its zone file inside `DomainService.delete`, which still ignores a failure silently; it does not go through `removeZoneFile`. Tests: `apps/api/src/modules/domains/zone-sync.test.ts` and `zone-error-surfacing.test.ts`.
 
 ---
 

@@ -26,6 +26,7 @@ import { env } from "../../config/env.js";
 import { DnsService } from "../domains/dns-service.js";
 import { getServerIp } from "../domains/resolvers.js";
 import { getPythonBin } from "../../utils/pythonBin.js";
+import type { FastifyBaseLogger } from "fastify";
 import {
   buildRequiredMailRecords,
   isRecordLive,
@@ -271,8 +272,11 @@ async function runWebmailManager<T = Record<string, unknown>>(
 export class MailService {
   private readonly dnsService: DnsService;
 
-  constructor(private readonly prisma: PrismaClient) {
-    this.dnsService = new DnsService(prisma);
+  constructor(
+    private readonly prisma: PrismaClient,
+    logger?: Pick<FastifyBaseLogger, "error" | "warn">,
+  ) {
+    this.dnsService = new DnsService(prisma, logger);
   }
 
   /**

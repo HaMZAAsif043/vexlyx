@@ -250,7 +250,7 @@ export class BackupService {
     private auditLog: AuditLogService,
   ) {
     this.deployService = new DeployService(prisma);
-    this.dnsService = new DnsService(prisma);
+    this.dnsService = new DnsService(prisma, logger);
   }
 
   async list() {
