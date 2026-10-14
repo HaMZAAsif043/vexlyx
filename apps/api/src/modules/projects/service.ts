@@ -216,7 +216,7 @@ export class ProjectService {
 
   async update(userId: string, projectId: string, data: UpdateProjectInput) {
     // Verify ownership first
-    await this.getById(userId, projectId);
+    const project = await this.getById(userId, projectId);
 
     // If name is changing, check it won't collide with another project
     if (data.name) {
@@ -243,20 +243,49 @@ export class ProjectService {
     }
 
     try {
-      const updated = await this.prisma.project.update({
+      const updateData = {
+        ...(data.name !== undefined && { name: data.name }),
+        ...(data.gitUrl !== undefined && { gitUrl: data.gitUrl || null }),
+        ...(data.gitUrl !== undefined && (data.gitUrl || null) !== project.gitUrl && {
+          githubInstallationId: null,
+          githubRepoId: null,
+          githubRepoFullName: null,
+          githubConnectionStatus: null,
+          githubDisconnectReason: null,
+        }),
+        ...(data.branch !== undefined && { branch: data.branch }),
+        ...(data.buildCmd !== undefined && { buildCmd: data.buildCmd }),
+        ...(data.startCmd !== undefined && { startCmd: data.startCmd }),
+        ...(data.port !== undefined && { port: data.port }),
+      };
+
+      if (data.gitUrl !== undefined) {
+        // The linkage decision above used the URL read earlier. Write only if the
+        // stored URL is still that one, otherwise a concurrent repository change
+        // (e.g. a GitHub connection) could be overwritten while keeping its
+        // installation link.
+        const { count } = await this.prisma.project.updateMany({
+          where: { id: projectId, gitUrl: project.gitUrl },
+          data: updateData,
+        });
+        if (count === 0) {
+          throw new ProjectError(
+            "The project's repository was changed by another request. Reload the project and try again.",
+            "PROJECT_CONFLICT",
+            409,
+          );
+        }
+        return await this.prisma.project.findUniqueOrThrow({
+          where: { id: projectId },
+          select: PROJECT_SELECT,
+        });
+      }
+
+      return await this.prisma.project.update({
         where: { id: projectId },
-        data: {
-          ...(data.name !== undefined && { name: data.name }),
-          ...(data.gitUrl !== undefined && { gitUrl: data.gitUrl || null }),
-          ...(data.branch !== undefined && { branch: data.branch }),
-          ...(data.buildCmd !== undefined && { buildCmd: data.buildCmd }),
-          ...(data.startCmd !== undefined && { startCmd: data.startCmd }),
-          ...(data.port !== undefined && { port: data.port }),
-        },
+        data: updateData,
         select: PROJECT_SELECT,
       });
-
-      return updated;
     } catch (err: unknown) {
       if (
         err &&

@@ -41,14 +41,19 @@ const projectNameSchema = z
 // Create
 // ---------------------------------------------------------------------------
 
+// Exact public hosts and literal repository path segments; no credentials, ports,
+// URL escapes or control characters. Keep the Python clone boundary in sync.
+const GIT_URL_REGEX =
+  /^(?:https:\/\/(?:github\.com|gitlab\.com|bitbucket\.org)\/|git@(?:github\.com|gitlab\.com|bitbucket\.org):)[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+(?![\s\S])/;
+const gitUrlSchema = z.string().regex(
+  GIT_URL_REGEX,
+  "Must be a GitHub, GitLab, or Bitbucket repository URL (HTTPS or git@host:path format)",
+);
+
 export const CreateProjectSchema = z.object({
   name: projectNameSchema,
   type: ProjectTypeSchema,
-  gitUrl: z
-    .string()
-    .url("Must be a valid URL")
-    .optional()
-    .or(z.literal("")),
+  gitUrl: gitUrlSchema.optional().or(z.literal("")),
   branch: z.string().min(1).max(255).default("main"),
   buildCmd: z.string().max(500).optional(),
   startCmd: z.string().max(500).optional(),
@@ -63,11 +68,7 @@ export type CreateProjectInput = z.infer<typeof CreateProjectSchema>;
 
 export const UpdateProjectSchema = z.object({
   name: projectNameSchema.optional(),
-  gitUrl: z
-    .string()
-    .url("Must be a valid URL")
-    .optional()
-    .or(z.literal("")),
+  gitUrl: gitUrlSchema.optional().or(z.literal("")),
   branch: z.string().min(1).max(255).optional(),
   buildCmd: z.string().max(500).optional(),
   startCmd: z.string().max(500).optional(),
@@ -97,18 +98,8 @@ export type ProjectListQuery = z.infer<typeof ProjectListQuerySchema>;
 // Git integration (F1.3)
 // ---------------------------------------------------------------------------
 
-// Allow-list of supported Git hosts. SSH URLs (git@...) are also supported.
-const GIT_URL_REGEX =
-  /^(https?:\/\/|git@)(github\.com|gitlab\.com|bitbucket\.org)[:/].+\/.+$/;
-
 export const ConnectRepoSchema = z.object({
-  gitUrl: z
-    .string()
-    .min(1, "Git URL is required")
-    .regex(
-      GIT_URL_REGEX,
-      "Must be a GitHub, GitLab, or Bitbucket URL (HTTPS or SSH format)",
-    ),
+  gitUrl: gitUrlSchema,
   branch: z.string().min(1).max(255).default("main"),
   isPrivate: z.boolean().default(false),
 });

@@ -57,6 +57,7 @@ jobs:
       - run: pnpm --filter @vexlyx/api db:generate
       - run: pnpm test
       - run: python3 -m unittest discover -s tests -p test_restore_stop_safety.py
+      - run: python3 -m unittest discover -s tests -p test_git_url_policy.py
 
   build:
     runs-on: ubuntu-latest

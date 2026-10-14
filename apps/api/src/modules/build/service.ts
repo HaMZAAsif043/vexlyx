@@ -8,6 +8,7 @@ import type { Deployment, ProjectType } from "@vexlyx/shared";
 import { env } from "../../config/env.js";
 import { runDockerDeploy, runDockerStatus } from "../deploy/service.js";
 import { runGitManager } from "../git/service.js";
+import { isFatalGitSyncError } from "./gitSyncPolicy.js";
 import { EnvService } from "../env/service.js";
 import { getGitHubInstallationToken } from "../github/service.js";
 import { CleanupService } from "../cleanup/service.js";
@@ -443,7 +444,7 @@ export function createBuildProcessor(
         } catch (gitErr) {
           const msg = gitErr instanceof Error ? gitErr.message : String(gitErr);
           await appendLog(`[vexlyx:warn] Git sync notice: ${msg}`);
-          if (project.githubInstallation) throw gitErr;
+          if (isFatalGitSyncError(gitErr, Boolean(project.githubInstallation))) throw gitErr;
         }
       }
 

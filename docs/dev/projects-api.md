@@ -61,6 +61,8 @@ Lists the authenticated user's projects. Supports filtering and offset paginatio
 
 Creates a new project. Project names are URL-safe (lowercase, alphanumeric, hyphens) and unique per user.
 
+Optional Git URLs follow the same [public-host and protocol policy](git-integration.md) as repository connection. This also applies to updates. Changing or clearing a URL clears the project's GitHub App linkage; omitting it or keeping it unchanged preserves the linkage.
+
 **Request body:**
 ```json
 {

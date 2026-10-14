@@ -14,6 +14,7 @@ Never run this script as root.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -60,6 +61,13 @@ def cmd_clone(payload: dict) -> None:
     """
     project_id = require_field(payload, "projectId")
     git_url = require_field(payload, "gitUrl")
+    # Enforce the same public-host policy as the shared API schemas before
+    # network access or workspace deletion, including URLs persisted previously.
+    if not re.fullmatch(
+        r"(?:https://(?:github\.com|gitlab\.com|bitbucket\.org)/|git@(?:github\.com|gitlab\.com|bitbucket\.org):)"
+        r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+", git_url,
+    ):
+        fail("Unsupported Git repository URL", "INVALID_GIT_URL")
     branch = payload.get("branch", "main")
     projects_dir = require_field(payload, "projectsDir")
     ssh_key_path = payload.get("sshPrivateKeyPath")
@@ -74,7 +82,7 @@ def cmd_clone(payload: dict) -> None:
             # The URL never contains credentials; setting it before fetch also makes
             # switching a project between repositories deterministic.
             _run(["git", "-C", str(dest), "remote", "set-url", "origin", git_url], env=env)
-            _run(["git", "-C", str(dest), "fetch", "--all"], env=env)
+            _run(["git", "-C", str(dest), "fetch", "origin"], env=env)
             _run(["git", "-C", str(dest), "checkout", branch], env=env)
             _run(["git", "-C", str(dest), "pull", "origin", branch], env=env)
             respond({"success": True, "path": str(dest), "action": "pulled"})
@@ -177,6 +185,9 @@ def _build_env(ssh_key_path: str | None, access_token: str | None = None) -> dic
 
 def _run(args: list[str], env: dict | None = None) -> None:
     """Run a subprocess, capturing combined output, failing on non-zero exit."""
+    if args[0] == "git":
+        # Redirects must not escape the validated host boundary.
+        args = [args[0], "-c", "http.followRedirects=false", *args[1:]]
     result = subprocess.run(
         args,
         capture_output=True,

@@ -4,7 +4,9 @@
 
 Allows users to connect a GitHub, GitLab, or Bitbucket repository to a Vexlyx project. It clones the repo into an isolated workspace directory, generates Ed25519 SSH keys for private repos, and provides a webhook URL (secret pre-generated) for future auto-deploy integration (F2.7).
 
-This is the manual provider-neutral flow. GitHub users can instead connect the panel's GitHub App, browse authorized repositories, and use short-lived installation tokens without deploy keys. See [GitHub Integration](github-integration.md). The manual path remains supported and unchanged.
+This is the manual provider-neutral flow. GitHub users can instead connect the panel's GitHub App, browse authorized repositories, and use short-lived installation tokens without deploy keys. See [GitHub Integration](github-integration.md).
+
+Create, update and connect all require an exact `github.com`, `gitlab.com` or `bitbucket.org` host, using HTTPS or `git@host:owner/repo` SSH syntax. Repository path segments may contain letters, digits, underscores, periods and hyphens (including nested GitLab groups). Plain HTTP, URL credentials, custom ports, URL escapes and other protocols/hosts are rejected. The Python clone boundary checks previously stored URLs too, before commands or workspace changes; invalid URLs return `INVALID_GIT_URL`. Git HTTP redirects are disabled, so use the canonical URL after a repository rename. Existing workspaces fetch only the validated `origin` remote. Changing or clearing a project's Git URL clears its GitHub App association; unchanged URLs preserve it.
 
 ---
 
@@ -162,11 +164,7 @@ curl -X POST http://localhost:5000/api/projects/<PROJECT_ID>/git/connect \
 ## How to Extend
 
 ### Add a new Git host (e.g. Codeberg)
-Edit `GIT_URL_REGEX` in `packages/shared/src/schemas/projects.ts`:
-```ts
-const GIT_URL_REGEX =
-  /^(https?:\/\/|git@)(github\.com|gitlab\.com|bitbucket\.org|codeberg\.org)[:/].+\/.+$/;
-```
+Update both `GIT_URL_REGEX` in `packages/shared/src/schemas/projects.ts` and the clone boundary in `system/python/git_manager.py`. Keep exact host matching and HTTPS/SSH syntax restrictions, and add matching positive and negative tests in `apps/api/src/modules/projects/service.test.ts` and `tests/test_git_url_policy.py`.
 
 ### Add a `git pull` / refresh command
 1. Add a new route `POST /api/projects/:id/git/pull` in `routes.ts`
