@@ -29,6 +29,27 @@ export function getSocket(): Socket | null {
 }
 
 /**
+ * Ends the connection. Called on logout: the connection was authenticated as
+ * the user who just left, so it must not be reused by whoever logs in next in
+ * this tab, and its joined rooms must stop streaming (#64).
+ */
+export function disconnectSocket(): void {
+  _socket?.disconnect();
+}
+
+/**
+ * Opens a fresh connection under the current session cookie. Called after a
+ * successful login/registration, because a socket the server closed (or that
+ * was closed on logout) does not reconnect on its own.
+ */
+export function reconnectSocket(): void {
+  const socket = getSocket();
+  if (!socket) return;
+  if (socket.connected) socket.disconnect();
+  socket.connect();
+}
+
+/**
  * Returns the singleton Socket.io client.
  * Connects automatically and maintains connection.
  */

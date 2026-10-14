@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { fetchAPI } from "@/lib/api";
+import { disconnectSocket, reconnectSocket } from "@/hooks/useSocket";
 import type { User } from "@vexlyx/shared";
 
 interface AuthState {
@@ -56,6 +57,7 @@ export function useAuth() {
     // briefly see the previous account's cached data (e.g. its full user
     // list) until each query's staleTime naturally expires.
     queryClient.clear();
+    reconnectSocket();
     setState({ user: data.user, isLoading: false, isAuthenticated: true });
     router.push("/dashboard");
     return { status: "done", user: data.user };
@@ -67,6 +69,7 @@ export function useAuth() {
       body: JSON.stringify({ challengeToken, code }),
     });
     queryClient.clear();
+    reconnectSocket();
     setState({ user: data.user, isLoading: false, isAuthenticated: true });
     router.push("/dashboard");
     return data.user;
@@ -83,6 +86,7 @@ export function useAuth() {
       body: JSON.stringify({ name, email, password, confirmPassword }),
     });
     queryClient.clear();
+    reconnectSocket();
     setState({ user: data.user, isLoading: false, isAuthenticated: true });
     router.push("/dashboard");
     return data.user;
@@ -106,6 +110,7 @@ export function useAuth() {
       // Even if the API call fails, clear local state
     }
     queryClient.clear();
+    disconnectSocket();
     setState({ user: null, isLoading: false, isAuthenticated: false });
     router.push("/login");
   };

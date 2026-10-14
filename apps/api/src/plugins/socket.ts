@@ -4,6 +4,13 @@ import { Server as SocketIOServer } from "socket.io";
 import type { Redis } from "ioredis";
 import { env } from "../config/env.js";
 import {
+  disconnectSessionSockets as disconnectSessionSocketsOn,
+  disconnectUserSockets as disconnectUserSocketsOn,
+  startSessionSweep,
+  sessionRoom,
+  userRoom,
+} from "./socket-session.js";
+import {
   createSocketOriginHandler,
   isSocketOriginAllowed,
 } from "./socket-origin.js";
@@ -17,6 +24,19 @@ let _io: SocketIOServer | null = null;
 export function getIO(): SocketIOServer {
   if (!_io) throw new Error("Socket.io server not yet initialised");
   return _io;
+}
+
+/**
+ * Disconnects every socket opened with `sessionId` (logout, session revoked).
+ * A no-op before the socket server exists, so auth code can call it freely.
+ */
+export function disconnectSessionSockets(sessionId: string): void {
+  disconnectSessionSocketsOn(_io, sessionId);
+}
+
+/** Disconnects every socket of `userId` (account deleted). No-op before init. */
+export function disconnectUserSockets(userId: string): void {
+  disconnectUserSocketsOn(_io, userId);
 }
 
 // ---------------------------------------------------------------------------
@@ -108,21 +128,49 @@ async function initSocketPlugin(app: FastifyInstance) {
       return next(new Error("UNAUTHORIZED"));
     }
 
-    // Store userId on the socket for downstream handlers
+    // Store identity for downstream handlers. The session id is kept so the
+    // connection can be tied to — and ended with — the session that opened it.
     socket.data.userId = userId as string;
+    socket.data.sessionId = sessionId;
     next();
   });
 
   io.on("connection", (socket) => {
     app.log.debug({ socketId: socket.id, userId: socket.data.userId as string }, "Socket connected");
 
+    // Rooms used to target this socket when its session or account ends (#64).
+    void socket.join([
+      sessionRoom(socket.data.sessionId as string),
+      userRoom(socket.data.userId as string),
+    ]);
+
     socket.on("disconnect", (reason) => {
       app.log.debug({ socketId: socket.id, reason }, "Socket disconnected");
     });
   });
 
+  // Backstop for session endings that have no hook (the silent 24h expiry) and
+  // for deleted users: re-check every live socket once a minute.
+  const stopSweep = startSessionSweep(
+    io,
+    {
+      isSessionValid: async (sessionId, userId) =>
+        (await resolveUserId(app.redis, sessionId)) === userId,
+      existingUserIds: async (userIds) => {
+        if (userIds.length === 0) return new Set<string>();
+        const rows = await app.prisma.user.findMany({
+          where: { id: { in: userIds } },
+          select: { id: true },
+        });
+        return new Set(rows.map((row) => row.id));
+      },
+    },
+    app.log,
+  );
+
   // Graceful shutdown: close socket server when Fastify closes
   app.addHook("onClose", async () => {
+    stopSweep();
     await new Promise<void>((resolve) => io.close(() => resolve()));
   });
 
@@ -131,6 +179,6 @@ async function initSocketPlugin(app: FastifyInstance) {
 
 export const socketPlugin = fp(initSocketPlugin, {
   name: "socket",
-  dependencies: ["redis"],
+  dependencies: ["redis", "prisma"],
 });
 

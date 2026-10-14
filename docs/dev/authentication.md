@@ -77,6 +77,25 @@ apps/dashboard/src/
 
 Auth endpoints are rate-limited to **5 requests per 15 minutes per IP**. Exceeding returns `429 Too Many Requests`.
 
+### Socket.io connections follow the session (#64)
+
+A Socket.io connection is authenticated once, at the handshake (`plugins/socket.ts`). It is therefore tied to the session that opened it and ended with it, otherwise rooms would keep streaming logs after logout and a connection kept open across a logout → login-as-someone-else in the same tab would keep acting as the previous user.
+
+| Event | What happens to live sockets |
+|-------|------------------------------|
+| `POST /api/auth/logout` (`destroySession`) | Sockets opened with that session are disconnected immediately |
+| Password change / reset (`destroyUserSessions`) | Sockets of every destroyed session are disconnected; the caller's current session is spared |
+| Admin/reseller deletes a user (`UserService.delete`) | All of that user's sockets are disconnected |
+| Session expires silently (24h TTL), or its user no longer exists | Disconnected by the once-a-minute sweep (`startSessionSweep` in `plugins/socket-session.ts`); a Redis/DB error skips that pass rather than mass-disconnecting users. Passes never overlap: while one is still pending (e.g. during a Redis outage) later ticks are skipped, so at most one unfinished pass exists |
+
+Implementation: every socket joins `session:<id>` and `user:<id>` rooms on connect, so the hooks above target exactly the affected sockets with `io.in(room).disconnectSockets(true)`; `socket.data.sessionId` is kept next to `socket.data.userId` for the sweep.
+
+Client (`apps/dashboard/src/hooks/useSocket.ts`): `logout()` calls `disconnectSocket()`, and login / 2FA confirmation / registration call `reconnectSocket()`. This is needed because a socket the server closed does **not** reconnect on its own, and the shared singleton must not carry one account's identity into the next login.
+
+Tests: `apps/api/src/plugins/socket-session.test.ts`, `auth-sockets.test.ts`, `apps/api/src/modules/users/delete-sockets.test.ts`.
+
+**Not covered:** a role *demotion* does not disconnect already-joined sockets (only new subscriptions are re-authorized, see #65); and the dashboard has no component-test setup yet (#54), so the client change is covered by typecheck/lint only.
+
 ## Environment Variables
 
 | Variable | Required | Default | Description |

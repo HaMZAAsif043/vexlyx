@@ -3,6 +3,7 @@ import fp from "fastify-plugin";
 import crypto from "node:crypto";
 import type { Role, Permission, PrismaClient } from "@prisma/client";
 import { env } from "../config/env.js";
+import { disconnectSessionSockets } from "./socket.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -201,6 +202,10 @@ export async function destroySession(
 
   await app.redis.del(sessionKey(sessionId));
 
+  // End the live streams opened with this session now, instead of leaving
+  // them attached to a logged-out identity until the page is reloaded (#64).
+  disconnectSessionSockets(sessionId);
+
   // Remove from PostgreSQL as well
   await app.prisma.session.delete({ where: { id: sessionId } }).catch(() => {
     // Session may already have been cleaned up
@@ -233,5 +238,6 @@ export async function destroyUserSessions(
   if (sessions.length === 0) return;
 
   await redis.del(...sessions.map((session) => sessionKey(session.id)));
+  for (const session of sessions) disconnectSessionSockets(session.id);
   await prisma.session.deleteMany({ where: { id: { in: sessions.map((session) => session.id) } } });
 }

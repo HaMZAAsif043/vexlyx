@@ -46,6 +46,12 @@ export class UserService {
   constructor(
     private prisma: PrismaClient,
     private auditLog: AuditLogService,
+    /**
+     * Called with the id of a user that was just deleted, so their live
+     * connections can be ended (#64). Injected rather than imported to keep this
+     * service free of the socket server.
+     */
+    private onUserDeleted?: (userId: string) => void,
   ) {}
 
   /**
@@ -200,6 +206,8 @@ export class UserService {
     this.assertCanManage(requester, target);
 
     await this.prisma.user.delete({ where: { id } });
+
+    this.onUserDeleted?.(id);
 
     await this.auditLog.log(
       requester.id,

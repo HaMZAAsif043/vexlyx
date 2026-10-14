@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { UserService, UserError } from "./service.js";
 import { AuthError } from "../auth/service.js";
 import { AuditLogService } from "../audit-log/service.js";
+import { disconnectUserSockets } from "../../plugins/socket.js";
 import { TwoFactorService } from "../auth/two-factor-service.js";
 import {
   CreateSubAccountSchema,
@@ -26,7 +27,7 @@ async function twoFactorAdminReset(app: FastifyInstance, actorId: string, target
 
 export async function userRoutes(app: FastifyInstance) {
   const auditLog = new AuditLogService(app.prisma, app.log);
-  const service = new UserService(app.prisma, auditLog);
+  const service = new UserService(app.prisma, auditLog, disconnectUserSockets);
 
   // GET /api/users/me/usage — any authenticated user, their own quota/usage
   // breakdown (the "Your Plan" dashboard widget).
