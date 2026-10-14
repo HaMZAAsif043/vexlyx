@@ -172,7 +172,16 @@ export class EnvService {
       throw new EnvError(`Variable "${key}" not found`, "ENV_VAR_NOT_FOUND", 404);
     }
 
-    const decryptedValue = decrypt(record.value);
+    let decryptedValue: string;
+    try {
+      decryptedValue = decrypt(record.value);
+    } catch {
+      throw new EnvError(
+        `Could not decrypt variable "${key}". The encryption key may have changed or the stored value is corrupted — re-enter this value.`,
+        "ENV_DECRYPT_FAILED",
+        500,
+      );
+    }
 
     return {
       id: record.id,
@@ -343,14 +352,29 @@ export class EnvService {
     });
 
     const envMap: Record<string, string> = {};
+    const failedKeys: string[] = [];
 
     for (const rec of records) {
       try {
         envMap[rec.key] = decrypt(rec.value);
       } catch {
-        // If decryption fails for a corrupted record, skip or keep empty
-        envMap[rec.key] = "";
+        failedKeys.push(rec.key);
       }
+    }
+
+    // Security/correctness: never substitute "" for a secret that could not be
+    // decrypted. A container booted with an empty password or API key fails
+    // confusingly at runtime (or connects with an empty credential), and
+    // nothing would point at the env layer. Fail the build/deploy instead and
+    // name every affected key so the operator can re-enter them.
+    if (failedKeys.length > 0) {
+      throw new EnvError(
+        `Could not decrypt environment variable${failedKeys.length === 1 ? "" : "s"} ${failedKeys
+          .map((key) => `"${key}"`)
+          .join(", ")}. The encryption key may have changed or the stored value is corrupted — re-enter ${failedKeys.length === 1 ? "this value" : "these values"} in the project's environment settings.`,
+        "ENV_DECRYPT_FAILED",
+        500,
+      );
     }
 
     return envMap;

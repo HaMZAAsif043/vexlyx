@@ -85,7 +85,10 @@ export function decrypt(cipherText: string): string {
     }
 
     const [ivHex, authTagHex, encryptedHex] = parts as [string, string, string];
-    if (!ivHex || !authTagHex || !encryptedHex) {
+    // The ciphertext part is legitimately empty for an empty plaintext (GCM
+    // still emits an auth tag, which is verified below), so only the IV and
+    // tag are required to be present.
+    if (!ivHex || !authTagHex) {
       throw new EncryptionError(
         "Malformed encrypted payload parts",
         "INVALID_CIPHERTEXT_PARTS",

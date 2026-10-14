@@ -4,7 +4,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PrismaClient } from "@prisma/client";
 import { env } from "../../config/env.js";
-import { EnvService } from "../env/service.js";
+import { EnvService, EnvError } from "../env/service.js";
 import type { DeployBody } from "./schema.js";
 
 // ---------------------------------------------------------------------------
@@ -486,15 +486,25 @@ export class DeployService {
       staticRoot = projectDir;
     }
 
+    // Fetch and decrypt project environment variables. Done before the status
+    // flips to CREATING so an undecryptable secret fails the request cleanly
+    // instead of leaving the project stuck mid-deploy.
+    const envService = new EnvService(this.prisma);
+    let envVars: Record<string, string>;
+    try {
+      envVars = await envService.getDecryptedMap(projectId);
+    } catch (err) {
+      if (err instanceof EnvError) {
+        throw new DeployError(err.message, err.code, err.statusCode);
+      }
+      throw err;
+    }
+
     // Update project status to CREATING / DEPLOYING
     await this.prisma.project.update({
       where: { id: projectId },
       data: { status: "CREATING" },
     });
-
-    // Fetch and decrypt project environment variables
-    const envService = new EnvService(this.prisma);
-    const envVars = await envService.getDecryptedMap(projectId);
 
     const result = await runDockerDeploy({
       projectId,
