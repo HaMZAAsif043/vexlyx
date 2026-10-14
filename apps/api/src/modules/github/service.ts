@@ -144,15 +144,18 @@ export class GitHubService {
     }
 
     const authoritative = await this.client.getInstallation(app.appId, decrypt(app.encryptedPrivateKey), BigInt(installationId));
-    const existing = await this.prisma.gitHubInstallation.findUnique({ where: { installationId: BigInt(installationId) } });
-    if (existing && existing.userId !== userId) {
-      throw new GitHubError("This GitHub installation is already linked", "GITHUB_INSTALLATION_ALREADY_LINKED", 409);
-    }
-
+    const data = this.installationData(authoritative);
+    // Ownership belongs in the write predicate: a prior read cannot prevent
+    // concurrent callbacks from linking the same installation to different users.
     const record = await this.prisma.gitHubInstallation.upsert({
-      where: { installationId: BigInt(installationId) },
-      create: this.installationData(userId, authoritative),
-      update: { ...this.installationData(userId, authoritative), disconnectedAt: null },
+      where: { installationId: BigInt(installationId), userId },
+      create: { ...data, userId },
+      update: { ...data, disconnectedAt: null },
+    }).catch((err: unknown) => {
+      if (err && typeof err === "object" && "code" in err && err.code === "P2002") {
+        throw new GitHubError("This GitHub installation is already linked", "GITHUB_INSTALLATION_ALREADY_LINKED", 409);
+      }
+      throw err;
     });
     await this.auditLog.log(userId, "github.installation_linked", { type: "GitHubInstallation", id: record.id }, { after: { accountLogin: record.accountLogin } });
     return this.serializeInstallation(record);
@@ -293,7 +296,7 @@ export class GitHubService {
     return installation;
   }
 
-  private installationData(userId: string, installation: GitHubInstallationResponse) {
+  private installationData(installation: GitHubInstallationResponse) {
     return {
       installationId: BigInt(installation.id),
       accountId: BigInt(installation.account.id),
@@ -302,7 +305,6 @@ export class GitHubService {
       repositorySelection: installation.repository_selection,
       status: installation.suspended_at ? "SUSPENDED" as const : "CONNECTED" as const,
       suspendedAt: installation.suspended_at ? new Date(installation.suspended_at) : null,
-      userId,
     };
   }
 

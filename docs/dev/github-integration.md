@@ -40,6 +40,8 @@ Before redirecting to GitHub, Vexlyx stores a random state value in Redis for te
 
 The App requests GitHub user authorization during installation. At the callback, Vexlyx exchanges the authorization code, calls `GET /user/installations`, and confirms the returned installation ID is accessible to that user. The GitHub user token is discarded after this check and is never stored.
 
+An installation belongs to one Vexlyx user. The database write includes the authenticated owner in its predicate and never updates the owner field. Concurrent attempts by different users cannot transfer ownership; the losing attempt receives `409 GITHUB_INSTALLATION_ALREADY_LINKED`. The existing owner can reconnect. Concurrent initial creation can also return this conflict to the same owner; retry the connection flow with fresh authorization state.
+
 GitHub does not allow an App to use both “Request user authorization during installation” and a separate setup URL. Vexlyx therefore completes installation linking in the OAuth callback. The `installation_id` query parameter is never trusted without the `/user/installations` verification.
 
 ## Repository authorization and tokens
