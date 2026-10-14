@@ -52,6 +52,12 @@ No Prisma model was added — status is live-only, unlike Monitoring (F-series) 
 
 ---
 
+## Access Control (#65)
+
+Service health is host-wide, so it is **ADMIN only on both transports**: `GET /api/services` uses `requireRole("ADMIN")`, and the Socket.io `subscribe:services` handler applies the same rule with a fresh role lookup (`createSocketAuthorizer`, `apps/api/src/plugins/socket-auth.ts`). A non-admin (or unauthenticated, unknown, or lookup-failed) socket is not joined to the `services` room, no status is collected for it, and it receives `services:forbidden` (`{ error, code: "FORBIDDEN_ROLE", details }`). Tests: `apps/api/src/modules/services/socket.test.ts`.
+
+**Adding a new privileged room?** Declare its access rule once (see `modules/services/access.ts`, `modules/backups/access.ts`) and use that same constant for both the HTTP guard and the `subscribe:*` handler, so the two cannot drift. Gate the handler with `authorizeSocketSubscription` and a per-socket `SubscriptionGate`: the role lookup is asynchronous, and a client that leaves while it is pending must not be joined (or have a push timer started) after its cleanup already ran.
+
 ## Python Script (`service_status_manager.py`)
 
 **Protocol:** Same as `docker_manager.py`/`firewall_manager.py`/`system_monitor.py` — JSON payload on stdin, one JSON response on stdout, exit code 0/1.

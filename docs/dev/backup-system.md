@@ -87,12 +87,15 @@ Database dumps and restores stream through Python's built-in `gzip` module (not 
 
 | Direction | Event | Payload |
 |-----------|-------|---------|
-| Client → Server | `subscribe:backups` | — |
+| Client → Server | `subscribe:backups` | — (ADMIN or the `canManageBackups` permission, same as the REST routes) |
+| Server → Client | `backups:forbidden` | `{ error, code: "FORBIDDEN_ROLE", details }` — sent instead of joining the room when the caller lacks access (#65) |
 | Server → Client | `backup:progress` | `{ snapshotId, message }` |
 | Server → Client | `backup:completed` | `{ snapshotId, status, error? }` |
 | Server → Client | `restore:progress` | `{ snapshotId, itemType, itemId, message }` |
 | Server → Client | `restore:completed` | `{ snapshotId, itemType, itemId, status, error? }` |
 | Client → Server | `unsubscribe:backups` | — |
+
+The `backups` room carries snapshot/item IDs and error messages for **every** snapshot, so joining it is authorized exactly like the HTTP API: the role/permission is read fresh from the database on each subscribe (`createSocketAuthorizer` in `apps/api/src/plugins/socket-auth.ts`), and a denied, unknown or unauthenticated socket never joins. Tests: `apps/api/src/modules/backups/socket.test.ts`.
 
 ---
 
