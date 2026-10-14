@@ -47,7 +47,11 @@ const SAMPLE_SERVER_METRICS: ServerMetrics = {
 };
 
 interface PrismaMock {
-  user: { findUnique: ReturnType<typeof vi.fn>; count: ReturnType<typeof vi.fn> };
+  user: {
+    findUnique: ReturnType<typeof vi.fn>;
+    findMany: ReturnType<typeof vi.fn>;
+    count: ReturnType<typeof vi.fn>;
+  };
   project: { count: ReturnType<typeof vi.fn> };
   domain: { count: ReturnType<typeof vi.fn>; findMany: ReturnType<typeof vi.fn> };
   database: { count: ReturnType<typeof vi.fn> };
@@ -67,6 +71,7 @@ function createPrismaMock(overrides: { role?: "ADMIN" | "USER" | "RESELLER" } = 
         maxMailboxes: null,
         maxSubAccounts: null,
       }),
+      findMany: vi.fn().mockResolvedValue([]),
       count: vi.fn().mockResolvedValue(0),
     },
     project: { count: vi.fn().mockResolvedValue(3) },
@@ -101,6 +106,28 @@ describe("DashboardService.getSummary", () => {
     });
   });
 
+  it.each(["USER", "RESELLER"] as const)(
+    "withholds host-wide serverMetrics from a %s without collecting them",
+    async (role) => {
+      const prisma = createPrismaMock({ role });
+      const service = new DashboardService(prisma as unknown as PrismaClient, noopLogger);
+
+      const summary = await service.getSummary(USER_ID);
+
+      expect(summary.serverMetrics).toBeNull();
+      expect(mockGetServerMetrics).not.toHaveBeenCalled();
+    },
+  );
+
+  it("returns serverMetrics to an admin", async () => {
+    const prisma = createPrismaMock({ role: "ADMIN" });
+    const service = new DashboardService(prisma as unknown as PrismaClient, noopLogger);
+
+    const summary = await service.getSummary(USER_ID);
+
+    expect(summary.serverMetrics).toEqual(SAMPLE_SERVER_METRICS);
+  });
+
   it("excludes backup activity for a non-admin user", async () => {
     const prisma = createPrismaMock({ role: "USER" });
     prisma.backupSnapshot.findMany.mockResolvedValue([
@@ -128,7 +155,7 @@ describe("DashboardService.getSummary", () => {
 
   it("degrades to null serverMetrics when monitoring fails", async () => {
     mockGetServerMetrics.mockReset().mockRejectedValue(new Error("monitor unavailable"));
-    const prisma = createPrismaMock();
+    const prisma = createPrismaMock({ role: "ADMIN" });
     const service = new DashboardService(prisma as unknown as PrismaClient, noopLogger);
 
     const summary = await service.getSummary(USER_ID);

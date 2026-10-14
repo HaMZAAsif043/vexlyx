@@ -31,7 +31,7 @@ const navItems = [
   { label: "Domains", href: "/domains", icon: Globe },
   { label: "Databases", href: "/databases", icon: Database },
   { label: "Mail", href: "/mail", icon: Mail },
-  { label: "Monitoring", href: "/monitoring", icon: Activity },
+  { label: "Monitoring", href: "/monitoring", icon: Activity, roles: ["ADMIN"] },
   { label: "Backups", href: "/backups", icon: Archive, roles: ["ADMIN"] },
   { label: "Firewall", href: "/firewall", icon: Shield, roles: ["ADMIN"] },
   { label: "Services", href: "/services", icon: Server, roles: ["ADMIN"] },

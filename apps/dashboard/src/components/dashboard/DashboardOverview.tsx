@@ -8,7 +8,9 @@ import { StatCard } from "@/components/dashboard/StatCard";
 import { QuickActions } from "@/components/dashboard/QuickActions";
 import { ResourceUsageWidget } from "@/components/dashboard/ResourceUsageWidget";
 import { RecentActivityFeed } from "@/components/dashboard/RecentActivityFeed";
+import { useAuth } from "@/hooks/useAuth";
 import { useDashboardSummary } from "@/hooks/useDashboardSummary";
+import { cn } from "@/lib/utils";
 
 /**
  * Dashboard home page content (F5.16) — real stat counts, server health,
@@ -17,6 +19,8 @@ import { useDashboardSummary } from "@/hooks/useDashboardSummary";
 export function DashboardOverview() {
   const { stats, serverMetrics, activity, sslExpiringCount, isLoading, isError, refetch } =
     useDashboardSummary();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "ADMIN";
 
   useEffect(() => {
     if (isError) toast.error("Failed to load dashboard data");
@@ -75,12 +79,14 @@ export function DashboardOverview() {
 
       <QuickActions />
 
-      <div className="grid items-start gap-6 lg:grid-cols-2">
-        <ResourceUsageWidget
-          serverMetrics={serverMetrics}
-          isLoading={isLoading}
-          onRefresh={async () => refetch()}
-        />
+      <div className={cn("grid items-start gap-6", isAdmin && "lg:grid-cols-2")}>
+        {isAdmin && (
+          <ResourceUsageWidget
+            serverMetrics={serverMetrics}
+            isLoading={isLoading}
+            onRefresh={async () => refetch()}
+          />
+        )}
         <RecentActivityFeed activity={activity} isLoading={isLoading} />
       </div>
 

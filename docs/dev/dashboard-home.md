@@ -36,21 +36,21 @@ Prisma / system_monitor.py
 `DashboardService.getSummary(userId)` composes three things in parallel:
 
 1. **Stats** — reuses `getUsageSummary()` (already used for `GET /api/users/me/usage`), which returns `{ used, limit }` per resource directly — the response's `stats.<resource>` is that object unmodified, so the frontend's quota bars come for free with no extra query.
-2. **Server metrics** — calls `MonitoringService.getServerMetrics()` and catches any failure (e.g. `system_monitor.py` unavailable), returning `null` instead of failing the whole request. The frontend widget shows an "unavailable" message rather than breaking the page.
+2. **Server metrics (ADMIN only)** — for non-admins `serverMetrics` is `null` and nothing is collected, matching the admin-only `/api/monitoring/*` policy (host-wide data; see `docs/dev/monitoring.md`). For admins it calls `MonitoringService.getServerMetrics()` and catches any failure (e.g. `system_monitor.py` unavailable), returning `null` instead of failing the whole request. The frontend widget shows an "unavailable" message rather than breaking the page.
 3. **Activity feed** — merges three sources, sorted by timestamp descending and capped at 15 items:
    - Recent deployments, via `prisma.deployment.findMany({ where: { project: { userId } } })` (deployments have no `userId` of their own).
    - Recent backups, only when the caller's role is `ADMIN` (looked up separately, since `BackupSnapshot` has no `userId` at all and is fully global — this mirrors the existing `requireRole("ADMIN")` boundary on `GET /api/backups`).
 4. **`sslExpiringCount`** — counted from the *full* (unfiltered-by-cap) SSL alert list returned alongside the activity sources, so it stays accurate even if SSL alerts get pushed out of the merged feed's top 15 by other activity. Drives the amber banner on the frontend independently of the activity feed.
    - SSL expiry alerts, via `SslService.checkExpiryAlerts()` (which also refreshes certificate status as a side effect), scoped by the service to the caller's own domains (`checkExpiryAlerts(userId)`).
 
-The route (`GET /api/dashboard/summary`) requires only `app.requireAuth` — the backup-visibility check happens inside the service, not as a route-level role gate, since everything except backups should still be visible to non-admins.
+The route (`GET /api/dashboard/summary`) requires only `app.requireAuth` — the backup and server-metrics visibility checks happen inside the service (role resolved once per request), not as a route-level role gate, since everything else should still be visible to non-admins. The Server Health widget is rendered for `ADMIN` only.
 
 ---
 
 ## How to Test
 
 Manual (`pnpm dev`):
-1. Fresh/empty account → stat tiles show real `0`s, Getting Started box visible, activity feed shows its empty state, Server Health still shows live server-level metrics.
+1. Fresh/empty account → stat tiles show real `0`s, Getting Started box visible, activity feed shows its empty state, Server Health (admin accounts only) still shows live server-level metrics.
 2. Populated account (projects, domains with SSL, databases, mailboxes, at least one deployment) → accurate counts, Getting Started box gone, activity feed shows deployments/SSL alerts sorted newest-first.
 3. Log in as non-ADMIN with backups present elsewhere in the system → feed has no backup entries. Log in as ADMIN → backup entries appear.
 4. Quick-action buttons navigate to the right list pages; no modal auto-opens.

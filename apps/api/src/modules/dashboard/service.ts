@@ -22,10 +22,18 @@ export class DashboardService {
   }
 
   async getSummary(userId: string): Promise<DashboardSummaryResponse> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { role: true },
+    });
+    const isAdmin = user?.role === "ADMIN";
+
+    // Host-wide metrics are admin-only (same policy as /api/monitoring/*);
+    // everyone else gets null so the widget is simply not shown.
     const [usage, serverMetrics, sources] = await Promise.all([
       getUsageSummary(this.prisma, userId),
-      this.safeGetServerMetrics(),
-      this.gatherActivitySources(userId),
+      isAdmin ? this.safeGetServerMetrics() : Promise.resolve(null),
+      this.gatherActivitySources(userId, isAdmin),
     ]);
 
     const activity = [...sources.deployments, ...sources.backups, ...sources.sslAlerts]
@@ -57,17 +65,14 @@ export class DashboardService {
     }
   }
 
-  private async gatherActivitySources(userId: string): Promise<{
+  private async gatherActivitySources(
+    userId: string,
+    isAdmin: boolean,
+  ): Promise<{
     deployments: ActivityItem[];
     backups: ActivityItem[];
     sslAlerts: ActivityItem[];
   }> {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { role: true },
-    });
-    const isAdmin = user?.role === "ADMIN";
-
     const [deployments, backups, sslAlerts] = await Promise.all([
       this.recentDeployments(userId),
       isAdmin ? this.recentBackups() : Promise.resolve([]),
