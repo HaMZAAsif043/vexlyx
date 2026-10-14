@@ -7,6 +7,7 @@ import { env } from "../../config/env.js";
 import { EnvService, EnvError } from "../env/service.js";
 import type { DeployBody } from "./schema.js";
 import { getPythonBin } from "../../utils/pythonBin.js";
+import { PYTHON_SCRIPT_TIMEOUT_MS, watchChildTimeout } from "../../utils/processWatchdog.js";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -97,6 +98,15 @@ export function runDockerDeploy(
     const child = spawn(getPythonBin(), [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
+    watchChildTimeout(child, PYTHON_SCRIPT_TIMEOUT_MS.compose, (ms) =>
+      rejectP(
+        new DeployError(
+          `Docker deploy timed out after ${ms / 1000}s`,
+          "SCRIPT_TIMEOUT",
+          504,
+        ),
+      ),
+    );
 
     let buffer = "";
     let stderrBuffer = "";
@@ -223,6 +233,15 @@ function runDockerManagerCommand(
     const child = spawn(getPythonBin(), [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
+    watchChildTimeout(child, PYTHON_SCRIPT_TIMEOUT_MS.compose, (ms) =>
+      rejectP(
+        new DeployError(
+          `Docker container action timed out after ${ms / 1000}s`,
+          "SCRIPT_TIMEOUT",
+          504,
+        ),
+      ),
+    );
 
     let buffer = "";
     let stderrBuffer = "";
@@ -304,6 +323,15 @@ export function runDockerStatus(
     const child = spawn(getPythonBin(), [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
+    watchChildTimeout(child, PYTHON_SCRIPT_TIMEOUT_MS.status, (ms) =>
+      rejectP(
+        new DeployError(
+          `Docker status check timed out after ${ms / 1000}s`,
+          "SCRIPT_TIMEOUT",
+          504,
+        ),
+      ),
+    );
 
     let stdout = "";
     let stderr = "";
@@ -380,6 +408,15 @@ export function runDockerLogs(
     const child = spawn(getPythonBin(), [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
+    watchChildTimeout(child, PYTHON_SCRIPT_TIMEOUT_MS.logs, (ms) =>
+      rejectP(
+        new DeployError(
+          `Docker logs fetch timed out after ${ms / 1000}s`,
+          "SCRIPT_TIMEOUT",
+          504,
+        ),
+      ),
+    );
 
     let stdout = "";
     let stderr = "";

@@ -47,6 +47,15 @@ function runSftpCommand<T>(payload: Record<string, unknown>): Promise<T> {
     const child = spawn(getPythonBin(), [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
+    watchChildTimeout(child, PYTHON_SCRIPT_TIMEOUT_MS.sftp, (ms) =>
+      rejectP(
+        new SftpError(
+          `SFTP manager timed out after ${ms / 1000}s`,
+          "SCRIPT_TIMEOUT",
+          504,
+        ),
+      ),
+    );
 
     let stdout = "";
     let stderr = "";
@@ -116,6 +125,7 @@ function runSftpCommand<T>(payload: Record<string, unknown>): Promise<T> {
 
 import { encrypt, decrypt } from "../../utils/encryption.js";
 import { getPythonBin } from "../../utils/pythonBin.js";
+import { PYTHON_SCRIPT_TIMEOUT_MS, watchChildTimeout } from "../../utils/processWatchdog.js";
 
 function decryptPasswordWithFallback(stored: string): { password: string | null; needsUpgrade: boolean } {
   // 1. Try modern SHA-256 derived key

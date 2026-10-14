@@ -7,6 +7,7 @@ import type { FastifyBaseLogger } from "fastify";
 import type { ServerMetrics, ContainerMetric, MetricsRange } from "@vexlyx/shared";
 import { ServerMetricsSchema, ContainerMetricSchema } from "@vexlyx/shared";
 import { getPythonBin } from "../../utils/pythonBin.js";
+import { PYTHON_SCRIPT_TIMEOUT_MS, watchChildTimeout } from "../../utils/processWatchdog.js";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -59,6 +60,15 @@ function runMonitorCommand<T>(command: string, logger: FastifyBaseLogger): Promi
     const child = spawn(pythonBin, [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
+    watchChildTimeout(child, PYTHON_SCRIPT_TIMEOUT_MS.status, (ms) =>
+      reject(
+        new MonitoringError(
+          `System monitor timed out after ${ms / 1000}s`,
+          "SCRIPT_TIMEOUT",
+          504,
+        ),
+      ),
+    );
 
     let stdout = "";
     let stderr = "";

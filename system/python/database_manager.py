@@ -18,6 +18,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -91,13 +92,18 @@ def escape_sql_string(val: str) -> str:
     return val.replace("'", "''").replace("\\", "\\\\")
 
 
+# Seconds. Provisioning commands are quick; a hung engine must not hang us.
+DOCKER_EXEC_TIMEOUT = 120
+
+
 def run_docker_exec(
     container_name: str,
     cmd_args: list[str],
     input_text: str | None = None,
     env_vars: dict[str, str] | None = None,
+    timeout: int = DOCKER_EXEC_TIMEOUT,
 ) -> tuple[int, str, str]:
-    """Execute command inside a docker container."""
+    """Execute command inside a docker container, bounded by `timeout` seconds."""
     docker_bin = get_docker_binary()
     full_cmd = [docker_bin, "exec", "-i"]
     if env_vars:
@@ -106,6 +112,11 @@ def run_docker_exec(
     full_cmd.append(container_name)
     full_cmd.extend(cmd_args)
 
+    group = (
+        {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        if os.name == "nt"
+        else {"start_new_session": True}
+    )
     proc = subprocess.Popen(
         full_cmd,
         stdin=subprocess.PIPE if input_text is not None else None,
@@ -114,8 +125,29 @@ def run_docker_exec(
         text=True,
         encoding="utf-8",
         errors="replace",
+        **group,
     )
-    stdout, stderr = proc.communicate(input=input_text)
+    try:
+        stdout, stderr = proc.communicate(input=input_text, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # Kill the whole group: the `docker exec` client and anything it spawned
+        # must not keep running (or holding our pipes) after we give up.
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                    capture_output=True,
+                    timeout=15,
+                )
+            else:
+                os.killpg(proc.pid, signal.SIGKILL)
+        except Exception:
+            proc.kill()
+        proc.communicate()
+        fail(
+            f"`docker exec {container_name}` timed out after {timeout}s",
+            "COMMAND_TIMEOUT",
+        )
     return proc.returncode, stdout, stderr
 
 

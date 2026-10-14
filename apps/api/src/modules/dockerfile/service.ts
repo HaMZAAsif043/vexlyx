@@ -6,6 +6,7 @@ import type { PrismaClient } from "@prisma/client";
 import { env } from "../../config/env.js";
 import type { SaveDockerfileInput, DockerfileStatus, DockerfileTemplate } from "./schema.js";
 import { getPythonBin } from "../../utils/pythonBin.js";
+import { PYTHON_SCRIPT_TIMEOUT_MS, watchChildTimeout } from "../../utils/processWatchdog.js";
 
 // ---------------------------------------------------------------------------
 // Error definition
@@ -48,6 +49,15 @@ function runPythonCommand<T>(payload: Record<string, unknown>): Promise<T> {
     const child = spawn(getPythonBin(), [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
+    watchChildTimeout(child, PYTHON_SCRIPT_TIMEOUT_MS.quick, (ms) =>
+      rejectP(
+        new DockerfileError(
+          `Dockerfile manager timed out after ${ms / 1000}s`,
+          "SCRIPT_TIMEOUT",
+          504,
+        ),
+      ),
+    );
 
     let stdout = "";
     let stderr = "";

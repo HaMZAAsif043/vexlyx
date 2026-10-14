@@ -48,6 +48,7 @@ def run(cmd: list[str], check=True) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         check=check,
+        timeout=60,
     )
 
 def validate_username(username: str) -> bool:
@@ -84,7 +85,7 @@ def sync_user_projects(chroot_dir: str, linux_username: str, projects: list):
         if IS_POSIX:
             os.makedirs(target_dir, mode=0o755, exist_ok=True)
             try:
-                is_mounted = subprocess.run(["mountpoint", "-q", target_dir], check=False).returncode == 0
+                is_mounted = subprocess.run(["mountpoint", "-q", target_dir], check=False, timeout=60).returncode == 0
                 if not is_mounted:
                     run(["mount", "--bind", proj_path, target_dir])
                 if linux_username:
@@ -157,6 +158,7 @@ def cmd_provision(payload: dict):
             input=f"{linux_username}:{password}",
             capture_output=True,
             text=True,
+            timeout=60,
         )
         if proc.returncode != 0:
             fail(f"chpasswd failed: {proc.stderr}", "SFTP_CHPASSWD_FAILED")
@@ -218,6 +220,7 @@ def cmd_rotate_password(payload: dict):
             input=f"{username}:{password}",
             capture_output=True,
             text=True,
+            timeout=60,
         )
         if proc.returncode != 0:
             fail(f"chpasswd failed: {proc.stderr}", "SFTP_CHPASSWD_FAILED")
@@ -342,7 +345,10 @@ def main():
         fail(f"Unknown command: {command}", "SFTP_UNKNOWN_COMMAND")
         return
 
-    handler(payload)
+    try:
+        handler(payload)
+    except subprocess.TimeoutExpired as exc:
+        fail(f"Command timed out after {exc.timeout}s", "COMMAND_TIMEOUT")
 
 if __name__ == "__main__":
     main()

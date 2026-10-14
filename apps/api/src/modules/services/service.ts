@@ -12,6 +12,7 @@ import type {
 } from "@vexlyx/shared";
 import { env } from "../../config/env.js";
 import { getPythonBin } from "../../utils/pythonBin.js";
+import { PYTHON_SCRIPT_TIMEOUT_MS, watchChildTimeout } from "../../utils/processWatchdog.js";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -75,6 +76,15 @@ function runServiceStatusCommand<T>(payload: Record<string, unknown>, logger: Fa
     const pythonBin = getPythonBin();
 
     const child = spawn(pythonBin, [scriptPath], { stdio: ["pipe", "pipe", "pipe"] });
+    watchChildTimeout(child, PYTHON_SCRIPT_TIMEOUT_MS.services, (ms) =>
+      reject(
+        new ServicesError(
+          `Service status script timed out after ${ms / 1000}s`,
+          "SCRIPT_TIMEOUT",
+          504,
+        ),
+      ),
+    );
 
     let stdout = "";
     let stderr = "";

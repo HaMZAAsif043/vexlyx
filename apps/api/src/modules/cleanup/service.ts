@@ -6,6 +6,7 @@ import type { PrismaClient } from "@prisma/client";
 import type { FastifyBaseLogger } from "fastify";
 import type { DiskUsageResponse, CleanupTrigger } from "@vexlyx/shared";
 import { getPythonBin } from "../../utils/pythonBin.js";
+import { PYTHON_SCRIPT_TIMEOUT_MS, watchChildTimeout } from "../../utils/processWatchdog.js";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -58,6 +59,15 @@ function runDockerManagerCommand<T>(
     const pythonBin = getPythonBin();
 
     const child = spawn(pythonBin, [scriptPath], { stdio: ["pipe", "pipe", "pipe"] });
+    watchChildTimeout(child, PYTHON_SCRIPT_TIMEOUT_MS.cleanup, (ms) =>
+      reject(
+        new CleanupError(
+          `Docker cleanup timed out after ${ms / 1000}s`,
+          "SCRIPT_TIMEOUT",
+          504,
+        ),
+      ),
+    );
 
     let stdout = "";
     let stderr = "";

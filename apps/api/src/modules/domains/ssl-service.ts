@@ -14,6 +14,7 @@ import type {
 import { DomainError, DomainService } from "./service.js";
 import { encrypt } from "../../utils/encryption.js";
 import { getPythonBin } from "../../utils/pythonBin.js";
+import { PYTHON_SCRIPT_TIMEOUT_MS, watchChildTimeout } from "../../utils/processWatchdog.js";
 
 // ---------------------------------------------------------------------------
 // Python Script Locator
@@ -134,6 +135,15 @@ async function runSslManager(
         ...(pythonPath ? { PYTHONPATH: pythonPath } : {}),
       },
     });
+    watchChildTimeout(child, PYTHON_SCRIPT_TIMEOUT_MS.ssl, (ms) =>
+      rej(
+        new DomainError(
+          `SSL manager timed out after ${ms / 1000}s`,
+          "SCRIPT_TIMEOUT",
+          504,
+        ),
+      ),
+    );
 
     let stdout = "";
     let stderr = "";

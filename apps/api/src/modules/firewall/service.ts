@@ -13,6 +13,7 @@ import type {
 import { env } from "../../config/env.js";
 import type { AuditLogService } from "../audit-log/service.js";
 import { getPythonBin } from "../../utils/pythonBin.js";
+import { PYTHON_SCRIPT_TIMEOUT_MS, watchChildTimeout } from "../../utils/processWatchdog.js";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -66,6 +67,15 @@ function runFirewallCommand<T>(payload: Record<string, unknown>, logger: Fastify
     const pythonBin = getPythonBin();
 
     const child = spawn(pythonBin, [scriptPath], { stdio: ["pipe", "pipe", "pipe"] });
+    watchChildTimeout(child, PYTHON_SCRIPT_TIMEOUT_MS.firewall, (ms) =>
+      reject(
+        new FirewallError(
+          `Firewall script timed out after ${ms / 1000}s`,
+          "SCRIPT_TIMEOUT",
+          504,
+        ),
+      ),
+    );
 
     let stdout = "";
     let stderr = "";

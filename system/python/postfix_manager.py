@@ -141,10 +141,10 @@ def generate_dkim_keys(domain: str, selector: str = "default", key_size: int = 2
     if not HAVE_CRYPTO:
         # Fallback to openssl command if cryptography package isn't loaded
         cmd = f'openssl genrsa -out "{priv_file}" {key_size}'
-        subprocess.run(cmd, shell=True, check=True, capture_output=True)
+        subprocess.run(cmd, shell=True, check=True, capture_output=True, timeout=60)
         # Extract public key
         pub_cmd = f'openssl rsa -in "{priv_file}" -pubout -outform DER'
-        proc = subprocess.run(pub_cmd, shell=True, check=True, capture_output=True)
+        proc = subprocess.run(pub_cmd, shell=True, check=True, capture_output=True, timeout=60)
         pub_b64 = base64.b64encode(proc.stdout).decode("ascii")
     else:
         private_key = rsa.generate_private_key(

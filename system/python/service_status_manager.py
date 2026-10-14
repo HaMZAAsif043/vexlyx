@@ -125,6 +125,7 @@ def cmd_status(payload: dict) -> None:
             text=True,
             encoding="utf-8",
             errors="replace",
+            timeout=30,
         )
 
         if result.returncode != 0:
@@ -154,6 +155,7 @@ def cmd_status(payload: dict) -> None:
         text=True,
         encoding="utf-8",
         errors="replace",
+        timeout=30,
     )
 
     respond({
@@ -172,6 +174,7 @@ def cmd_start(payload: dict) -> None:
         text=True,
         encoding="utf-8",
         errors="replace",
+        timeout=30,
     )
     if result.returncode != 0:
         fail(f"Failed to start {container}: {result.stderr.strip()}", "START_FAILED")
@@ -188,6 +191,7 @@ def cmd_stop(payload: dict) -> None:
         text=True,
         encoding="utf-8",
         errors="replace",
+        timeout=30,
     )
     if result.returncode != 0:
         fail(f"Failed to stop {container}: {result.stderr.strip()}", "STOP_FAILED")
@@ -204,6 +208,7 @@ def cmd_restart(payload: dict) -> None:
         text=True,
         encoding="utf-8",
         errors="replace",
+        timeout=30,
     )
     if result.returncode != 0:
         fail(f"Failed to restart {container}: {result.stderr.strip()}", "RESTART_FAILED")
@@ -222,6 +227,7 @@ def cmd_logs(payload: dict) -> None:
         text=True,
         encoding="utf-8",
         errors="replace",
+        timeout=30,
     )
 
     if result.returncode != 0 and not result.stdout.strip() and not result.stderr.strip():
@@ -263,7 +269,10 @@ def main() -> None:
         fail(f"Unknown command: {command!r}", "UNKNOWN_COMMAND")
         return
 
-    handler(payload)
+    try:
+        handler(payload)
+    except subprocess.TimeoutExpired as exc:
+        fail(f"Command timed out after {exc.timeout}s", "COMMAND_TIMEOUT")
 
 
 if __name__ == "__main__":

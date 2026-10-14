@@ -27,6 +27,7 @@ import { DnsService } from "../domains/dns-service.js";
 import { getServerIp } from "../domains/resolvers.js";
 import { getPythonBin } from "../../utils/pythonBin.js";
 import type { FastifyBaseLogger } from "fastify";
+import { PYTHON_SCRIPT_TIMEOUT_MS, watchChildTimeout } from "../../utils/processWatchdog.js";
 import {
   buildRequiredMailRecords,
   isRecordLive,
@@ -154,6 +155,15 @@ export async function runPostfixManager<T = Record<string, unknown>>(
         PYTHONIOENCODING: "utf-8",
       },
     });
+    watchChildTimeout(child, PYTHON_SCRIPT_TIMEOUT_MS.mail, (ms) =>
+      rej(
+        new MailError(
+          `Mail manager timed out after ${ms / 1000}s`,
+          "SCRIPT_TIMEOUT",
+          504,
+        ),
+      ),
+    );
 
     let stdout = "";
     let stderr = "";
@@ -204,6 +214,15 @@ export async function runDovecotManager<T = Record<string, unknown>>(
         PYTHONIOENCODING: "utf-8",
       },
     });
+    watchChildTimeout(child, PYTHON_SCRIPT_TIMEOUT_MS.mail, (ms) =>
+      rej(
+        new MailError(
+          `Mail manager timed out after ${ms / 1000}s`,
+          "SCRIPT_TIMEOUT",
+          504,
+        ),
+      ),
+    );
 
     let stdout = "";
     let stderr = "";
@@ -254,6 +273,15 @@ async function runWebmailManager<T = Record<string, unknown>>(
         PYTHONIOENCODING: "utf-8",
       },
     });
+    watchChildTimeout(child, PYTHON_SCRIPT_TIMEOUT_MS.mail, (ms) =>
+      rej(
+        new MailError(
+          `Mail manager timed out after ${ms / 1000}s`,
+          "SCRIPT_TIMEOUT",
+          504,
+        ),
+      ),
+    );
 
     let stdout = "";
     let stderr = "";

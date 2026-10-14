@@ -11,6 +11,7 @@ import type { ConnectGitHubRepositoryInput } from "@vexlyx/shared";
 import type { GitHubService } from "../github/service.js";
 import type { AuditLogService } from "../audit-log/service.js";
 import { getPythonBin } from "../../utils/pythonBin.js";
+import { PYTHON_SCRIPT_TIMEOUT_MS, watchChildTimeout } from "../../utils/processWatchdog.js";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -79,6 +80,15 @@ export function runGitManager(payload: GitManagerPayload): Promise<GitManagerRes
     const child = spawn(getPythonBin(), [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
+    watchChildTimeout(child, PYTHON_SCRIPT_TIMEOUT_MS.git, (ms) =>
+      rejectP(
+        new GitError(
+          `Git manager timed out after ${ms / 1000}s`,
+          "SCRIPT_TIMEOUT",
+          504,
+        ),
+      ),
+    );
 
     let stdout = "";
     let stderr = "";

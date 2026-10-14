@@ -183,17 +183,31 @@ def _build_env(ssh_key_path: str | None, access_token: str | None = None) -> dic
     return env
 
 
+# Seconds. Generous because large repositories legitimately take a while to
+# clone; the point is that a stalled remote cannot hang the worker forever.
+GIT_COMMAND_TIMEOUT = 900
+
+
 def _run(args: list[str], env: dict | None = None) -> None:
     """Run a subprocess, capturing combined output, failing on non-zero exit."""
     if args[0] == "git":
         # Redirects must not escape the validated host boundary.
         args = [args[0], "-c", "http.followRedirects=false", *args[1:]]
-    result = subprocess.run(
-        args,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+    try:
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=GIT_COMMAND_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        # A stalled remote must not hold the build worker forever (#52).
+        fail(
+            f"Command timed out after {GIT_COMMAND_TIMEOUT}s: {' '.join(args)}",
+            "COMMAND_TIMEOUT",
+        )
+        return
     if result.returncode != 0:
         error_output = (result.stderr or result.stdout or "").strip()
         fail(f"Command failed: {' '.join(args)}\n{error_output}", "COMMAND_FAILED")

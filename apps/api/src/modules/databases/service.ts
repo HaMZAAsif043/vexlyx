@@ -10,6 +10,7 @@ import { assertUnderQuota, notifyQuotaThreshold } from "../../utils/quota.js";
 import { EnvService } from "../env/service.js";
 import type { AuditLogService } from "../audit-log/service.js";
 import { getPythonBin } from "../../utils/pythonBin.js";
+import { PYTHON_SCRIPT_TIMEOUT_MS, watchChildTimeout } from "../../utils/processWatchdog.js";
 import type {
   CreateDatabaseInput,
   DatabaseListQuery,
@@ -60,6 +61,15 @@ function runPythonCommand<T>(payload: Record<string, unknown>): Promise<T> {
     const child = spawn(getPythonBin(), [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
+    watchChildTimeout(child, PYTHON_SCRIPT_TIMEOUT_MS.database, (ms) =>
+      rejectP(
+        new DatabaseError(
+          `Database manager timed out after ${ms / 1000}s`,
+          "SCRIPT_TIMEOUT",
+          504,
+        ),
+      ),
+    );
 
     let stdout = "";
     let stderr = "";

@@ -426,6 +426,7 @@ def restore_mail(payload: dict, archive_path: Path) -> dict:
     subprocess.run(
         ["docker", "exec", "vexlyx-dovecot", "chown", "-R", "5000:5000", container_path],
         capture_output=True,
+        timeout=120,
     )
 
     return {"success": True, "restored": "mail", "itemId": domain_id}
@@ -491,7 +492,10 @@ def main() -> None:
         )
         return
 
-    COMMANDS[command](payload)
+    try:
+        COMMANDS[command](payload)
+    except subprocess.TimeoutExpired as exc:
+        fail(f"Command timed out after {exc.timeout}s", "COMMAND_TIMEOUT")
 
 
 if __name__ == "__main__":

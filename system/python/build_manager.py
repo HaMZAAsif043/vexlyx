@@ -23,9 +23,11 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
+import threading
 import zipfile
 from pathlib import Path
 
@@ -93,6 +95,111 @@ def get_nixpacks_binary() -> str:
         install_cmd = "PowerShell: irm https://nixpacks.com/install.ps1 | iex"
     else:
         install_cmd = "curl -sSL https://nixpacks.com/install.sh | sh"
+
+# ---------------------------------------------------------------------------
+# Bounded subprocess execution (#52)
+#
+# Every external command is time-limited so a hung docker/nixpacks/mysqldump
+# cannot wedge a build or deploy forever (the API side only has a backstop
+# watchdog; killing this script would orphan the grandchild process, so the
+# limit has to be enforced here). Values are seconds.
+# ---------------------------------------------------------------------------
+
+PLAN_TIMEOUT = 120        # `nixpacks plan`
+QUICK_TIMEOUT = 120       # docker create / cp / rm / rmi
+BUILD_TIMEOUT = 3600      # `docker build` / `nixpacks build`
+DB_TRANSFER_TIMEOUT = 1800  # mysqldump / mysql import
+
+def _group_popen_kwargs() -> dict:
+    """Run the child in its own process group so the whole tree can be killed."""
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
+def kill_process_tree(proc: "subprocess.Popen") -> None:
+    """Kill the process and everything it started.
+
+    Killing only the direct child leaves grandchildren (e.g. what nixpacks or
+    docker spawn) running and still holding our output pipe open, which would
+    keep the deadline from ever being honoured.
+    """
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                capture_output=True,
+                timeout=15,
+            )
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+def run_bounded(
+    timeout: int, cmd: list, *, fatal: bool = True, **kwargs
+) -> "subprocess.CompletedProcess":
+    """subprocess.run with a hard time limit that also kills the child's tree.
+
+    A timeout normally ends the script with COMMAND_TIMEOUT. Pass fatal=False for
+    best-effort cleanup steps: the timeout is logged and a result with return
+    code 124 is returned, so the steps after it still run.
+    """
+    check = kwargs.pop("check", False)
+    input_data = kwargs.pop("input", None)
+    if kwargs.pop("capture_output", False):
+        kwargs["stdout"] = subprocess.PIPE
+        kwargs["stderr"] = subprocess.PIPE
+    if input_data is not None:
+        kwargs["stdin"] = subprocess.PIPE
+
+    with subprocess.Popen(cmd, **_group_popen_kwargs(), **kwargs) as proc:
+        try:
+            stdout, stderr = proc.communicate(input_data, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            kill_process_tree(proc)
+            proc.communicate()
+            if not fatal:
+                log_line(f"[vexlyx] Skipped: `{' '.join(str(c) for c in cmd[:3])}` timed out after {timeout}s")
+                return subprocess.CompletedProcess(cmd, 124, "", "timed out")
+            fail(
+                f"`{' '.join(str(c) for c in cmd[:4])}` timed out after {timeout}s",
+                "COMMAND_TIMEOUT",
+            )
+            raise  # unreachable - fail() exits
+        returncode = proc.poll()
+    if check and returncode:
+        raise subprocess.CalledProcessError(returncode, cmd, stdout, stderr)
+    return subprocess.CompletedProcess(cmd, returncode, stdout, stderr)
+
+
+def stream_with_deadline(proc: "subprocess.Popen", timeout: int, on_line) -> bool:
+    """Feed proc.stdout lines to on_line; kill proc if it outlives `timeout`.
+
+    Returns True when the deadline killed the process.
+    """
+    timed_out = threading.Event()
+
+    def _kill() -> None:
+        timed_out.set()
+        kill_process_tree(proc)
+
+    timer = threading.Timer(timeout, _kill)
+    timer.daemon = True
+    timer.start()
+    try:
+        if proc.stdout:
+            for raw_line in proc.stdout:
+                on_line(raw_line)
+        proc.wait()
+    finally:
+        timer.cancel()
+    return timed_out.is_set()
+
 
 def get_docker_binary() -> str:
     """Find docker binary in PATH or common install directories."""
@@ -973,7 +1080,8 @@ def cmd_plan(payload: dict) -> None:
             if k and v is not None and k not in ("NIXPACKS_PYTHON_VERSION", "NIXPACKS_NODE_VERSION", "NIXPACKS_PHP_VERSION"):
                 cmd += ["--env", f"{k}={v}"]
 
-    result = subprocess.run(
+    result = run_bounded(
+        PLAN_TIMEOUT,
         cmd,
         capture_output=True,
         text=True,
@@ -1065,6 +1173,7 @@ def cmd_build(payload: dict) -> None:
 
         proc = subprocess.Popen(
             docker_build_args,
+            **_group_popen_kwargs(),
             cwd=str(project_path),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -1074,14 +1183,16 @@ def cmd_build(payload: dict) -> None:
             bufsize=1,
         )
 
-        if proc.stdout:
-            for raw_line in proc.stdout:
-                parts = [p.strip() for p in raw_line.replace("\r", "\n").split("\n")]
-                for part in parts:
-                    if part:
-                        log_line(part)
+        def _emit_build_line(raw_line: str) -> None:
+            for part in (p.strip() for p in raw_line.replace("\r", "\n").split("\n")):
+                if part:
+                    log_line(part)
 
-        proc.wait()
+        if stream_with_deadline(proc, BUILD_TIMEOUT, _emit_build_line):
+            fail(
+                f"docker build timed out after {BUILD_TIMEOUT}s",
+                "COMMAND_TIMEOUT",
+            )
 
         if proc.returncode != 0:
             fail(
@@ -1177,6 +1288,7 @@ def cmd_build(payload: dict) -> None:
 
     proc = subprocess.Popen(
         cmd,
+        **_group_popen_kwargs(),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -1186,14 +1298,16 @@ def cmd_build(payload: dict) -> None:
     )
 
     # Stream combined output line by line, splitting both \r and \n from progress lines
-    if proc.stdout:
-        for raw_line in proc.stdout:
-            parts = [p.strip() for p in raw_line.replace("\r", "\n").split("\n")]
-            for part in parts:
-                if part:
-                    log_line(part)
+    def _emit_nixpacks_line(raw_line: str) -> None:
+        for part in (p.strip() for p in raw_line.replace("\r", "\n").split("\n")):
+            if part:
+                log_line(part)
 
-    proc.wait()
+    if stream_with_deadline(proc, BUILD_TIMEOUT, _emit_nixpacks_line):
+        fail(
+            f"nixpacks build timed out after {BUILD_TIMEOUT}s",
+            "COMMAND_TIMEOUT",
+        )
 
     if proc.returncode != 0:
         fail(
@@ -1233,7 +1347,8 @@ def cmd_extract_static_output(payload: dict) -> None:
         shutil.rmtree(output_dir, ignore_errors=True)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    create_result = subprocess.run(
+    create_result = run_bounded(
+        QUICK_TIMEOUT,
         [docker_bin, "create", image_name],
         capture_output=True,
         text=True,
@@ -1251,7 +1366,8 @@ def cmd_extract_static_output(payload: dict) -> None:
     copied = False
     try:
         for candidate in STATIC_OUTPUT_DIR_CANDIDATES:
-            cp_result = subprocess.run(
+            cp_result = run_bounded(
+                QUICK_TIMEOUT,
                 [docker_bin, "cp", f"{container_id}:/app/{candidate}/.", str(output_dir)],
                 capture_output=True,
                 text=True,
@@ -1263,8 +1379,9 @@ def cmd_extract_static_output(payload: dict) -> None:
                 copied = True
                 break
     finally:
-        subprocess.run([docker_bin, "rm", "-f", container_id], capture_output=True)
-        subprocess.run([docker_bin, "rmi", "-f", image_name], capture_output=True)
+        # Best effort and independent: a timed-out `rm` must not skip the `rmi`.
+        run_bounded(QUICK_TIMEOUT, [docker_bin, "rm", "-f", container_id], fatal=False, capture_output=True)
+        run_bounded(QUICK_TIMEOUT, [docker_bin, "rmi", "-f", image_name], fatal=False, capture_output=True)
 
     if not copied:
         fail(
@@ -1505,7 +1622,7 @@ def cmd_wordpress_export(payload: dict) -> None:
             "--triggers",
             db_name,
         ]
-        result = subprocess.run(mysqldump_cmd, capture_output=True)
+        result = run_bounded(DB_TRANSFER_TIMEOUT, mysqldump_cmd, capture_output=True)
         if result.returncode == 0:
             sql_path.write_bytes(result.stdout)
         else:
@@ -1596,7 +1713,7 @@ def cmd_wordpress_import(payload: dict) -> None:
                 db_name,
             ]
             with open(sql_file, "rb") as sql_in:
-                subprocess.run(mysql_cmd, stdin=sql_in, check=True)
+                run_bounded(DB_TRANSFER_TIMEOUT, mysql_cmd, stdin=sql_in, check=True)
         except Exception as e:
             fail(f"SQL import failed: {e}", "WP_SQL_IMPORT_FAILED")
 
