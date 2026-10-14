@@ -8,7 +8,7 @@
 
 ## How it works
 
-Each CI job installs with `pnpm install --frozen-lockfile` (Node 22, pnpm version from `packageManager`), then runs the matching root script (`pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`), which Turborepo maps to the workspaces. Typecheck, test and build run `prisma generate` first with a placeholder `DATABASE_URL` (generation never connects), the same trick as `system/scripts/install/steps/09-build.sh`. `@vexlyx/shared` is built by Turborepo's `^build` dependency. The API tests are mocked unit tests and need no Postgres or Redis; the Python suites under `tests/` need live Docker services and are not run in CI.
+Each CI job installs with `pnpm install --frozen-lockfile` (Node 22, pnpm version from `packageManager`), then runs the matching root script (`pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`), which Turborepo maps to the workspaces. Typecheck, test and build run `prisma generate` first with a placeholder `DATABASE_URL` (generation never connects), the same trick as `system/scripts/install/steps/09-build.sh`. `@vexlyx/shared` is built by Turborepo's `^build` dependency. The API tests are mocked unit tests and need no Postgres or Redis. The test job also runs `python3 -m unittest discover -s tests -p test_restore_stop_safety.py`, which mocks Docker to verify restore stop safety. Python integration suites that need live Docker services remain manual.
 
 Release images, published to `ghcr.io/atlantiqshq/`:
 

@@ -8,7 +8,7 @@ import type { FastifyBaseLogger } from "fastify";
 import type { Server as SocketIOServer } from "socket.io";
 import type { BackupManifest, BackupItemType } from "@vexlyx/shared";
 import { env } from "../../config/env.js";
-import { DeployService } from "../deploy/service.js";
+import { DeployService, runDockerStopByProject } from "../deploy/service.js";
 import { DnsService } from "../domains/dns-service.js";
 import type { AuditLogService } from "../audit-log/service.js";
 
@@ -526,8 +526,28 @@ export class BackupService {
       });
     }
 
+    // A soft-deleted project has had its workspace removed (its containerId is
+    // kept), so the compose file containerAction needs is gone. That must not
+    // make the project unrecoverable, but a missing workspace does not prove
+    // its containers are gone either (teardown tolerates a failed removal), so
+    // in that case they are stopped and verified by project identity instead.
+    const workspaceExists = existsSync(resolve(env.PROJECTS_DIR, projectId));
+
     if (project.containerId) {
-      await this.deployService.containerAction(project.userId, project.id, "stop").catch(() => undefined);
+      try {
+        if (workspaceExists) {
+          await this.deployService.containerAction(project.userId, project.id, "stop");
+        } else {
+          await runDockerStopByProject(project.id);
+        }
+      } catch (err) {
+        this.logger.error({ err, projectId }, "Container stop failed before project restore");
+        throw new BackupError(
+          "Project restore aborted: containers could not be confirmed stopped. Resolve the container error and retry.",
+          "RESTORE_STOP_FAILED",
+          500,
+        );
+      }
     }
 
     await runBackupCommand(

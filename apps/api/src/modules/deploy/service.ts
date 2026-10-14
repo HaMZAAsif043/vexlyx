@@ -199,9 +199,25 @@ export function runDockerAction(
   projectDir: string,
   onLog?: (line: string) => Promise<void> | void,
 ): Promise<void> {
+  return runDockerManagerCommand({ command: action, projectDir }, onLog);
+}
+
+/**
+ * Stops (and verifies stopped) every container of a project by its identity,
+ * for when its workspace directory, and so its compose file, is gone.
+ */
+export function runDockerStopByProject(projectId: string): Promise<void> {
+  return runDockerManagerCommand({ command: "stop_by_project", projectId });
+}
+
+function runDockerManagerCommand(
+  request: Record<string, unknown>,
+  onLog?: (line: string) => Promise<void> | void,
+): Promise<void> {
+  const action = String(request.command);
   return new Promise((resolveP, rejectP) => {
     const scriptPath = getDockerManagerScriptPath();
-    const payload = JSON.stringify({ command: action, projectDir });
+    const payload = JSON.stringify(request);
 
     const child = spawn("python", [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],

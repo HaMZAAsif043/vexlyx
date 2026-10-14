@@ -17,6 +17,8 @@ F5.3 adds a `/backups` page to the Vexlyx dashboard that:
 
 Out of scope for this pass: S3/MinIO remote storage (local disk only, under `BACKUPS_DIR`), and certificates/vacation responders/SFTP accounts/env vars (not included in the manifest).
 
+Project restore stops the project's Compose stack before extracting files. The stop command verifies every container (including sidecars) is stopped; Docker listing or inspection failures abort the restore with `RESTORE_STOP_FAILED`. No files are extracted and no successful restore audit event is recorded on this path. Resolve the Docker error and retry. Projects without a recorded container can restore directly. Operators must avoid concurrent starts or deployments during restore; this check does not lock external Docker operations.
+
 ---
 
 ## Architecture
@@ -152,6 +154,13 @@ await backupQueue.upsertJobScheduler(
 ---
 
 ## How to Test
+
+Automated safety regressions (no running database or Docker required):
+
+```bash
+pnpm --filter @vexlyx/api test -- src/modules/backups/service.test.ts
+python -m unittest discover -s tests -p test_restore_stop_safety.py
+```
 
 1. Start the dev stack: `pnpm dev`
 2. Visit `http://localhost:3000/backups`

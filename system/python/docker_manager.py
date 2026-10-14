@@ -512,6 +512,82 @@ def cmd_stop(payload: dict) -> None:
         fail(f"Deploy directory not found: {compose_dir}", "NOT_DEPLOYED")
     log_line("[vexlyx] Stopping container…")
     run_compose(compose_dir, ["stop"], docker_bin)
+    # Verify every service, including sidecars, before a caller can overwrite files.
+    try:
+        containers = subprocess.run(
+            [docker_bin, "compose", "ps", "--all", "--quiet"],
+            cwd=compose_dir, capture_output=True, text=True, timeout=30,
+        )
+        if containers.returncode != 0:
+            fail("Could not list containers after stop", "CONTAINER_STOP_UNCONFIRMED")
+        container_ids = containers.stdout.split()
+        if container_ids:
+            states = subprocess.run(
+                [docker_bin, "inspect", "--type", "container", "--format", "{{.State.Status}}", *container_ids],
+                capture_output=True, text=True, timeout=30,
+            )
+            statuses = states.stdout.split()
+            if (states.returncode != 0 or len(statuses) != len(container_ids)
+                    or any(status not in ("exited", "created", "dead") for status in statuses)):
+                fail("Containers are not confirmed stopped", "CONTAINER_STOP_UNCONFIRMED")
+    except (OSError, subprocess.TimeoutExpired):
+        fail("Could not verify stopped containers", "CONTAINER_STOP_UNCONFIRMED")
+    respond({"done": True})
+
+
+# States in which a container may still be writing to its volumes/bind mounts.
+ACTIVE_CONTAINER_STATES = ("running", "restarting", "paused")
+
+
+def list_project_containers(docker_bin: str, compose_project: str) -> list[tuple[str, str]]:
+    """(id, state) of every container of a compose project, found by label."""
+    result = subprocess.run(
+        [
+            docker_bin, "ps", "--all",
+            "--filter", f"label=com.docker.compose.project={compose_project}",
+            "--format", "{{.ID}} {{.State}}",
+        ],
+        capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode != 0:
+        fail("Could not list project containers", "CONTAINER_STOP_UNCONFIRMED")
+    containers = []
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 2:
+            containers.append((parts[0], parts[1].lower()))
+    return containers
+
+
+def cmd_stop_by_project(payload: dict) -> None:
+    """
+    Stop every container of a project by its identity, without needing the
+    project workspace directory (it may already have been removed while a
+    container survived a failed teardown). Verifies nothing is left running.
+    """
+    project_id = require_field(payload, "projectId")
+    docker_bin = get_docker_binary()
+    compose_project = f"vexlyx-{slugify(project_id[:12])}"
+
+    try:
+        containers = list_project_containers(docker_bin, compose_project)
+        active = [cid for cid, state in containers if state in ACTIVE_CONTAINER_STATES]
+        if active:
+            log_line(f"[vexlyx] Stopping {len(active)} container(s) of {compose_project}…")
+            stopped = subprocess.run(
+                [docker_bin, "stop", *active],
+                capture_output=True, text=True, timeout=120,
+            )
+            if stopped.returncode != 0:
+                fail("Could not stop project containers", "CONTAINER_STOP_UNCONFIRMED")
+            still_active = [
+                cid for cid, state in list_project_containers(docker_bin, compose_project)
+                if state in ACTIVE_CONTAINER_STATES
+            ]
+            if still_active:
+                fail("Containers are not confirmed stopped", "CONTAINER_STOP_UNCONFIRMED")
+    except (OSError, subprocess.TimeoutExpired):
+        fail("Could not verify stopped containers", "CONTAINER_STOP_UNCONFIRMED")
     respond({"done": True})
 
 
@@ -806,6 +882,7 @@ COMMANDS = {
     "deploy": cmd_deploy,
     "start": cmd_start,
     "stop": cmd_stop,
+    "stop_by_project": cmd_stop_by_project,
     "restart": cmd_restart,
     "remove": cmd_remove,
     "status": cmd_status,
