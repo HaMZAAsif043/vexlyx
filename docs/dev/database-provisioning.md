@@ -175,6 +175,12 @@ POST /api/databases/:id/test
 DELETE /api/databases/:id
 ```
 
+Returns `204` only after the engine has confirmed the drop; the record is then deleted and `database.deleted` is audited. The drop statements are idempotent (`DROP … IF EXISTS`), so a database that is already gone counts as success.
+
+If the engine drop genuinely fails (container down, wrong root credentials, SQL error) the API returns `502 DATABASE_DROP_FAILED` with the underlying reason, **keeps the record** and writes **no** audit event (#48). Previously the failure was swallowed, the row was deleted and a deletion was audited even though a live database with data was left behind. Fix the engine problem and retry the delete.
+
+Tests: `apps/api/src/modules/databases/service.test.ts`.
+
 ---
 
 ## How to Test

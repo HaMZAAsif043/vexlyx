@@ -461,11 +461,22 @@ export class DatabaseService {
         rootUser,
         rootPassword,
       });
-    } catch {
-      // If container is down or already dropped, proceed with Prisma deletion to avoid stuck records
+    } catch (err) {
+      // The drop statements are idempotent (DROP ... IF EXISTS), so an
+      // already-dropped database is a success, not an error. Anything that
+      // reaches here is a real failure (engine down, bad root credentials,
+      // SQL error). Keep the record and report it: deleting the row anyway
+      // would orphan a live database with data in it, and the audit trail
+      // would claim a deletion that never happened.
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new DatabaseError(
+        `Could not drop database "${record.name}": ${reason}. The record was kept — resolve the problem and try again.`,
+        "DATABASE_DROP_FAILED",
+        502,
+      );
     }
 
-    // Delete from Prisma
+    // Only reached once the engine confirmed the drop. Delete from Prisma
     await this.prisma.database.delete({
       where: { id },
     });
