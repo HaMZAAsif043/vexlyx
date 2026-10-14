@@ -74,7 +74,10 @@ export async function mailboxRoutes(app: FastifyInstance) {
     async (request, reply) => {
       try {
         const { id } = MailboxIdParamSchema.parse(request.params);
-        await service.delete(request.userId!, id);
+        const { warnings } = await service.delete(request.userId!, id);
+        if (warnings.length > 0) {
+          return reply.status(200).send({ success: true, warnings });
+        }
         reply.status(204).send();
       } catch (err) {
         handleMailboxError(err, reply);
@@ -92,8 +95,10 @@ export async function mailboxRoutes(app: FastifyInstance) {
       try {
         const { id } = MailboxIdParamSchema.parse(request.params);
         const input = UpdateMailboxQuotaSchema.parse(request.body);
-        await service.updateQuota(request.userId!, id, input);
-        return reply.status(200).send({ success: true });
+        const { warnings } = await service.updateQuota(request.userId!, id, input);
+        return reply
+          .status(200)
+          .send({ success: true, ...(warnings.length > 0 && { warnings }) });
       } catch (err) {
         handleMailboxError(err, reply);
       }

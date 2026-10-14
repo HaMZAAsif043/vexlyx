@@ -51,15 +51,34 @@ fi
 # postmap then can't create the .lmdb in root-owned /etc/postfix ("open database
 # ... Permission denied") and every mailbox lookup fails. Compile a root-owned
 # copy and move the result into place instead.
+#
+# A missing source file means "first boot, nothing to compile yet" and is fine.
+# A real compile failure is NOT: Postfix would keep serving a stale (or no) map
+# and reject/misroute mail with no trace of why, so it is reported loudly. It
+# does not abort startup, since Postfix can still accept and deliver the mail
+# the existing maps cover.
 compile_map() {
     name="$1"
-    cp "/etc/postfix/$name" "/tmp/$name" &&
+    if [ ! -f "/etc/postfix/$name" ]; then
+        echo "[Vexlyx] $name has no source file yet (first boot) - skipping map build"
+        return 0
+    fi
+    if cp "/etc/postfix/$name" "/tmp/$name" &&
         postmap "lmdb:/tmp/$name" &&
-        mv "/tmp/$name.lmdb" "/etc/postfix/$name.lmdb"
+        mv "/tmp/$name.lmdb" "/etc/postfix/$name.lmdb"; then
+        status=0
+    else
+        status=$?
+    fi
     rm -f "/tmp/$name"
+    if [ "$status" -ne 0 ]; then
+        echo "[Vexlyx] ERROR: failed to compile $name (exit $status) - mail routing may be stale or missing until this is fixed" >&2
+    fi
+    return "$status"
 }
-compile_map virtual_mailbox_maps || true
-compile_map virtual_alias_maps || true
+MAP_COMPILE_FAILED=0
+compile_map virtual_mailbox_maps || MAP_COMPILE_FAILED=1
+compile_map virtual_alias_maps || MAP_COMPILE_FAILED=1
 # On a Windows Docker Desktop bind mount (gRPC-FUSE/virtiofs), the .lmdb file
 # postmap just wrote is sometimes not yet stat-able by the immediately
 # following chmod, which then fails silently ("|| true" swallows it) and
@@ -71,7 +90,23 @@ sleep 0.3
 # postfix:postfix), which then can't read them — every delivery fails with
 # "Permission denied" / "mail system configuration error" despite the map
 # itself being correct. Must stay world-readable after every recompile.
-chmod 644 /etc/postfix/virtual_mailbox_maps.lmdb /etc/postfix/virtual_alias_maps.lmdb 2>/dev/null || true
+for name in virtual_mailbox_maps virtual_alias_maps; do
+    lmdb="/etc/postfix/$name.lmdb"
+    # No source file means first boot: nothing was meant to be built.
+    [ -f "/etc/postfix/$name" ] || continue
+    if [ ! -f "$lmdb" ]; then
+        echo "[Vexlyx] ERROR: $lmdb is missing although $name exists - the map did not build or is not visible yet; deliveries to its recipients will fail" >&2
+        MAP_COMPILE_FAILED=1
+        continue
+    fi
+    if ! chmod 644 "$lmdb"; then
+        echo "[Vexlyx] ERROR: could not make $lmdb world-readable - deliveries will fail with 'Permission denied'" >&2
+        MAP_COMPILE_FAILED=1
+    fi
+done
+if [ "$MAP_COMPILE_FAILED" -ne 0 ]; then
+    echo "[Vexlyx] WARNING: one or more Postfix maps failed to compile (see errors above); continuing startup" >&2
+fi
 
 # Fix all spool directory ownership (must run as root before postfix starts)
 # Without this, Postfix's cleanup daemon fails with: 451 queue file write error

@@ -523,6 +523,20 @@ def get_delivery_log(domain: str = None, mailbox: str = None, status: str = None
 # Virtual Domains & Mailbox Synchronization
 # ---------------------------------------------------------------------------
 
+class PostfixMapError(RuntimeError):
+    """A Postfix lookup table could not be recompiled into its .lmdb file."""
+
+    code = "POSTFIX_MAP_COMPILE_FAILED"
+
+    def __init__(self, map_name: str, detail: str) -> None:
+        super().__init__(
+            f"Failed to rebuild Postfix map '{map_name}' ({detail}). "
+            "Mail routing for recent mailbox/alias changes may be stale or "
+            "unreadable until it is rebuilt."
+        )
+        self.map_name = map_name
+
+
 def _make_world_readable(path: Path) -> None:
     """Domain/mailbox tables are bind-mounted into the mail containers, whose
     service users differ from the host user that writes them (created 0640 under
@@ -541,22 +555,35 @@ def _compile_lmdb_map(map_name: str) -> None:
     root-owned /etc/postfix. Compiling a root-owned copy and moving the result
     into place avoids that. The result must stay world-readable: delivery runs in
     the unprivileged `virtual` service."""
+    # The exit status of the cp/postmap/mv/chmod chain is saved before the
+    # cleanup `rm`, otherwise `rm -f` (which always succeeds) would mask a
+    # failed rebuild and report success.
     script = (
         f"cp /etc/postfix/{map_name} /tmp/{map_name} && "
         f"postmap lmdb:/tmp/{map_name} && "
         f"mv /tmp/{map_name}.lmdb /etc/postfix/{map_name}.lmdb && "
         f"chmod 644 /etc/postfix/{map_name}.lmdb; "
-        f"rm -f /tmp/{map_name}"
+        f"rc=$?; rm -f /tmp/{map_name}; exit $rc"
     )
     try:
-        subprocess.run(
+        proc = subprocess.run(
             ["docker", "exec", "vexlyx-postfix", "sh", "-c", script],
             capture_output=True,
             text=True,
             timeout=10,
         )
-    except Exception:
-        pass
+    except subprocess.TimeoutExpired as exc:
+        # A stale .lmdb silently keeps routing mail to old destinations
+        # (550 for new recipients), so a failed rebuild must be reported.
+        raise PostfixMapError(
+            map_name, f"timed out after {exc.timeout}s waiting for postmap"
+        ) from exc
+    except OSError as exc:
+        raise PostfixMapError(map_name, f"could not run docker: {exc}") from exc
+
+    if proc.returncode != 0:
+        output = (proc.stderr or proc.stdout or "").strip() or "no output"
+        raise PostfixMapError(map_name, f"exit {proc.returncode}: {output}")
 
 
 def sync_virtual_domains(domains: list, mailboxes: list = None) -> dict:
@@ -1123,7 +1150,7 @@ def main():
             respond({"error": f"Unknown command: {cmd}", "code": "UNKNOWN_COMMAND"})
             sys.exit(1)
     except Exception as e:
-        respond({"error": str(e), "code": "EXECUTION_ERROR"})
+        respond({"error": str(e), "code": getattr(e, "code", "EXECUTION_ERROR")})
         sys.exit(1)
 
 
