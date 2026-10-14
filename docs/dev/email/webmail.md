@@ -58,7 +58,7 @@ The user's browser talks directly to Roundcube (via Traefik at `webmail.vexlyx.l
 - `docker-compose.yml` — `roundcube` service: official image, no custom Dockerfile (unlike Postfix/Dovecot, which need custom config). Joins `default` (to reach `dovecot`/`postfix`, and to be reachable, by container name) and `traefik-net`. Also carries `traefik.enable=true` Docker labels for `webmail.vexlyx.localhost`, kept for portability to environments where Traefik's Docker provider works — see the routing note below.
 - `docker/traefik/dynamic/webmail.yml` — the route that actually works in this dev environment: a Traefik **file-provider** static router for `webmail.vexlyx.localhost` → `http://vexlyx-roundcube:80`, the same mechanism `DomainService.syncTraefikRouter()` (F3.3/F3.4) uses for per-domain routing. See §5.
 - `vexlyx_roundcube_data` named volume → `/var/roundcube/db` (SQLite file).
-- `docker/roundcube/config/local.inc.php`, bind-mounted read-only to `/var/roundcube/config/` (the official image auto-includes any `*.php` dropped there) — sets `imap_conn_options`/`smtp_conn_options` to accept Dovecot/Postfix's self-signed certificate in local development during the mandatory STARTTLS handshake. Production mail services use the trusted certificate synchronized from Traefik. See §5.
+- `docker/roundcube/config/local.inc.php`, bind-mounted read-only to `/var/roundcube/config/` (the official image auto-includes any `*.php` dropped there) — sets `imap_conn_options`/`smtp_conn_options`. TLS verification is **on by default**; only `ROUNDCUBE_MAIL_TLS_VERIFY=false` (set by `docker-compose.yml`, i.e. local development) relaxes it, and `docker-compose.prod.yml` sets it back to `true` and supplies `ROUNDCUBE_MAIL_TLS_PEER_NAME`. See §5 and §5.1.
 
 **System layer**
 - `system/python/webmail_manager.py` — `status` command: TCP-probes the mapped host port and runs `docker inspect vexlyx-roundcube`, mirroring `dovecot_manager.py::get_dovecot_status()`.
@@ -100,13 +100,35 @@ The user's browser talks directly to Roundcube (via Traefik at `webmail.vexlyx.l
 ROUNDCUBEMAIL_DEFAULT_HOST: tls://dovecot   # was: dovecot
 ROUNDCUBEMAIL_SMTP_SERVER: tls://postfix    # was: postfix
 ```
-Forcing STARTTLS then hit a second, expected development problem: Dovecot/Postfix's local self-signed cert isn't trusted by PHP's default TLS verification, so the handshake failed again. `docker/roundcube/config/local.inc.php` (auto-included by the official image from `/var/roundcube/config/*.php`) sets `imap_conn_options`/`smtp_conn_options` → `ssl.verify_peer = false` for the internal container connection. External production clients do not need this exception because Postfix and Dovecot present the trusted certificate synchronized from Traefik.
+Forcing STARTTLS then hit a second, expected development problem: Dovecot/Postfix's local self-signed cert isn't trusted by PHP's default TLS verification, so the handshake failed again. `docker/roundcube/config/local.inc.php` (auto-included by the official image from `/var/roundcube/config/*.php`) sets `imap_conn_options`/`smtp_conn_options` to skip verification for the internal container connection **in development only** (see §5.1 — this used to be unconditional, which also disabled verification in production, #42).
 
 **Verified independently of Roundcube's UI**, from inside the `vexlyx_default` network:
 ```
 curl --url 'imap://dovecot:143/' --user 'user@domain:password' --ssl-reqd -k   # -> A004 OK Logged in
 curl --url 'smtp://postfix:587/' --user 'user@domain:password' --ssl-reqd -k … # -> 235 Authentication successful
 ```
+
+### 5.1 TLS verification policy (#42)
+
+| Setting | Dev (`docker-compose.yml`) | Production (`docker-compose.prod.yml`) |
+|---|---|---|
+| `ROUNDCUBE_MAIL_TLS_VERIFY` | `"false"` — self-signed container cert, no verification | `"true"` — verify chain **and** name |
+| `ROUNDCUBE_MAIL_TLS_PEER_NAME` | unset | `${VEXLYX_MAIL_HOSTNAME}` |
+
+How it works (`docker/roundcube/config/local.inc.php`):
+
+- **Fail secure.** Verification is disabled only when the variable is exactly the string `false`. Absent, empty, `FALSE`, `0` or a typo all keep it enabled, so a misconfiguration can never silently turn it off in production. The failure mode of a bad dev setting is a visible "Login failed", not a silent MITM window.
+- **Why `peer_name`.** Roundcube connects to the internal service names (`tls://dovecot`, `tls://postfix`), but the production certificate (synced from Traefik/Let's Encrypt by `system/scripts/install/sync-mail-tls.sh`) is issued for the public mail hostname. PHP is told to validate the certificate against `ROUNDCUBE_MAIL_TLS_PEER_NAME` rather than the service name. Without it, strict verification would reject every login.
+- **Prod overlay is explicit.** `docker-compose.prod.yml` sets `ROUNDCUBE_MAIL_TLS_VERIFY: "true"` itself instead of relying on the default, so it can never inherit the dev value from the base file.
+
+**Operational note:** if a production install is still running the installer's self-signed fallback certificate (`07-render-config.sh`, used until the trusted cert is synced — see the warning in `14-services-up.sh`), webmail login will now fail until the trusted certificate for `VEXLYX_MAIL_HOSTNAME` has been synced (`bash system/scripts/install/sync-mail-tls.sh`). That is the intended behaviour: the previous setup would have accepted the untrusted certificate silently.
+
+**How to verify**
+
+1. Render both configs: `docker compose -f docker-compose.yml config` shows `ROUNDCUBE_MAIL_TLS_VERIFY: "false"`; `docker compose -f docker-compose.yml -f docker-compose.prod.yml config` shows `"true"` plus the peer name.
+2. Dev: webmail login still works against the self-signed cert.
+3. Production-like: with a trusted cert for the mail hostname, webmail login works. To prove an untrusted certificate is rejected, replace **both** `docker/mail-data/certs/cert.pem` and `key.pem` with a freshly generated, matching self-signed pair (for example `openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=$VEXLYX_MAIL_HOSTNAME" -keyout key.pem -out cert.pem`) and restart Dovecot. Replacing only the certificate would leave Dovecot with a mismatched pair it cannot load, and login would then fail for the wrong reason (no TLS service at all) instead of demonstrating that Roundcube rejects an untrusted certificate. Check that Dovecot started and listens on 143 before concluding anything, then restore the original pair.
+4. PHP-level matrix (what was run for #42): a local `openssl s_server` with a cert for `mail.example.com` — strict + correct `peer_name` + trusted CA connects; no `peer_name`, untrusted CA, wrong `peer_name`, and `FALSE`/`0`/empty values are all rejected; `false` connects.
 
 ## 6. Routing Note — Why a File-Provider Route Instead of Just Docker Labels
 

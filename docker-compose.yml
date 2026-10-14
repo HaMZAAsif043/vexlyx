@@ -187,7 +187,9 @@ services:
       # tls:// forces STARTTLS — Dovecot's `ssl = required` (docker/dovecot/dovecot.conf)
       # rejects auth on a plaintext connection, so a bare "dovecot"/"postfix"
       # host (no scheme) silently fails every login. See docker/roundcube/config/local.inc.php
-      # for the matching self-signed-cert trust override this requires.
+      # for how the self-signed-cert trust override this requires is gated.
+      # Development ONLY: docker-compose.prod.yml sets this back to "true".
+      ROUNDCUBE_MAIL_TLS_VERIFY: "false"
       ROUNDCUBEMAIL_DEFAULT_HOST: tls://dovecot
       ROUNDCUBEMAIL_DEFAULT_PORT: 143
       ROUNDCUBEMAIL_SMTP_SERVER: tls://postfix

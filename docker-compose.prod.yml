@@ -98,6 +98,13 @@ services:
   # 404s in production — serve it at webmail.${VEXLYX_DOMAIN} over HTTPS
   # (the same host the API advertises as WEBMAIL_URL).
   roundcube:
+    environment:
+      # Strict TLS to Dovecot/Postfix: verify the trusted mail certificate
+      # (synced from Traefik) against the public mail hostname, since Roundcube
+      # connects via the internal service names. Set explicitly so the prod
+      # overlay can never inherit the relaxed development setting.
+      ROUNDCUBE_MAIL_TLS_VERIFY: "true"
+      ROUNDCUBE_MAIL_TLS_PEER_NAME: ${VEXLYX_MAIL_HOSTNAME}
     labels: !override
       - "traefik.enable=true"
       - "traefik.http.routers.webmail.rule=Host(`webmail.${VEXLYX_DOMAIN}`)"
