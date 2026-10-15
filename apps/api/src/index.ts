@@ -43,6 +43,7 @@ import { systemRoutes } from "./modules/system/routes.js";
 import { systemEmailRoutes } from "./modules/system-email/routes.js";
 import { githubRoutes } from "./modules/github/routes.js";
 import { checkBackupScriptHealth } from "./modules/backups/service.js";
+import { getEncryptionKeyWarnings } from "./utils/encryption.js";
 
 
 /**
@@ -145,6 +146,10 @@ async function start() {
     app.log.error(
       `DNS zones directory ${zonesDir.path} is not writable: ${zonesDir.error}. Hosted DNS changes will not be served until this is fixed.`,
     );
+  }
+
+  for (const warning of getEncryptionKeyWarnings()) {
+    app.log.warn(warning);
   }
 
   const shutdown = async (signal: string) => {

@@ -7,6 +7,7 @@ async function loadEnv(overrides: Record<string, string | undefined>) {
     ...originalEnv,
     DATABASE_URL: "postgresql://vexlyx:test@localhost:5432/vexlyx_test",
     SESSION_SECRET: "test-session-secret-that-is-at-least-32-characters",
+    ENCRYPTION_KEY: "test-encryption-key-that-is-at-least-32-characters",
   };
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) delete nextEnv[key];
@@ -130,5 +131,56 @@ describe("System email environment configuration (F5.23)", () => {
       (await loadEnv({ ALLOW_ADMIN_EMAIL_RESET: "true" }))
         .ALLOW_ADMIN_EMAIL_RESET,
     ).toBe(true);
+  });
+});
+
+describe("ENCRYPTION_KEY requirements (#69)", () => {
+  const strongKey = "dedicated-encryption-key-at-least-32-characters-long";
+  const base = { NODE_ENV: "production", EMAIL_TRANSPORT: "smtp" };
+
+  it("refuses to boot in production without ENCRYPTION_KEY", async () => {
+    await expect(loadEnv({ ...base, ENCRYPTION_KEY: undefined })).rejects.toThrow(/ENCRYPTION_KEY is required/);
+  });
+
+  it("allows a missing key in production only with the legacy fallback flag", async () => {
+    const env = await loadEnv({
+      ...base,
+      ENCRYPTION_KEY: undefined,
+      ENCRYPTION_KEY_LEGACY_FALLBACK: "true",
+    });
+
+    expect(env.ENCRYPTION_KEY).toBeUndefined();
+    expect(env.ENCRYPTION_KEY_LEGACY_FALLBACK).toBe(true);
+  });
+
+  it("rejects the .env.example placeholder in production", async () => {
+    await expect(
+      loadEnv({
+        ...base,
+        ENCRYPTION_KEY: "change-me-to-a-random-32-char-string-in-production",
+      }),
+    ).rejects.toThrow(/placeholder/);
+  });
+
+  it("rejects an ENCRYPTION_KEY equal to SESSION_SECRET in production", async () => {
+    await expect(
+      loadEnv({
+        ...base,
+        SESSION_SECRET: strongKey,
+        ENCRYPTION_KEY: strongKey,
+      }),
+    ).rejects.toThrow(/must differ from SESSION_SECRET/);
+  });
+
+  it("accepts a dedicated key in production", async () => {
+    const env = await loadEnv({ ...base, ENCRYPTION_KEY: strongKey });
+
+    expect(env.ENCRYPTION_KEY).toBe(strongKey);
+  });
+
+  it("keeps the zero-config fallback outside production", async () => {
+    const env = await loadEnv({ NODE_ENV: "development", ENCRYPTION_KEY: undefined });
+
+    expect(env.ENCRYPTION_KEY).toBeUndefined();
   });
 });

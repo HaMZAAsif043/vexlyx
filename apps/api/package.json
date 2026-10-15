@@ -16,6 +16,7 @@
     "db:push": "prisma db push",
     "db:seed": "prisma db seed",
     "db:create-admin": "tsx prisma/create-admin.ts",
+    "db:reencrypt": "tsx --env-file=.env prisma/reencrypt-secrets.ts",
     "db:studio": "prisma studio",
     "db:reset": "prisma migrate reset"
   },

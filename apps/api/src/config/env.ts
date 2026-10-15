@@ -15,7 +15,19 @@ const envSchema = z
     DATABASE_URL: z.string().url(),
     REDIS_URL: z.string().default("redis://localhost:6379"),
     SESSION_SECRET: z.string().min(32),
+    // Key for everything encrypted at rest (#69). Required in production so a
+    // SESSION_SECRET leak cannot also decrypt stored credentials, and so
+    // rotating SESSION_SECRET cannot silently orphan them. Outside production
+    // it still falls back to SESSION_SECRET for zero-config local dev.
     ENCRYPTION_KEY: z.string().min(32).optional(),
+    // Migration aid for installs that ran without ENCRYPTION_KEY: data was
+    // encrypted under a key derived from SESSION_SECRET. With this on, that
+    // key is accepted for *decryption* only (and, in production, a missing
+    // ENCRYPTION_KEY does not stop boot). Run `pnpm db:reencrypt`, then unset.
+    ENCRYPTION_KEY_LEGACY_FALLBACK: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((v) => v === "true"),
     // Session cookie Domain attribute (F5.1). Needed whenever the dashboard
     // and API are served from different subdomains (e.g. panel.example.com /
     // api.panel.example.com) — without it, the cookie defaults to a host-only
@@ -193,6 +205,31 @@ const envSchema = z
         message:
           "EMAIL_TRANSPORT=log prints mail (including reset links) to the log and is not allowed in production",
       });
+    }
+    if (value.NODE_ENV === "production") {
+      if (!value.ENCRYPTION_KEY) {
+        if (!value.ENCRYPTION_KEY_LEGACY_FALLBACK) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["ENCRYPTION_KEY"],
+            message:
+              "ENCRYPTION_KEY is required in production (generate one with `openssl rand -hex 32`). " +
+              "Upgrading an install that never set it? Set ENCRYPTION_KEY_LEGACY_FALLBACK=true temporarily and run `pnpm db:reencrypt`",
+          });
+        }
+      } else if (/change-?me/i.test(value.ENCRYPTION_KEY)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["ENCRYPTION_KEY"],
+          message: "ENCRYPTION_KEY is still the .env.example placeholder; generate a random value",
+        });
+      } else if (value.ENCRYPTION_KEY === value.SESSION_SECRET) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["ENCRYPTION_KEY"],
+          message: "ENCRYPTION_KEY must differ from SESSION_SECRET",
+        });
+      }
     }
     if (Boolean(value.EMAIL_SMTP_USER) !== Boolean(value.EMAIL_SMTP_PASS)) {
       ctx.addIssue({
