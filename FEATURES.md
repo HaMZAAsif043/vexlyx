@@ -31,10 +31,10 @@ This document is the **single source of truth** for all Vexlyx features.
 | Phase 2: Multi-Runtime Support | 🟢 COMPLETED | 100% (8/8) |
 | Phase 3: Domain & DNS | 🟡 IN PROGRESS | 80% (4/5) |
 | Phase 4: Email Server | 🟡 IN PROGRESS | 88% (7/8) |
-| Phase 5: System & Administration | 🟡 IN PROGRESS | 42% (10/24) |
+| Phase 5: System & Administration | 🟡 IN PROGRESS | 40% (10/25) |
 | Phase 6: Ecosystem & Launch | 🟡 IN PROGRESS | 33% (1/3) |
 
-**Overall Completion:** 70% (44/63 features)
+**Overall Completion:** 69% (44/64 features)
 
 ---
 
@@ -2629,6 +2629,89 @@ Users can create PostgreSQL and MySQL databases (F2.6) but not a document databa
 - `packages/shared/src/schemas/mongodb.ts`
 - `apps/api/prisma/migrations/<timestamp>_add_mongodb_databases/migration.sql`
 - `apps/dashboard/src/app/(panel)/mongodb/page.tsx`, `src/components/mongodb/*`, `src/hooks/useMongoDb.ts`
+
+---
+
+### F5.32 — Anonymous Usage Statistics (Opt-In Telemetry)
+**Status:** 🔴 NOT STARTED
+
+**Description:**
+Vexlyx is self-hosted, so the maintainers have no way to know how many installs exist, which versions are in use, or whether a release was adopted: the only signals are GitHub stars and clones, docs traffic, and (once releases exist) download and image-pull counts, none of which measures real installs. This feature adds **opt-in, anonymous, transparent** usage statistics: an admin can choose to let their panel send a small, fixed, documented payload once a day, which lets the project count active installs and see the version spread. It is off until an admin turns it on, shows exactly what it would send, and can be switched off at any time or forced off by the operator. It never sends anything that identifies a person, a domain, a server or a project.
+
+**Design principles (non-negotiable):**
+1. **Opt-in, never opt-out.** The default is off; nothing is sent until an admin explicitly enables it.
+2. **Transparent.** The exact payload is visible in the dashboard before and after enabling, and the schema is published in the docs. The payload is built from an allow-list of fields, so adding a field requires a code change, a schema version bump and a docs update.
+3. **Anonymous by construction.** No emails, names, hostnames, domains, IP addresses, project or repository names, secrets, logs or error messages. Counts are bucketed, not exact.
+4. **Operator stays in control.** A hard off-switch (`VEXLYX_TELEMETRY=off`), respect for the `DO_NOT_TRACK=1` convention, and a configurable collector URL for operators who want to inspect or redirect the traffic.
+5. **Never breaks the panel.** Short timeout, no retries beyond the next scheduled run, no effect on any request, and silent in the logs apart from one debug line.
+
+**What is sent (schema v1):**
+
+| Field | Example | Notes |
+| --- | --- | --- |
+| `schemaVersion` | `1` | Bumped whenever the field list changes |
+| `installId` | random UUID v4 | Generated only when telemetry is first enabled; not derived from hardware, hostname, domain or IP; resettable |
+| `vexlyxVersion` | `0.3.1` | From `VEXLYX_VERSION` |
+| `nodeMajor`, `os`, `arch` | `22`, `linux`, `x64` | Runtime environment only |
+| `environment` | `production` | `production` only; development and test installs never send |
+| `counts` | `{ "users": "2-5", "projects": "6-20", "domains": "1", ... }` | Buckets `0`, `1`, `2-5`, `6-20`, `21-100`, `>100` for users, projects, domains, databases and mailboxes |
+| `features` | `{ "githubIntegration": true, "systemEmail": "bundled" }` | A few booleans/enums about which optional features are configured, never their settings |
+
+**Proposed plan (for whoever picks this up):**
+1. **Data model** (one Prisma migration): a `TelemetrySettings` singleton row (`enabled` default false, `installId` nullable, `decidedAt`, `decidedById`, `promptDismissedAt`, `lastSentAt`, `lastStatus`), following the singleton pattern used by `BackupSettings` and `CleanupSettings`.
+2. **Module** `apps/api/src/modules/telemetry/` (`routes.ts`, `service.ts`, `schema.ts`, `scheduler.ts`), with the payload schema shared via `packages/shared/src/schemas/telemetry.ts`. ADMIN-only endpoints: `GET /api/telemetry` (status, whether the operator forced it off, last result and the **exact payload that would be sent**), `PUT /api/telemetry` (`{ enabled }`), `POST /api/telemetry/reset-id`.
+3. **Payload builder** is a pure function over counts the service reads from the database, using the bucket table above; unit tests assert the output contains only allow-listed keys and that no value from the database (an email, a hostname, a project name) can appear in it.
+4. **Scheduling** mirrors `backups/scheduler.ts`: one BullMQ job scheduler, daily at a minute derived from the install id (so installs do not all ping at once), with the first send shortly after enabling. One `POST` with a 5-second timeout; any failure is recorded in `lastStatus` and not retried until the next run. Never sends when `NODE_ENV` is not `production`, or when disabled.
+5. **Operator controls** (validated in `env.ts`, documented in `.env.example` and the docs): `VEXLYX_TELEMETRY` (`off` forces it off and hides the prompt; `on` pre-enables it for operators who consent through configuration management; unset leaves the choice to the admin), `DO_NOT_TRACK=1` forces it off, and `TELEMETRY_URL` points at a different collector.
+6. **Installer** asks once during an interactive install, with the default "No": "Share anonymous usage statistics to help the project? (y/N)". Non-interactive installs pass `VEXLYX_TELEMETRY`; the summary states the current setting and how to change it. Re-running the installer never flips an earlier choice.
+7. **UI**: a "Usage statistics" card in Settings (admin only) with the on/off switch, a "See exactly what is sent" panel showing the live payload and when it was last sent, "Reset install ID", and a link to the privacy page. A one-time dismissible prompt for admins on first login, with "No thanks" as prominent as "Share", and no repeated nagging after dismissal.
+8. **Audit log** (F5.18): `telemetry.enabled`, `telemetry.disabled`, `telemetry.id_reset`.
+9. **Collector** (separate small service run by the maintainers, specified here and implemented outside this repo or under `tools/`): `POST /v1/ping` validating the published schema, storing only `installId`, first and last seen, version and the bucketed values, discarding IP addresses and user agents at the edge, rate-limited per install id. It publishes aggregates only: active installs over 7 and 30 days, installs by version, and a trend line. A reference implementation and the deployment notes live in the docs so the numbers can be audited.
+10. **Docs and privacy**: `docs/dev/telemetry.md` and a short public privacy page covering the schema, what is never collected, retention (for example, an install not seen for 90 days is dropped), how to opt out, and how to ask for an install id to be deleted.
+11. **Out of scope for the first version**: crash or error reporting, feature-click analytics, per-user tracking of any kind, and an "update available" check. The update check is a natural follow-up that can reuse the same endpoint, but it must stay separate from statistics and be just as transparent.
+
+**Risks to handle in the implementation:**
+- Scope creep in the payload: the allow-list and schema-version rule exist so that nobody quietly adds fields; reviewers should treat a payload change like a privacy change.
+- A stable `installId` is pseudonymous: generate it only after consent, make it resettable, and delete the row on disable if the operator asks.
+- Opt-in will undercount: the collector's numbers are a lower bound, and the docs and public page must say so rather than present them as exact.
+- Outbound calls from a server that otherwise sends nothing: the `off` switch, the `TELEMETRY_URL` override and the payload preview exist so operators can verify this themselves.
+- The collector becomes a piece of infrastructure to run and secure: keep it tiny, stateless where possible, and separate from the panel's own services.
+
+**Acceptance Criteria:**
+- [ ] Nothing is sent by a fresh install, an upgraded install or a development environment until an admin explicitly enables statistics
+- [ ] An admin can enable and disable statistics from Settings, see the exact payload that would be sent, and reset the install id
+- [ ] `VEXLYX_TELEMETRY=off` and `DO_NOT_TRACK=1` force statistics off regardless of the stored choice and hide the prompt; the dashboard says why it is off
+- [ ] The payload contains only the allow-listed fields of the published schema, with bucketed counts, and no email, name, hostname, domain, IP address, project or repository name, secret or log text
+- [ ] The install id is a random UUID created only after consent and is deleted or regenerated on reset
+- [ ] Sends are limited to one a day, time out after 5 seconds, never retry in a loop and never affect request handling or startup
+- [ ] The installer asks once with default "No" and never changes an earlier choice on re-run
+- [ ] Enabling, disabling and resetting are written to the audit log
+- [ ] Only admins can read or change the setting; unauthenticated calls return 401 and non-admins 403
+- [ ] The schema, the privacy page and the collector's retention rules are documented before the feature is released
+- [ ] A reference collector exists and publishes aggregate numbers only
+
+**Test Plan:**
+1. Fresh install, never touching the setting, wait past the schedule → no outbound request to the collector
+2. Enable in Settings → the payload preview matches what the collector receives, field for field
+3. Add users, projects and domains containing recognisable strings (an email, a hostname) → none of those strings appear in the sent payload, only buckets
+4. Set `VEXLYX_TELEMETRY=off` → the switch is disabled with an explanation and nothing is sent; same with `DO_NOT_TRACK=1`
+5. Point `TELEMETRY_URL` at an unreachable address → the panel keeps working, `lastStatus` shows the failure and no retry storm occurs
+6. Reset the install id → the next ping carries a new id
+7. Disable → no further sends, and the stored id is removed
+8. As a non-admin and signed out, call the endpoints → 403 and 401
+9. Run the installer non-interactively with no variable → statistics stay off; interactively answering "y" → on, and a re-run does not ask again or flip it
+10. Run in `NODE_ENV=development` with statistics enabled → nothing is sent
+
+**Developer Docs:**
+- **Location:** `docs/dev/telemetry.md`
+- **Contents:** principles, schema v1 and how to change it, consent flow, scheduler and failure behaviour, operator controls, collector specification and retention, privacy notice, how to test
+
+**Files to Create:**
+- `apps/api/src/modules/telemetry/{routes,service,schema,scheduler,payload}.ts` (and `payload.test.ts`)
+- `packages/shared/src/schemas/telemetry.ts`
+- `apps/api/prisma/migrations/<timestamp>_add_telemetry_settings/migration.sql`
+- `apps/dashboard/src/components/settings/TelemetryCard.tsx`, `src/hooks/useTelemetry.ts`
+- `docs/dev/telemetry.md` and a public privacy page
 
 ---
 
