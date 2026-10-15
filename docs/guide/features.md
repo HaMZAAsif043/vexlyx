@@ -82,7 +82,7 @@ This matrix maps every completed roadmap feature to its primary maintained docum
 | F5.17 Two-factor authentication | [Two-factor authentication](/reference/two-factor-auth) |
 | F5.18 Audit log | [Audit log](/reference/audit-log) |
 | F5.23 Transactional email | [System transactional email](/reference/system-transactional-email) |
-| F5.24 File permissions and archives | [File manager and SFTP](/reference/file-manager-sftp) |
+| F5.24 File permissions and archives | [File Manager: Permissions & Archives](/reference/file-manager-permissions-archives) |
 | F5.26 Mail authentication for connected domains | [Email authentication](/reference/email/authentication) |
 | F5.29 GitHub integration | [GitHub integration](/reference/github-integration) |
 | F6.2 CI/CD | [CI/CD](/reference/ci-cd) |

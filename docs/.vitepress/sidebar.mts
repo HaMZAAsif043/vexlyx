@@ -106,7 +106,11 @@ const groups: Group[] = [
   },
   {
     text: "Databases and files",
-    pages: ["reference/database-provisioning", "reference/file-manager-sftp"],
+    pages: [
+      "reference/database-provisioning",
+      "reference/file-manager-sftp",
+      "reference/file-manager-permissions-archives",
+    ],
   },
   {
     text: "Operations",

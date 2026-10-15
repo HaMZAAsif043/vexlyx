@@ -22,11 +22,12 @@
 
 ## Overview
 
-F2.8 adds three capabilities:
+F2.8 adds the capabilities below (F5.24 later added permissions and archives):
 
 | Capability | Delivery |
 |---|---|
 | Web File Manager | Two-pane browser-embedded IDE at `/projects/:id/files` |
+| Permissions & Archives | Change file modes, extract `.zip`/`.tar.*` archives and compress selections (F5.24, see [File Manager: Permissions & Archives](file-manager-permissions-archives.md)) |
 | WordPress Backup | One-click export (files + mysqldump) and import (extract + SQL restore) |
 | SFTP Access | Chrooted Linux user, one per Vexlyx account, all projects accessible |
 
@@ -168,6 +169,32 @@ Delete file or directory recursively.
 ```json
 { "from": "src/file.php", "to": "backup/file.php" }
 ```
+
+#### `POST /api/files/:id/chmod`
+
+Change permissions (F5.24). `mode` is three octal digits; `recursive` is opt-in and applies `mode` to folders and `fileMode` to files.
+
+```json
+{ "path": "storage", "mode": "755", "recursive": true, "fileMode": "644" }
+```
+
+#### `POST /api/files/:id/extract`
+
+Extract a `.zip`, `.tar`, `.tar.gz` or `.tar.bz2` archive (F5.24). `destination` defaults to the archive's folder (`"."` is the project root); existing files are only replaced with `overwrite: true`.
+
+```json
+{ "path": "uploads/site.zip", "destination": "public", "overwrite": false }
+```
+
+#### `POST /api/files/:id/compress`
+
+Zip a selection of files and folders (F5.24).
+
+```json
+{ "paths": ["src", "README.md"], "destination": "backup.zip" }
+```
+
+Safety rules, limits and error codes for these three endpoints are in [File Manager: Permissions & Archives](file-manager-permissions-archives.md).
 
 #### `GET /api/files/:id/download`
 
@@ -370,9 +397,14 @@ Add to `apps/api/.env`:
 FILE_UPLOAD_MAX_MB=100
 SFTP_HOST=your-server-ip-or-hostname  # optional; defaults to request hostname or localhost
 SFTP_PORT=22
+
+# Archive extract / compress limits (F5.24)
+FILE_ARCHIVE_MAX_BYTES=2147483648
+FILE_ARCHIVE_MAX_ENTRIES=50000
+FILE_ARCHIVE_MAX_RATIO=100
 ```
 
-`ENCRYPTION_KEY` (32+ chars) is used for SFTP password encryption. If not set, falls back to `SESSION_SECRET`.
+`ENCRYPTION_KEY` (32+ chars) is used for SFTP password encryption. It is required in production and must differ from `SESSION_SECRET`; outside production it falls back to `SESSION_SECRET` (#69, see [Environment Variables](environment-variables.md)).
 
 ---
 
