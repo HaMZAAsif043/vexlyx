@@ -11,6 +11,8 @@ export type FileNode = {
   size?: number;
   mtime?: string;
   extension?: string;
+  /** Octal permission bits, e.g. "644". */
+  mode?: string;
   children?: FileNode[];
 };
 
@@ -22,6 +24,7 @@ export const FileNodeSchema: z.ZodType<FileNode> = z.lazy(() =>
     size: z.number().optional(),
     mtime: z.string().optional(),
     extension: z.string().optional(),
+    mode: z.string().optional(),
     children: z.array(FileNodeSchema).optional(),
   }),
 );

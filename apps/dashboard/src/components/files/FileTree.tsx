@@ -17,6 +17,9 @@ import {
   Pencil,
   Trash2,
   Copy,
+  Shield,
+  PackageOpen,
+  Archive,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,6 +32,7 @@ import {
 import { fetchAPI } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useRefreshAnimation, refreshIconClassName } from "@/hooks/useRefreshAnimation";
+import { isArchiveName } from "@/components/files/ArchiveDialogs";
 import type { FileNode } from "@vexlyx/shared";
 
 // ---------------------------------------------------------------------------
@@ -58,6 +62,12 @@ export interface FileTreeProps {
   onSelect: (node: FileNode) => void;
   onDelete: (node: FileNode) => void;
   onRename: (node: FileNode) => void;
+  onPermissions: (node: FileNode) => void;
+  onExtract: (node: FileNode) => void;
+  onCompress: (node: FileNode) => void;
+  /** Ctrl/Cmd+click adds or removes an item from the multi-selection. */
+  multiSelectedPaths: Set<string>;
+  onToggleMulti: (node: FileNode) => void;
   refreshTrigger?: number;
   className?: string;
 }
@@ -78,6 +88,11 @@ interface TreeNodeProps {
   onSelect: (node: FileNode) => void;
   onDelete: (node: FileNode) => void;
   onRename: (node: FileNode) => void;
+  onPermissions: (node: FileNode) => void;
+  onExtract: (node: FileNode) => void;
+  onCompress: (node: FileNode) => void;
+  multiSelectedPaths: Set<string>;
+  onToggleMulti: (node: FileNode) => void;
 }
 
 function TreeNode({
@@ -92,17 +107,27 @@ function TreeNode({
   onSelect,
   onDelete,
   onRename,
+  onPermissions,
+  onExtract,
+  onCompress,
+  multiSelectedPaths,
+  onToggleMulti,
 }: TreeNodeProps) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   const isDir = node.type === "dir";
   const isOpen = isDir && expandedPaths.has(node.path);
   const isLoading = isDir && loadingPaths.has(node.path);
-  const isSelected = selectedPath === node.path;
+  const isMultiSelected = multiSelectedPaths.has(node.path);
+  const isSelected = selectedPath === node.path || isMultiSelected;
   const children = (isDir ? dirChildren.get(node.path) : undefined) ?? node.children ?? [];
 
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (e.ctrlKey || e.metaKey) {
+      onToggleMulti(node);
+      return;
+    }
     if (isDir) {
       onToggle(node.path);
     }
@@ -196,7 +221,7 @@ function TreeNode({
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="end"
-            className="w-40"
+            className="w-48"
             onClick={(e) => e.stopPropagation()}
           >
             <DropdownMenuItem
@@ -210,6 +235,38 @@ function TreeNode({
             </DropdownMenuItem>
             <DropdownMenuItem onClick={handleCopyPath}>
               <Copy className="mr-2 h-3.5 w-3.5" /> Copy path
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsMenuOpen(false);
+                onPermissions(node);
+              }}
+            >
+              <Shield className="mr-2 h-3.5 w-3.5" /> Permissions
+            </DropdownMenuItem>
+            {!isDir && isArchiveName(node.name) && (
+              <DropdownMenuItem
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsMenuOpen(false);
+                  onExtract(node);
+                }}
+              >
+                <PackageOpen className="mr-2 h-3.5 w-3.5" /> Extract
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsMenuOpen(false);
+                onCompress(node);
+              }}
+            >
+              <Archive className="mr-2 h-3.5 w-3.5" />{" "}
+              {isMultiSelected && multiSelectedPaths.size > 1
+                ? `Compress ${multiSelectedPaths.size} items`
+                : "Compress"}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
@@ -243,6 +300,11 @@ function TreeNode({
               onSelect={onSelect}
               onDelete={onDelete}
               onRename={onRename}
+              onPermissions={onPermissions}
+              onExtract={onExtract}
+              onCompress={onCompress}
+              multiSelectedPaths={multiSelectedPaths}
+              onToggleMulti={onToggleMulti}
             />
           ))}
         </div>
@@ -261,6 +323,11 @@ export function FileTree({
   onSelect,
   onDelete,
   onRename,
+  onPermissions,
+  onExtract,
+  onCompress,
+  multiSelectedPaths,
+  onToggleMulti,
   refreshTrigger = 0,
   className,
 }: FileTreeProps) {
@@ -479,6 +546,11 @@ export function FileTree({
             onSelect={onSelect}
             onDelete={onDelete}
             onRename={onRename}
+            onPermissions={onPermissions}
+            onExtract={onExtract}
+            onCompress={onCompress}
+            multiSelectedPaths={multiSelectedPaths}
+            onToggleMulti={onToggleMulti}
           />
         ))
       )}

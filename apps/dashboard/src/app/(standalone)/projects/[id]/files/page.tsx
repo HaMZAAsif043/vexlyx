@@ -12,6 +12,7 @@ import {
   Loader2,
   FolderOpen,
   RefreshCw,
+  Archive,
 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -30,6 +31,8 @@ import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { FileTree } from "@/components/files/FileTree";
 import { FileEditor } from "@/components/files/FileEditor";
 import { UploadDropzone } from "@/components/files/UploadDropzone";
+import { PermissionsDialog } from "@/components/files/PermissionsDialog";
+import { CompressDialog, ExtractDialog } from "@/components/files/ArchiveDialogs";
 import { fetchAPI } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useRefreshAnimation, refreshIconClassName } from "@/hooks/useRefreshAnimation";
@@ -59,6 +62,11 @@ export default function StandaloneFileManagerPage() {
   const [newName, setNewName] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [nodeToAct, setNodeToAct] = useState<FileNode | null>(null);
+  const [multiSelected, setMultiSelected] = useState<FileNode[]>([]);
+  const [permissionsOpen, setPermissionsOpen] = useState(false);
+  const [extractOpen, setExtractOpen] = useState(false);
+  const [compressOpen, setCompressOpen] = useState(false);
+  const [compressNodes, setCompressNodes] = useState<FileNode[]>([]);
 
   // Fetch project metadata for top bar
   useEffect(() => {
@@ -100,6 +108,34 @@ export default function StandaloneFileManagerPage() {
       parts.pop();
       setCurrentDirPath(parts.join("/"));
     }
+  };
+
+  // ── Permissions / archives ───────────────────────────────────────────────
+
+  const handleToggleMulti = (node: FileNode) => {
+    setMultiSelected((prev) =>
+      prev.some((n) => n.path === node.path)
+        ? prev.filter((n) => n.path !== node.path)
+        : [...prev, node],
+    );
+  };
+
+  const openPermissions = (node: FileNode) => {
+    setNodeToAct(node);
+    setPermissionsOpen(true);
+  };
+
+  const openExtract = (node: FileNode) => {
+    setNodeToAct(node);
+    setExtractOpen(true);
+  };
+
+  const openCompress = (node?: FileNode) => {
+    const inSelection = node && multiSelected.some((n) => n.path === node.path);
+    const nodes = inSelection || !node ? multiSelected : [node];
+    if (nodes.length === 0) return;
+    setCompressNodes(nodes);
+    setCompressOpen(true);
   };
 
   // ── Create file ──────────────────────────────────────────────────────────
@@ -342,6 +378,19 @@ export default function StandaloneFileManagerPage() {
             Upload
           </Button>
 
+          {multiSelected.length > 0 && (
+            <Button
+              id="fm-compress-btn"
+              variant="outline"
+              size="sm"
+              className="h-8 gap-1.5 text-xs shadow-xs"
+              onClick={() => openCompress()}
+            >
+              <Archive className="h-3.5 w-3.5 text-indigo-500" />
+              Compress ({multiSelected.length})
+            </Button>
+          )}
+
           {selectedNode?.type === "file" && (
             <Button
               id="fm-download-btn"
@@ -391,6 +440,11 @@ export default function StandaloneFileManagerPage() {
               onSelect={handleSelect}
               onDelete={openDelete}
               onRename={openRename}
+              onPermissions={openPermissions}
+              onExtract={openExtract}
+              onCompress={openCompress}
+              multiSelectedPaths={new Set(multiSelected.map((n) => n.path))}
+              onToggleMulti={handleToggleMulti}
               refreshTrigger={refreshTrigger}
             />
           </div>
@@ -567,6 +621,31 @@ export default function StandaloneFileManagerPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <PermissionsDialog
+        open={permissionsOpen}
+        onOpenChange={setPermissionsOpen}
+        projectId={projectId}
+        node={nodeToAct}
+        onChanged={refreshTree}
+      />
+      <ExtractDialog
+        open={extractOpen}
+        onOpenChange={setExtractOpen}
+        projectId={projectId}
+        node={nodeToAct}
+        onDone={refreshTree}
+      />
+      <CompressDialog
+        open={compressOpen}
+        onOpenChange={setCompressOpen}
+        projectId={projectId}
+        nodes={compressNodes}
+        onDone={() => {
+          setMultiSelected([]);
+          refreshTree();
+        }}
+      />
 
       {/* Upload dialog */}
       <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>

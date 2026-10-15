@@ -112,6 +112,33 @@ export const MoveBodySchema = z.object({
   to: z.string().min(1),
 });
 
+const OctalModeSchema = z
+  .string()
+  .regex(/^[0-7]{3}$/, "Mode must be three octal digits, e.g. 644");
+
+export const ChmodBodySchema = z.object({
+  path: z.string().min(1),
+  mode: OctalModeSchema,
+  recursive: z.boolean().optional().default(false),
+  /** Recursive only: mode for files; `mode` then applies to folders. */
+  fileMode: OctalModeSchema.optional(),
+});
+
+export const ExtractBodySchema = z.object({
+  path: z.string().min(1),
+  /** Defaults to the archive's own folder; "." means the project root. */
+  destination: z.string().min(1).optional(),
+  overwrite: z.boolean().optional().default(false),
+});
+
+export const CompressBodySchema = z.object({
+  paths: z.array(z.string().min(1)).min(1).max(500),
+  destination: z.string().min(1),
+});
+
+export type ChmodBody = z.infer<typeof ChmodBodySchema>;
+export type ExtractBody = z.infer<typeof ExtractBodySchema>;
+export type CompressBody = z.infer<typeof CompressBodySchema>;
 export type ListQuery = z.infer<typeof ListQuerySchema>;
 export type ReadQuery = z.infer<typeof ReadQuerySchema>;
 export type WriteBody = z.infer<typeof WriteBodySchema>;

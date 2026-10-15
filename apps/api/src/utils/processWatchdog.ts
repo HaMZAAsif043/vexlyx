@@ -43,6 +43,8 @@ export const PYTHON_SCRIPT_TIMEOUT_MS = {
   services: 300_000,
   /** ACME/certificate operations. */
   ssl: 900_000,
+  /** File Manager archive extract / compress; the script's own deadline is 480s. */
+  archive: 540_000,
   /** postfix / dovecot / webmail manager commands. */
   mail: 300_000,
 } as const;

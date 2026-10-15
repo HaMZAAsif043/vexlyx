@@ -1,9 +1,17 @@
 import fs from "node:fs/promises";
-import { createReadStream, createWriteStream } from "node:fs";
+import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import type { PrismaClient } from "@prisma/client";
 import { env } from "../../config/env.js";
+import { getPythonBin } from "../../utils/pythonBin.js";
+import {
+  PYTHON_SCRIPT_TIMEOUT_MS,
+  watchChildTimeout,
+} from "../../utils/processWatchdog.js";
+import type { AuditLogService } from "../audit-log/service.js";
 import { safePath } from "./schema.js";
 
 // ---------------------------------------------------------------------------
@@ -32,7 +40,19 @@ export interface FileNode {
   size?: number;
   mtime?: string;
   extension?: string;
+  /** Octal permission bits, e.g. "644". */
+  mode?: string;
   children?: FileNode[];
+}
+
+export interface ExtractResult {
+  extracted: number;
+  skipped: string[];
+}
+
+export interface CompressResult {
+  files: number;
+  skippedLinks: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -41,12 +61,109 @@ export interface FileNode {
 
 const MAX_READ_BYTES = 2 * 1024 * 1024;
 
+// Upper bound on entries touched by one recursive chmod.
+const MAX_CHMOD_ENTRIES = 100_000;
+
+const ARCHIVE_ERROR_STATUS: Record<string, number> = {
+  BAD_REQUEST: 400,
+  VALIDATION_ERROR: 400,
+  PATH_TRAVERSAL: 403,
+  SOURCE_NOT_FOUND: 404,
+  CONFLICT: 409,
+  ARCHIVE_TOO_LARGE: 413,
+  UNSUPPORTED_FORMAT: 415,
+  UNSAFE_ARCHIVE: 422,
+  CORRUPT_ARCHIVE: 422,
+  ARCHIVE_TIMEOUT: 504,
+};
+
+function getArchiveScriptPath(): string {
+  const currentDir = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.resolve(currentDir, "../../../../../system/python/archive_manager.py"),
+    path.resolve(currentDir, "../../../../system/python/archive_manager.py"),
+    path.resolve(process.cwd(), "../../system/python/archive_manager.py"),
+    path.resolve(process.cwd(), "system/python/archive_manager.py"),
+  ];
+  return (
+    candidates.find((candidate) => existsSync(candidate)) ??
+    candidates[0] ??
+    path.resolve(process.cwd(), "system/python/archive_manager.py")
+  );
+}
+
+function archiveLimits() {
+  return {
+    maxBytes: env.FILE_ARCHIVE_MAX_BYTES,
+    maxEntries: env.FILE_ARCHIVE_MAX_ENTRIES,
+    maxRatio: env.FILE_ARCHIVE_MAX_RATIO,
+  };
+}
+
+function runArchiveCommand<T>(payload: Record<string, unknown>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(getPythonBin(), ["-I", getArchiveScriptPath()], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    watchChildTimeout(child, PYTHON_SCRIPT_TIMEOUT_MS.archive, (ms) =>
+      reject(
+        new FileError(
+          `Archive operation timed out after ${ms / 1000}s`,
+          "ARCHIVE_TIMEOUT",
+          504,
+        ),
+      ),
+    );
+
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", (err) => {
+      reject(new FileError(`Failed to start archive helper: ${err.message}`, "SPAWN_ERROR", 500));
+    });
+    child.on("close", () => {
+      let parsed: unknown;
+      try {
+        const lastLine = stdout.trim().split("\n").pop() ?? "";
+        parsed = JSON.parse(lastLine);
+      } catch {
+        reject(
+          new FileError(
+            `Archive helper returned no result${stderr ? `: ${stderr.trim().slice(0, 500)}` : ""}`,
+            "ARCHIVE_SCRIPT_ERROR",
+            500,
+          ),
+        );
+        return;
+      }
+      const result = parsed as { error?: string; code?: string };
+      if (typeof result.error === "string") {
+        const code = result.code ?? "ARCHIVE_ERROR";
+        reject(new FileError(result.error, code, ARCHIVE_ERROR_STATUS[code] ?? 500));
+        return;
+      }
+      resolve(parsed as T);
+    });
+
+    child.stdin.on("error", () => undefined);
+    child.stdin.end(JSON.stringify(payload));
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
 
 export class FileService {
-  constructor(private prisma: PrismaClient) { }
+  constructor(
+    private prisma: PrismaClient,
+    private auditLog: AuditLogService,
+  ) { }
 
   // ── Security: resolve + guard ──────────────────────────────────────────
 
@@ -127,6 +244,15 @@ export class FileService {
         path: rel,
         type: isDir ? "dir" : "file",
       };
+
+      if (!entry.isSymbolicLink()) {
+        try {
+          const lst = await fs.lstat(abs);
+          node.mode = (lst.mode & 0o777).toString(8).padStart(3, "0");
+        } catch {
+          // mode is informational only
+        }
+      }
 
       if (!isDir) {
         const ext = path.extname(entry.name).slice(1).toLowerCase();
@@ -388,6 +514,156 @@ export class FileService {
         throw err;
       }
     }
+  }
+
+  // ── Permissions (chmod) ────────────────────────────────────────────────
+
+  async chmod(
+    userId: string,
+    projectId: string,
+    relPath: string,
+    mode: string,
+    recursive = false,
+    fileMode?: string,
+  ): Promise<{ changed: number }> {
+    const target = await this.resolveAndGuard(userId, projectId, relPath);
+    const root = this.projectRoot(projectId);
+
+    if (target === root) {
+      throw new FileError("Cannot change permissions of the project root", "CHMOD_ROOT", 400);
+    }
+
+    const stat = await fs.lstat(target).catch(() => {
+      throw new FileError("File or folder not found", "SOURCE_NOT_FOUND", 404);
+    });
+    if (stat.isSymbolicLink()) {
+      throw new FileError("Permissions of a symbolic link cannot be changed", "IS_SYMLINK", 400);
+    }
+    if (recursive && !stat.isDirectory()) {
+      throw new FileError("Recursive permissions apply to folders only", "NOT_A_DIRECTORY", 400);
+    }
+
+    const dirBits = parseInt(mode, 8);
+    const fileBits = parseInt(fileMode ?? mode, 8);
+    const touchesDirs = stat.isDirectory();
+    const touchesFiles = !stat.isDirectory() || recursive;
+
+    // Without owner rwx on a folder the API (and the app) can no longer list
+    // or repair it; without owner read a file can't be edited back.
+    if (touchesDirs && (dirBits & 0o700) !== 0o700) {
+      throw new FileError(
+        "Folders must keep read, write and execute for the owner (at least 700)",
+        "INVALID_MODE",
+        400,
+      );
+    }
+    if (touchesFiles && (fileBits & 0o400) === 0) {
+      throw new FileError("Files must stay readable by the owner", "INVALID_MODE", 400);
+    }
+
+    let changed = 0;
+    const apply = async (abs: string, bits: number) => {
+      await fs.chmod(abs, bits);
+      changed += 1;
+      if (changed > MAX_CHMOD_ENTRIES) {
+        throw new FileError("Too many items for one recursive change", "TOO_MANY_ENTRIES", 413);
+      }
+    };
+
+    if (!recursive) {
+      await apply(target, stat.isDirectory() ? dirBits : fileBits);
+    } else {
+      // Symlinks are skipped: chmod follows them and would reach outside the project.
+      const stack = [target];
+      while (stack.length > 0) {
+        const dir = stack.pop() as string;
+        await apply(dir, dirBits);
+        const entries = await fs.readdir(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const abs = path.join(dir, entry.name);
+          if (entry.isSymbolicLink()) continue;
+          if (entry.isDirectory()) stack.push(abs);
+          else if (entry.isFile()) await apply(abs, fileBits);
+        }
+      }
+    }
+
+    await this.auditLog.log(userId, "file.permissions_changed", { type: "Project", id: projectId }, {
+      after: { path: relPath, mode, recursive, ...(recursive && { fileMode: fileMode ?? mode }), changed },
+    });
+
+    return { changed };
+  }
+
+  // ── Extract archive ────────────────────────────────────────────────────
+
+  async extract(
+    userId: string,
+    projectId: string,
+    archiveRel: string,
+    destinationRel?: string,
+    overwrite = false,
+  ): Promise<ExtractResult> {
+    const archive = await this.resolveAndGuard(userId, projectId, archiveRel);
+    const root = this.projectRoot(projectId);
+    const destRel = destinationRel ?? (path.posix.dirname(safePath(archiveRel)) || ".");
+    const dest = await this.resolveAndGuard(userId, projectId, destRel, true);
+
+    const stat = await fs.stat(archive).catch(() => {
+      throw new FileError("Archive not found", "SOURCE_NOT_FOUND", 404);
+    });
+    if (!stat.isFile()) {
+      throw new FileError("Selected item is not a file", "NOT_A_FILE", 400);
+    }
+
+    const result = await runArchiveCommand<ExtractResult>({
+      command: "extract",
+      root,
+      archive,
+      dest,
+      overwrite,
+      limits: archiveLimits(),
+    });
+
+    await this.auditLog.log(userId, "file.archive_extracted", { type: "Project", id: projectId }, {
+      after: { archive: archiveRel, destination: destRel, extracted: result.extracted, skipped: result.skipped.length },
+    });
+
+    return { extracted: result.extracted, skipped: result.skipped };
+  }
+
+  // ── Compress selection ─────────────────────────────────────────────────
+
+  async compress(
+    userId: string,
+    projectId: string,
+    sourcesRel: string[],
+    destinationRel: string,
+  ): Promise<CompressResult> {
+    const root = this.projectRoot(projectId);
+    const sources: string[] = [];
+    for (const rel of sourcesRel) {
+      const abs = await this.resolveAndGuard(userId, projectId, rel);
+      if (abs === root) {
+        throw new FileError("Cannot compress the project root", "COMPRESS_ROOT", 400);
+      }
+      sources.push(abs);
+    }
+    const dest = await this.resolveAndGuard(userId, projectId, destinationRel, true);
+
+    const result = await runArchiveCommand<CompressResult>({
+      command: "compress",
+      root,
+      sources,
+      dest,
+      limits: archiveLimits(),
+    });
+
+    await this.auditLog.log(userId, "file.archive_created", { type: "Project", id: projectId }, {
+      after: { archive: destinationRel, items: sourcesRel.length, files: result.files },
+    });
+
+    return { files: result.files, skippedLinks: result.skippedLinks };
   }
 
   // ── Download (stream) ──────────────────────────────────────────────────

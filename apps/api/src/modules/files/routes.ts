@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { env } from "../../config/env.js";
+import { AuditLogService } from "../audit-log/service.js";
 import { FileService, FileError } from "./service.js";
 import {
   ProjectIdParamSchema,
@@ -12,6 +13,9 @@ import {
   MkdirBodySchema,
   CopyBodySchema,
   MoveBodySchema,
+  ChmodBodySchema,
+  ExtractBodySchema,
+  CompressBodySchema,
 } from "./schema.js";
 
 // ---------------------------------------------------------------------------
@@ -35,7 +39,7 @@ function handleFileError(err: unknown, reply: FastifyReply): void {
 // ---------------------------------------------------------------------------
 
 export async function fileRoutes(app: FastifyInstance) {
-  const service = new FileService(app.prisma);
+  const service = new FileService(app.prisma, new AuditLogService(app.prisma, app.log));
 
   // ── GET /api/files/:id/list ──────────────────────────────────────────
   app.get(
@@ -179,6 +183,55 @@ export async function fileRoutes(app: FastifyInstance) {
         const { from, to } = MoveBodySchema.parse(request.body);
         await service.move(request.userId!, id, from, to);
         return { success: true };
+      } catch (err) {
+        handleFileError(err, reply);
+      }
+    },
+  );
+
+  // ── POST /api/files/:id/chmod ────────────────────────────────────────
+  app.post(
+    "/:id/chmod",
+    { preHandler: [app.requireAuth] },
+    async (request, reply) => {
+      try {
+        const { id } = ProjectIdParamSchema.parse(request.params);
+        const { path, mode, recursive, fileMode } = ChmodBodySchema.parse(request.body);
+        const { changed } = await service.chmod(request.userId!, id, path, mode, recursive, fileMode);
+        return { success: true, changed };
+      } catch (err) {
+        handleFileError(err, reply);
+      }
+    },
+  );
+
+  // ── POST /api/files/:id/extract ──────────────────────────────────────
+  app.post(
+    "/:id/extract",
+    { preHandler: [app.requireAuth] },
+    async (request, reply) => {
+      try {
+        const { id } = ProjectIdParamSchema.parse(request.params);
+        const { path, destination, overwrite } = ExtractBodySchema.parse(request.body);
+        const result = await service.extract(request.userId!, id, path, destination, overwrite);
+        return { success: true, ...result };
+      } catch (err) {
+        handleFileError(err, reply);
+      }
+    },
+  );
+
+  // ── POST /api/files/:id/compress ─────────────────────────────────────
+  app.post(
+    "/:id/compress",
+    { preHandler: [app.requireAuth] },
+    async (request, reply) => {
+      try {
+        const { id } = ProjectIdParamSchema.parse(request.params);
+        const { paths, destination } = CompressBodySchema.parse(request.body);
+        const result = await service.compress(request.userId!, id, paths, destination);
+        reply.status(201);
+        return { success: true, ...result };
       } catch (err) {
         handleFileError(err, reply);
       }

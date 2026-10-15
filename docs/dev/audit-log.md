@@ -13,7 +13,7 @@ F5.18 adds:
 
 - A generic `AuditLog` table (`audit_logs`) recording actor, action, target, and an explicit before/after metadata diff.
 - A shared `AuditLogService.log(...)` helper, called explicitly at the end of each audited mutation (not auto-captured via Prisma middleware).
-- Coverage for: user role/quota changes, user create/delete, firewall rule/policy changes, backup restore/delete, and create/delete for projects, domains, databases, and mailboxes.
+- Coverage for: user role/quota changes, user create/delete, firewall rule/policy changes, backup restore/delete, file permission changes and archive extract/compress (F5.24), and create/delete for projects, domains, databases, and mailboxes.
 - An admin-only `/audit-log` page — filterable by actor, action, and date range, server-side paginated.
 
 ---

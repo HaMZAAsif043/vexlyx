@@ -136,6 +136,15 @@ const envSchema = z
     // set this to override that default (e.g. a venv interpreter, or a
     // non-standard binary name/path on the host).
     PYTHON_BIN: z.string().min(1).optional(),
+    // File Manager archive limits (F5.24) — zip-bomb / disk-fill guards for
+    // extract and compress. Applied to the uncompressed size and entry count.
+    FILE_ARCHIVE_MAX_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .default(2 * 1024 * 1024 * 1024),
+    FILE_ARCHIVE_MAX_ENTRIES: z.coerce.number().int().min(1).default(50_000),
+    FILE_ARCHIVE_MAX_RATIO: z.coerce.number().min(1).default(100),
     // System transactional email (F5.23). With nothing set, panel mail is
     // sent as notifications@<MAIL_DOMAIN> through the bundled Postfix — no operator
     // configuration. EMAIL_SMTP_* point the same client at any external SMTP

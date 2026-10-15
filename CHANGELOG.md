@@ -9,6 +9,7 @@ All notable changes to Vexlyx are documented here. The format follows [Keep a Ch
 - GitHub App integration with repository and branch selection, short-lived installation tokens, and automatic deployment webhooks.
 - One-command local development bootstrap with prerequisite checks, generated secrets, infrastructure startup, migrations, and seed data.
 - VitePress documentation site with installation, operations, troubleshooting, developer, and generated API references.
+- File Manager permissions and archives: change file and folder permissions (octal and rwx editor, opt-in recursion), extract `.zip`, `.tar`, `.tar.gz` and `.tar.bz2` archives, and compress a selection into a `.zip`, with zip-slip, link, size and compression-ratio protections. Limits are configurable through `FILE_ARCHIVE_MAX_BYTES`, `FILE_ARCHIVE_MAX_ENTRIES` and `FILE_ARCHIVE_MAX_RATIO` (F5.24).
 
 ### Changed
 
