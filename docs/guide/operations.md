@@ -99,12 +99,23 @@ person did.
 
 ## Upgrading
 
-To upgrade Vexlyx to the latest version — or to repair a broken install — just re-run the
+To upgrade Vexlyx to the latest release — or to repair a broken install — just re-run the
 installer on the server:
 
 ```bash
 curl -fsSL https://vexlyx.atlantiqs.org/install.sh | bash
 ```
+
+The installer installs the newest **tagged release** (for example `v0.2.0`), not whatever happens
+to be on the development branch, and re-running it moves the install to the next release when one
+is published. To pin a version, or to follow development instead, set `VEXLYX_REPO_REF`:
+
+```bash
+curl -fsSL https://vexlyx.atlantiqs.org/install.sh | sudo VEXLYX_REPO_REF=v0.2.0 bash   # exact release
+curl -fsSL https://vexlyx.atlantiqs.org/install.sh | sudo VEXLYX_REPO_REF=main bash     # development
+```
+
+An install that already follows a branch keeps following it until you set `VEXLYX_REPO_REF=latest`.
 
 Every installer step checks real state before acting, so re-running it is always safe: nothing
 that already succeeded is redone, secrets are never regenerated or rotated, and only what actually

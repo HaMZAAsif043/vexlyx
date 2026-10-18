@@ -33,6 +33,20 @@ system/scripts/install/run.sh              — orchestrator
 
 `install.sh` is deliberately thin: it only figures out where the Vexlyx checkout lives and hands off. All real logic is versioned inside the repo under `system/scripts/install/`, so it can be reviewed, tested, and changed like any other code — and a `curl | bash` install always runs whatever the pinned `VEXLYX_REPO_REF` branch/tag actually contains.
 
+### Which version is installed
+
+`VEXLYX_REPO_REF` decides what `install.sh` puts on the server:
+
+| Value | Result |
+| --- | --- |
+| unset or `latest` | The newest stable release tag, `vMAJOR.MINOR.PATCH`. Prerelease tags (`v1.0.0-rc.1`) and non-version tags are never chosen, and versions compare numerically (`v0.10.0` is newer than `v0.9.0`). |
+| a tag such as `v0.2.0` | That exact release. |
+| a branch such as `main` | The tip of that branch, for development. The installer says it is not a tagged release. |
+
+Re-running the installer on an existing checkout moves it to the newest release, says "Already on release vX" when nothing is newer, and never touches a checkout with local changes. An install that follows a branch keeps following it unless `VEXLYX_REPO_REF` is set, so a re-run cannot silently change an operator's channel. If the repository has no release tag yet, the installer warns and falls back to `main`.
+
+Why releases are the default: a public install must run code that was tagged, tested and published, not whatever was merged a minute ago. Tags are created only by maintainers (see [CI/CD](ci-cd.md)), and a published tag is never moved. The logic lives in functions in `install.sh` and is covered by `tests/test_installer_release_channel.py`.
+
 ### Why the API container is different from the dashboard container
 
 The dashboard is a stateless frontend — `apps/dashboard/Dockerfile` is a conventional multi-stage `turbo prune` + Next.js `standalone` build, fully self-contained.
@@ -71,7 +85,7 @@ Every value can be set as an environment variable ahead of time (for scripted/CI
 | `VEXLYX_MAIL_DOMAIN`                  | No       | `$VEXLYX_DOMAIN`                                                                                                       |
 | `VEXLYX_ENABLE_PUBLIC_DNS`            | No       | `false` — leaves port 53 closed in UFW and bound to loopback                                                           |
 | `VEXLYX_HOME`                         | No       | `/opt/vexlyx`                                                                                                          |
-| `VEXLYX_REPO_URL` / `VEXLYX_REPO_REF` | No       | the Vexlyx repo / `main`                                                                                               |
+| `VEXLYX_REPO_URL` / `VEXLYX_REPO_REF` | No       | the Vexlyx repo / `latest` (the newest stable release tag; see "Which version is installed")                           |
 
 The API receives `HOSTED_MAIL_HOSTNAME=$VEXLYX_MAIL_HOSTNAME` and
 `HOSTED_MAIL_DOMAIN=$VEXLYX_MAIL_DOMAIN` so the dashboard can reproduce the installer's inbound
