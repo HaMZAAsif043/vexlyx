@@ -4,10 +4,12 @@ services:
     container_name: vexlyx-postgres
     restart: unless-stopped
     ports:
-      - "${POSTGRES_HOST_PORT:-5432}:5432"
+      # Loopback only: these dev databases use well-known credentials, so they
+      # must not be reachable from the LAN (#56). Production clears the list.
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     environment:
       POSTGRES_USER: vexlyx
-      POSTGRES_PASSWORD: vexlyx_dev
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vexlyx_dev}
       POSTGRES_DB: vexlyx_dev
     volumes:
       - vexlyx_postgres_data:/var/lib/postgresql/data
@@ -27,19 +29,21 @@ services:
     restart: unless-stopped
     command: --default-authentication-plugin=mysql_native_password
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     environment:
-      MYSQL_ROOT_PASSWORD: vexlyx_mysql_root
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-vexlyx_mysql_root}
       MYSQL_DATABASE: vexlyx_dev
       MYSQL_USER: vexlyx
-      MYSQL_PASSWORD: vexlyx_dev
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-vexlyx_dev}
     volumes:
       - vexlyx_mysql_data:/var/lib/mysql
     networks:
       - default
       - traefik-net
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pvexlyx_mysql_root"]
+      # MYSQL_PWD (read from the container's own env) keeps the root password
+      # out of the process argument list, which any local user can see via ps.
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_ROOT_PASSWORD\" mysqladmin ping -h localhost -u root"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -50,7 +54,7 @@ services:
     container_name: vexlyx-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --appendonly yes
     volumes:
       - vexlyx_redis_data:/data

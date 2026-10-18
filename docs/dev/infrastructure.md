@@ -42,7 +42,7 @@ docker-compose down -v
 | Property | Value |
 |----------|-------|
 | Image | `postgres:16-alpine` |
-| Port | `5432` |
+| Port | `5432` (bound to `127.0.0.1` only) |
 | User | `vexlyx` |
 | Password | `vexlyx_dev` |
 | Database | `vexlyx_dev` |
@@ -50,12 +50,14 @@ docker-compose down -v
 
 **Connection string:** `postgresql://vexlyx:vexlyx_dev@localhost:5432/vexlyx_dev`
 
+The Postgres, MySQL and Redis dev ports are published on loopback only (`127.0.0.1`), because their dev credentials are well known and must not be reachable from the LAN (#56). The Postgres and MySQL passwords default to the dev values but can be overridden with `POSTGRES_PASSWORD`, `MYSQL_ROOT_PASSWORD` and `MYSQL_PASSWORD` in a root `.env`; keep `apps/api/.env` in sync. MySQL is pinned to `mysql:8.0`, where `--default-authentication-plugin=mysql_native_password` is still required for older client drivers; it must be revisited before moving to 8.4+.
+
 ### Redis 7
 
 | Property | Value |
 |----------|-------|
 | Image | `redis:7-alpine` |
-| Port | `6379` |
+| Port | `6379` (bound to `127.0.0.1` only) |
 | Max memory | `256mb` |
 | Eviction | `allkeys-lru` |
 | Persistence | AOF (`appendonly yes`) |
