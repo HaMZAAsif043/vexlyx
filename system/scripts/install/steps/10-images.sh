@@ -10,6 +10,15 @@ COMPOSE=(docker compose --env-file "${VEXLYX_SECRETS_FILE}" -f docker-compose.ym
 
 "${COMPOSE[@]}" build dashboard api
 
+# User projects are built by Nixpacks inside the api container, so verify it
+# there. Without it every Git deployment fails, which would otherwise only show
+# up on the first deploy.
+if nixpacks_version="$(docker run --rm --entrypoint nixpacks vexlyx-api:latest --version 2>&1)"; then
+  log_ok "Nixpacks ready in the API image (${nixpacks_version})."
+else
+  log_warn "Nixpacks is not available in the API image (${nixpacks_version}) — project builds will fail. Re-run this installer to rebuild the image."
+fi
+
 # vexlyx-ufw-helper (F5.4) -- a throwaway, host-networked image
 # firewall_manager.py launches per-command to reach the HOST's real UFW
 # state (the api container itself has no NET_ADMIN/host networking). Not a

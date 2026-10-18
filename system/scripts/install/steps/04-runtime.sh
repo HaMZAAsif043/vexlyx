@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# Node.js 22 + pnpm, Python 3 + cryptography + psutil, and Nixpacks — the
-# runtime toolchain the panel itself needs on the host to build (F5.1 runs
-# `pnpm build` directly on the host — see step 08) and to build/deploy user
-# projects at runtime (build_manager.py, docker_manager.py). psutil backs
+# Node.js 22 + pnpm and Python 3 + cryptography + psutil — the toolchain the
+# panel needs on the host to build itself (F5.1 runs `pnpm build` directly on
+# the host — see step 09) and for the system scripts. psutil backs
 # system_monitor.py's server_metrics collector (F5.2/F5.13) — without it,
 # metrics still work via /proc parsing but with no per-core CPU breakdown.
 set -euo pipefail
+#
+# Nixpacks is deliberately NOT installed here. User projects are built by the
+# api container (build_manager.py runs inside it), which ships its own pinned
+# copy — see apps/api/Dockerfile. A second copy on the host was never used, and
+# its "could not be verified" warning only confused people. Step 10 checks
+# Nixpacks where it actually runs.
 
-log_step "[4/16] Installing Node.js, pnpm, Python, and Nixpacks"
+log_step "[4/16] Installing Node.js, pnpm, and Python"
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -36,10 +41,3 @@ if ! has_cmd python; then
 fi
 pip3 install --break-system-packages --no-cache-dir cryptography psutil
 log_ok "Python ready ($(python --version))."
-
-if ! has_cmd nixpacks; then
-  curl -fsSL https://nixpacks.com/install.sh | bash
-  ln -sf "${HOME}/.nixpacks/bin/nixpacks" /usr/local/bin/nixpacks 2>/dev/null || true
-fi
-has_cmd nixpacks && log_ok "Nixpacks ready ($(nixpacks --version 2>&1 | head -n1))." \
-  || log_warn "Nixpacks install could not be verified — project builds may fail until this is fixed."

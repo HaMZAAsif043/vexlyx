@@ -8,7 +8,7 @@ curl -fsSL https://vexlyx.atlantiqs.org/install.sh | bash
 
 ## What it does
 
-1. Installs Docker Engine + Compose, Node.js 22 + pnpm, Python 3 + `cryptography`, and Nixpacks. (Node 22, not 20 — pnpm 11, pinned in `package.json`'s `packageManager` field, uses the `node:sqlite` built-in and fails with `ERR_UNKNOWN_BUILTIN_MODULE` on Node 20.)
+1. Installs Docker Engine + Compose, Node.js 22 + pnpm, and Python 3 + `cryptography`. Nixpacks is not installed on the host: project builds run it inside the API container, whose image ships it, and step 10 checks it there. (Node 22, not 20 — pnpm 11, pinned in `package.json`'s `packageManager` field, uses the `node:sqlite` built-in and fails with `ERR_UNKNOWN_BUILTIN_MODULE` on Node 20.)
 2. Collects the panel domain, admin credentials, and mail hostname (env vars, interactive prompt, or safe generated defaults — see [Configuration](#configuration)).
 3. Generates and persists application secrets exactly once.
 4. Builds the panel on the host (`pnpm install && pnpm build && prisma generate`) and builds the dashboard/api Docker images.
