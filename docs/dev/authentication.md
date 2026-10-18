@@ -78,6 +78,18 @@ apps/dashboard/src/
 
 Auth endpoints are rate-limited to **5 requests per 15 minutes per IP**. Exceeding returns `429 Too Many Requests`.
 
+#### Client IP behind a proxy (#63)
+
+The limiter keys on `request.ip`. In production the API is only reachable through Traefik, so without proxy trust every request arrives from Traefik's container IP and the "per-IP" limit becomes a single global counter: five failed logins from anyone would lock out every user for 15 minutes (and password-reset tokens would record the proxy's IP).
+
+`TRUST_PROXY` (default empty) is a comma-separated list of IPs, CIDRs or the keywords `loopback`, `linklocal`, `uniquelocal` that is passed to Fastify's `trustProxy`. Fastify walks `X-Forwarded-For` from the right while each hop is trusted and takes the first untrusted address as the client, so a client that sends its own forged `X-Forwarded-For` cannot choose its bucket. `docker-compose.prod.yml` sets `loopback,linklocal,uniquelocal`, which covers Traefik on the Docker network; if another proxy such as Cloudflare sits in front of Traefik, add its ranges. Leave it empty for local development, where there is no proxy.
+
+A numeric hop count is deliberately not supported: Fastify 5 fails closed on numbers because a hop count cannot validate the direct peer.
+
+**Not covered:** the limiter state is in-process memory (resets on API restart), and the key is the IP alone, not IP + email. Another container on `traefik-net` that reaches the API directly can still choose its own `X-Forwarded-For`.
+
+Tests: `apps/api/src/modules/auth/rate-limit-proxy.test.ts`.
+
 ### Socket.io connections follow the session (#64)
 
 A Socket.io connection is authenticated once, at the handshake (`plugins/socket.ts`). It is therefore tied to the session that opened it and ended with it, otherwise rooms would keep streaming logs after logout and a connection kept open across a logout → login-as-someone-else in the same tab would keep acting as the previous user.

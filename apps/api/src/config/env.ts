@@ -42,6 +42,20 @@ const envSchema = z
       .enum(["true", "false"])
       .default("false")
       .transform((v) => v === "true"),
+    // Comma-separated IPs/CIDRs/keywords (loopback, linklocal, uniquelocal) of
+    // the reverse proxies allowed to set X-Forwarded-For. Fastify walks that
+    // header from the right while each hop is trusted and takes the first
+    // untrusted address as the client, so forged leading entries are ignored.
+    // Empty = no proxy: use the TCP peer address (local dev).
+    TRUST_PROXY: z
+      .string()
+      .default("")
+      .transform((v) =>
+        v
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+      ),
     REQUIRE_ADMIN_2FA: z
       .enum(["true", "false"])
       .default("false")

@@ -187,6 +187,11 @@ services:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       ENCRYPTION_KEY_LEGACY_FALLBACK: ${ENCRYPTION_KEY_LEGACY_FALLBACK:-false}
       ALLOW_REGISTRATION: "false"
+      # Traefik reaches the API from a private Docker address. Without trusting
+      # it, every request appears to come from Traefik's IP and the per-IP auth
+      # rate limit becomes one shared bucket for all users (#63). Only private
+      # peers are trusted, so a public client can't forge X-Forwarded-For.
+      TRUST_PROXY: loopback,linklocal,uniquelocal
       API_BASE_URL: https://api.${VEXLYX_DOMAIN}
       BASE_DOMAIN: ${VEXLYX_BASE_DOMAIN}
       # DNS Records & Public IP Onboarding (F5.9)
