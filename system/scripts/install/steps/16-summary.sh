@@ -3,6 +3,23 @@ set -euo pipefail
 
 log_step "[16/16] Done"
 
+COMPOSE=(docker compose --env-file "${VEXLYX_SECRETS_FILE}" -f docker-compose.yml -f docker-compose.prod.yml)
+
+traefik_has_certificate() {
+  "${COMPOSE[@]}" exec -T traefik cat /etc/traefik/acme.json 2>/dev/null \
+    | grep -Eq "\"main\": ?\"$1\""
+}
+
+# Traefik requests certificates on first start and Let's Encrypt takes up to a
+# minute or so to answer; checking once, straight away, made a healthy install
+# end with a warning.
+log_info "Waiting for the Let's Encrypt certificates for ${VEXLYX_DOMAIN}..."
+cert_tries=45
+until { traefik_has_certificate "${VEXLYX_DOMAIN}" && traefik_has_certificate "api.${VEXLYX_DOMAIN}"; } || (( cert_tries == 0 )); do
+  sleep 2
+  (( cert_tries-- ))
+done
+
 echo ""
 echo "  Vexlyx is installed."
 echo ""
@@ -70,8 +87,7 @@ echo "    docker compose --env-file ${VEXLYX_SECRETS_FILE} -f docker-compose.yml
 echo ""
 echo "  To upgrade or repair the install, just re-run install.sh — every step is safe to run again."
 echo ""
-if ! docker compose --env-file "${VEXLYX_SECRETS_FILE}" -f docker-compose.yml -f docker-compose.prod.yml \
-    exec -T traefik cat /etc/traefik/acme.json 2>/dev/null | grep -q '"Certificate"'; then
-  log_warn "No Let's Encrypt certificate detected yet for ${VEXLYX_DOMAIN}."
+if ! { traefik_has_certificate "${VEXLYX_DOMAIN}" && traefik_has_certificate "api.${VEXLYX_DOMAIN}"; }; then
+  log_warn "No Let's Encrypt certificate detected yet for ${VEXLYX_DOMAIN} (or api.${VEXLYX_DOMAIN})."
   log_warn "If ${VEXLYX_DOMAIN} does not yet point at this server's public IP, Traefik will keep retrying automatically once DNS propagates — the panel is reachable over HTTPS with a browser warning in the meantime."
 fi

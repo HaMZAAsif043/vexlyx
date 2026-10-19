@@ -8,7 +8,10 @@ log_step "[10/16] Building panel Docker images"
 
 COMPOSE=(docker compose --env-file "${VEXLYX_SECRETS_FILE}" -f docker-compose.yml -f docker-compose.prod.yml)
 
-"${COMPOSE[@]}" build dashboard api
+# postfix and dovecot are built here too: if `up -d` in step 14 builds them
+# first, compose tries to pull their names from Docker Hub and prints
+# "pull access denied" errors before building them locally.
+"${COMPOSE[@]}" build dashboard api postfix dovecot
 
 # User projects are built by Nixpacks inside the api container, so verify it
 # there. Without it every Git deployment fails, which would otherwise only show

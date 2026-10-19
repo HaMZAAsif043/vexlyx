@@ -27,6 +27,9 @@ else
   log_ok "Node.js installed ($(node -v))."
 fi
 
+# The pnpm version is pinned, so downloading it is intended; without this
+# corepack asks for confirmation, which nobody can answer in `curl | bash`.
+export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 corepack enable
 corepack prepare pnpm@11.24.0 --activate
 log_ok "pnpm ready ($(pnpm --version))."
