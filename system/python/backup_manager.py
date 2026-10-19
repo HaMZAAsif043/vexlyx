@@ -369,6 +369,17 @@ def restore_database(payload: dict, archive_path: Path) -> dict:
     elif engine == "MYSQL":
         db_user = require_field(payload, "dbUser")
         db_password = require_field(payload, "dbPassword")
+        # The dump has no CREATE DATABASE, so a dropped database (the usual
+        # reason to restore) would make the client exit before reading it.
+        ensure = popen_docker_exec(
+            container,
+            ["mysql", f"-u{db_user}", f"-p{db_password}", "-e", f"CREATE DATABASE IF NOT EXISTS `{db_name}`"],
+        )
+        _, ensure_stderr = ensure.communicate()
+        if ensure.returncode != 0:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            detail = ensure_stderr.decode("utf-8", errors="replace").strip() if ensure_stderr else ""
+            fail(f"Failed to prepare database '{db_name}': {detail}", "DB_RESTORE_FAILED")
         proc = popen_docker_exec(
             container,
             ["mysql", f"-u{db_user}", f"-p{db_password}", db_name],
@@ -378,11 +389,15 @@ def restore_database(payload: dict, archive_path: Path) -> dict:
         fail(f"Unsupported database engine: {engine}", "UNSUPPORTED_ENGINE")
         return {}
 
-    with gzip.open(dump_file, "rb") as gz_in:
-        for chunk in iter(lambda: gz_in.read(1024 * 1024), b""):
-            proc.stdin.write(chunk)
-
-    proc.stdin.close()
+    try:
+        with gzip.open(dump_file, "rb") as gz_in:
+            for chunk in iter(lambda: gz_in.read(1024 * 1024), b""):
+                proc.stdin.write(chunk)
+    except BrokenPipeError:
+        # The client exited early; its stderr below explains why.
+        pass
+    # communicate() closes stdin itself; closing it first makes Python 3.11
+    # raise "flush of closed file" here.
     _, stderr = proc.communicate()
     rc = proc.returncode
 
