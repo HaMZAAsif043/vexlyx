@@ -140,6 +140,16 @@ Rather than ship a webmail tab that 404s in this environment, `docker/traefik/dy
 
 The direct host port (`http://localhost:8089`, configurable via `WEBMAIL_PORT`) always works regardless of any of the above.
 
+## Regression test: strict TLS between Roundcube and the mail servers
+
+`tests/test_roundcube_tls.py` loads the real `docker/roundcube/config/local.inc.php` into the pinned Roundcube image (`roundcube/roundcubemail:1.6.18-apache`) and drives Roundcube's own IMAP and SMTP client classes against throwaway mail peers presenting different certificates. Only a certificate that chains to the trusted CA **and** matches `ROUNDCUBE_MAIL_TLS_PEER_NAME` may succeed; a wrong host name, an expired certificate, an untrusted CA and a self-signed certificate must be rejected **without the client ever sending credentials**. It also checks that a plaintext peer never receives credentials, that the development relaxation (`ROUNDCUBE_MAIL_TLS_VERIFY=false`) still works, that only the exact value `false` relaxes verification (a typo such as `FALSE` keeps it on), and that the production compose overlay overrides the development setting. The test needs Docker and runs in CI (`mail-credential-security` job):
+
+```bash
+python -m unittest tests.test_roundcube_tls -v
+```
+
+The certificate-matrix design is from PR #103 by @umair-sajjad, adapted to the settings this repository actually uses.
+
 ## 7. How to Extend
 
 - **F4.5 (SPF/DKIM/DMARC)** — no changes needed here; Roundcube doesn't touch DNS/DKIM.
