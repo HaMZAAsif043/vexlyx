@@ -1,5 +1,7 @@
 "use client";
 
+// Must stay first: configures Zod before any schema is created (see lib/zodConfig.ts).
+import "@/lib/zodConfig";
 import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
