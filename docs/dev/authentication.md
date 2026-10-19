@@ -90,6 +90,12 @@ A numeric hop count is deliberately not supported: Fastify 5 fails closed on num
 
 Tests: `apps/api/src/modules/auth/rate-limit-proxy.test.ts`.
 
+### Deleting a user ends their sessions
+
+`UserService.delete` revokes every session of the user (the Redis entries and the database rows) **before** it deletes the user row, through the `revokeSessions` callback that `users/routes.ts` wires to `destroyUserSessions`. Order matters: the session rows disappear with the user (cascade), which would lose the ids needed to remove their Redis entries, and without revocation a deleted user's cookie keeps working for the rest of its 24 hour lifetime (listing endpoints answered `200` with empty data). If revocation fails the user is not deleted, so the admin can simply retry. Live Socket.io connections are closed afterwards by `onUserDeleted`.
+
+Tests: `apps/api/src/modules/users/delete-sessions.test.ts`.
+
 ### Socket.io connections follow the session (#64)
 
 A Socket.io connection is authenticated once, at the handshake (`plugins/socket.ts`). It is therefore tied to the session that opened it and ended with it, otherwise rooms would keep streaming logs after logout and a connection kept open across a logout → login-as-someone-else in the same tab would keep acting as the previous user.

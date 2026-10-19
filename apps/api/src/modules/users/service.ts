@@ -52,6 +52,14 @@ export class UserService {
      * service free of the socket server.
      */
     private onUserDeleted?: (userId: string) => void,
+    /**
+     * Ends every session of a user about to be deleted. Must run BEFORE the row
+     * is deleted: the session rows cascade away with it, which would lose the
+     * ids needed to remove their Redis entries, and a deleted user's cookie
+     * would stay valid until the Redis TTL expires. Injected for the same
+     * reason as onUserDeleted.
+     */
+    private revokeSessions?: (userId: string) => Promise<void>,
   ) {}
 
   /**
@@ -205,6 +213,9 @@ export class UserService {
     const target = await this.ensureExists(id);
     this.assertCanManage(requester, target);
 
+    // If revocation fails the user is kept and the admin can retry: better than
+    // a deleted account whose login cookie still works.
+    await this.revokeSessions?.(id);
     await this.prisma.user.delete({ where: { id } });
 
     this.onUserDeleted?.(id);

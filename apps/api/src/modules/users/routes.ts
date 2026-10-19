@@ -3,6 +3,7 @@ import { UserService, UserError } from "./service.js";
 import { AuthError } from "../auth/service.js";
 import { AuditLogService } from "../audit-log/service.js";
 import { disconnectUserSockets } from "../../plugins/socket.js";
+import { destroyUserSessions } from "../../plugins/auth.js";
 import { TwoFactorService } from "../auth/two-factor-service.js";
 import {
   CreateSubAccountSchema,
@@ -27,7 +28,12 @@ async function twoFactorAdminReset(app: FastifyInstance, actorId: string, target
 
 export async function userRoutes(app: FastifyInstance) {
   const auditLog = new AuditLogService(app.prisma, app.log);
-  const service = new UserService(app.prisma, auditLog, disconnectUserSockets);
+  const service = new UserService(
+    app.prisma,
+    auditLog,
+    disconnectUserSockets,
+    (userId) => destroyUserSessions(app.prisma, app.redis, userId),
+  );
 
   // GET /api/users/me/usage — any authenticated user, their own quota/usage
   // breakdown (the "Your Plan" dashboard widget).
