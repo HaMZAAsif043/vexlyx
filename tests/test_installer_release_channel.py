@@ -163,6 +163,18 @@ class InstallerReleaseChannelTest(unittest.TestCase):
         self.assertIn("Local changes detected", result.stdout)
         self.assertEqual(self.checkout_mark(home), "edited by the operator")
 
+    def test_old_install_with_the_tracked_users_file_gets_the_upgrade_pointer(self) -> None:
+        (self.origin / "docker/dovecot/config").mkdir(parents=True)
+        (self.origin / "docker/dovecot/config/users").write_text("old fixture\n", encoding="utf-8")
+        git(self.origin, "add", "-A")
+        self.commit("release-with-tracked-users", "v0.1.0")
+        home = self.fresh_clone(ref="v0.1.0")
+        (home / "docker/dovecot/config/users").write_text("rewritten by the panel\n", encoding="utf-8")
+        result = self.run_script("update_checkout", cwd=home)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Local changes detected", result.stdout)
+        self.assertIn("mail-credential-remediation.md", result.stdout)
+
     def test_main_does_nothing_when_the_file_is_only_sourced(self) -> None:
         result = self.run_script("echo sourced-ok")
         self.assertEqual(result.stdout.strip(), "sourced-ok")

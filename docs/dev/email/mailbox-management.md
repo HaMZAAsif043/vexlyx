@@ -55,7 +55,7 @@ F4.3 gives admins self-service mailbox provisioning on top of the `Mailbox` Pris
                                                      │
                      ┌───────────────────────────────┴───────────────────────────────┐
                      ▼                                                               ▼
-     /etc/postfix/virtual_domains, virtual_mailbox_maps (+.lmdb)      /etc/dovecot/users (passdb+userdb)
+     /etc/postfix/virtual_domains, virtual_mailbox_maps (+.lmdb)      /etc/dovecot/virtual/users (passdb+userdb)
      /etc/opendkim/KeyTable, SigningTable                              (ARGON2ID hash, quota rule)
                      │                                                               │
                      └──────────────────────────┬────────────────────────────────────┘

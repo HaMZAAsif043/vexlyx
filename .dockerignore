@@ -18,6 +18,7 @@ tests
 apps/api/workspaces
 apps/api/Python
 docker/mail-data
+docker/dovecot/config
 docker/coredns/zones/*.db
 docker/traefik/acme.json
 docker/traefik/certs/*.crt

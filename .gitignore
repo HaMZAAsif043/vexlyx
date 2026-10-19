@@ -42,6 +42,10 @@ docker/data/
 docker/mail-data/*
 !docker/mail-data/.gitkeep
 
+# Runtime mailbox credentials and offline remediation backups
+docker/dovecot/config/*
+!docker/dovecot/config/.gitkeep
+
 # Local workspaces & generated keys (F1.3)
 workspaces/
 apps/api/workspaces/

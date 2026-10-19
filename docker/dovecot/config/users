@@ -1,6 +1,0 @@
-test@vexlyx.local:{ARGON2ID}$argon2id$v=19$m=65536,t=3,p=1$U+cApES5CNwhZn7jxTvr0w$c/Fm2zGrJFBvSQ8IsnQk1oJmS+TsCZOGPOzXc0iIUoE:5000:5000::::userdb_quota_rule=*:storage=1024M
-admin@vexlyx.local:{ARGON2ID}$argon2id$v=19$m=65536,t=3,p=1$U+cApES5CNwhZn7jxTvr0w$c/Fm2zGrJFBvSQ8IsnQk1oJmS+TsCZOGPOzXc0iIUoE:5000:5000::::userdb_quota_rule=*:storage=1024M
-ali@wp-blogs.vexlyx.localhost:{ARGON2ID}$argon2id$v=19$m=65536,t=3,p=4$7YSlX9GkuHOsgyQNs9bzoA$C1zY4TPJndPTVetOqCXYNNJRslee4n0q6QvOFL3Povk:5000:5000::::userdb_quota_rule=*:storage=1024M
-bob@wp-blogs.vexlyx.localhost:{ARGON2ID}$argon2id$v=19$m=65536,t=3,p=4$6HTOboOuhdc27cYVOYXQLA$p0WhWrjS9kLajEOY6+NkjTLOZ95w9MTR7p2AnwuYLUA:5000:5000::::userdb_quota_rule=*:storage=1024M
-api-for-me@test-auth.localhost:{ARGON2ID}$argon2id$v=19$m=65536,t=3,p=4$555RE8hXzWtbRPEfvq6+jg$S9fCrZGiiAtz1gZx5HxdkG5ac4YgQxz6tr/D9dK3+TM:5000:5000::::userdb_quota_rule=*:storage=512M
-api@test-auth.localhost:{ARGON2ID}$argon2id$v=19$m=65536,t=3,p=4$q63czkfjL56rDNe5opWW/w$+WNBjIhtChlqRNsF25bvz99hHwRs0KAYtL3I6JeTnmA:5000:5000::::userdb_quota_rule=*:storage=512M

@@ -169,12 +169,15 @@ services:
     image: vexlyx-dovecot:latest
     container_name: vexlyx-dovecot
     restart: unless-stopped
+    environment:
+      VEXLYX_SEED_DEV_FIXTURES: "true"
     ports:
       - "${IMAP_PORT:-143}:143"
       - "${IMAPS_PORT:-993}:993"
     volumes:
       - ./docker/mail-data/vhosts:/var/mail/vhosts
-      - ./docker/dovecot/config/users:/etc/dovecot/users
+      # Mount the directory: a fresh checkout has no runtime users file yet.
+      - ./docker/dovecot/config:/etc/dovecot/virtual
     networks:
       - default
       - traefik-net

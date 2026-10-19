@@ -18,6 +18,14 @@ env:
   DATABASE_URL: postgresql://vexlyx:placeholder@localhost:5432/vexlyx_dev
 
 jobs:
+  mail-credential-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t vexlyx-dovecot:credentials-test docker/dovecot
+      - run: docker build -t vexlyx-postfix:credentials-test docker/postfix
+      - run: python3 -m unittest tests.test_mail_credential_security tests.test_mail_credential_protocols -v
+
   lint:
     runs-on: ubuntu-latest
     steps:

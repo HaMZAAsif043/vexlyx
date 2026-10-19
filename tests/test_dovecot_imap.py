@@ -162,8 +162,8 @@ class TestDovecotConfigurations(unittest.TestCase):
         entrypoint = ROOT_DIR / "docker" / "dovecot" / "entrypoint.sh"
         self.assertTrue(entrypoint.exists(), "entrypoint.sh must exist")
         content = entrypoint.read_text(encoding="utf-8")
-        self.assertIn("doveadm pw -s ARGON2ID", content)
-        self.assertIn("test@vexlyx.local", content)
+        self.assertIn("pw -s ARGON2ID", content)
+        self.assertIn("vexlyx-dev", content)
 
     def test_04_postfix_sasl_integration(self):
         main_cf = ROOT_DIR / "docker" / "postfix" / "main.cf"

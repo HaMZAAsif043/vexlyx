@@ -103,6 +103,10 @@ update_checkout() {
   fi
   if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
     log "Local changes detected in ${VEXLYX_HOME} — leaving them as-is, not pulling."
+    if git status --porcelain -- docker/dovecot/config/users 2>/dev/null | grep -q .; then
+      log "docker/dovecot/config/users is a tracked file in this older version. To upgrade, follow"
+      log "docs/dev/email/mail-credential-remediation.md (it removes publicly known mailbox credentials)."
+    fi
     return 0
   fi
 
