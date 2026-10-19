@@ -372,22 +372,17 @@ This project is built using "vibe coding" — natural language to production cod
 
 ## 10. Project Status & Next Steps
 
-**Current Phase:** Phase 0 — Foundation
-**Overall Progress:** 0% (0/48 features completed)
+**Source of truth:** the *Project Status Dashboard* at the top of `FEATURES.md`. This section used to hard-code a phase and a percentage and went stale, so it no longer repeats them.
 
-### Immediate Next Steps (What to Build First)
-1. **F0.1 — Monorepo Setup** — Initialize Turborepo with three workspaces
-2. **F0.2 — Next.js Dashboard** — Set up Next.js 15 + shadcn/ui + layout
-3. **F0.3 — Fastify API** — Set up Fastify + health check + error handling
-4. **F0.4 — Prisma Schema** — Design schema, run migration, seed data
-5. **F0.5 — Redis & Docker Compose** — Set up dev infrastructure
-6. **F0.6 — Authentication** — Register/login/logout with Lucia Auth
-7. **F0.7 — Shared Package** — Zod schemas shared between frontend and backend
+**State (2026-10-19):** Phases 0 to 4 are complete and Phases 5 and 6 are nearly done. Open features: F5.28 Scheduled Tasks, F5.30 Redis Instances, F5.31 MongoDB Databases, F5.32 Opt-in Usage Statistics and F6.3 Community & Support. Each has a full spec in `FEATURES.md` (description, competitor research, plan, acceptance criteria, test plan).
 
-### What NOT to Build Yet
-- ❌ Do NOT build project deployment (Phase 1) until auth is working
-- ❌ Do NOT build email server (Phase 4) until basic hosting works
-- ❌ Do NOT optimize for scale until MVP is functional
+### Before you start any work
+1. Read the feature's spec in `FEATURES.md` and any issue linked from it; check `gh pr list` for an open PR on the same thing (duplicate work has happened).
+2. Look at 2-3 similar modules and copy their patterns (section 4).
+3. Plan first for anything over three files; ask when requirements are unclear.
+
+### Releases
+Version numbers, tags and the changelog follow `docs/dev/ci-cd.md`: a prepare PR bumps every version (a test fails if one is missed), the merge commit is tagged as a release candidate, tested on a fresh server, then tagged for real. A published tag is never moved.
 
 ---
 
@@ -549,6 +544,10 @@ Record important architectural decisions here as they happen:
 | 2026-09-19 | F5.27: public DNS uses a separate authoritative-only Corefile and an explicit bind address; zones can be prepared before delegation | The default Corefile forwards to public resolvers, so exposing it publishes an open recursive resolver; `Corefile.public` drops `forward` and is opt-in via `VEXLYX_COREFILE`/`VEXLYX_DNS_BIND` (bound to the private IP, since systemd-resolved owns 127.0.0.53:53). Enabling hosting only after delegation would leave a live domain with no zone at the moment nameservers switch, so `skipDelegationCheck` lets owners of a verified domain load the zone first. See `docs/dev/dns-management.md` §9. |
 | 2026-10-07 | F5.23: panel email is zero-config over the bundled Postfix, sent through one SMTP client (`nodemailer`, approved new dependency), with `EMAIL_SMTP_*` as an external-relay escape hatch | Operators of other open-source panels must wire up SMTP or a provider by hand; Vexlyx sends as `notifications@<panel domain>` with no setup and DKIM from the existing OpenDKIM. A single generic SMTP client avoids per-vendor SDKs and lock-in, and covers hosts that block outbound port 25. Overrides are `EMAIL_SMTP_*`, not `SMTP_*`, because `SMTP_HOST`/`SMTP_PORT` already drive the customer mail-hosting diagnostics. Admin accounts are not email-resettable unless `ALLOW_ADMIN_EMAIL_RESET=true`, since an admin is root-equivalent on the host. "New login from an unrecognized location" is deferred: it needs login history/geo the panel does not keep. See `docs/dev/system-transactional-email.md`. |
 | 2026-10-13 | #45: host-wide monitoring metrics are ADMIN-only on every surface (REST, Socket.io, dashboard summary, UI), not just the three REST routes | `/api/monitoring/*` exposed host CPU/RAM/disk and every tenant's container names to any logged-in account. Guarding only the REST routes would have left the same data reachable via the Socket.io `subscribe:metrics` room and `GET /api/dashboard/summary`, so all three are gated to `ADMIN` with the role read fresh from the DB (socket denies fail closed). A scoped per-customer "your usage" view was deliberately left out as a separate feature. See `docs/dev/monitoring.md`. |
+| 2026-10-14 | `main` is protected by a repository ruleset (PR required, 1 code-owner approval that is not the last pusher, resolved threads, `lint`/`typecheck`/`test`/`build`, no force-push or deletion, no bypass), with `.github/CODEOWNERS` | Unreviewed self-merges had reached `main`. Public repositories get rulesets on the free plan. A consequence worth knowing: whichever account pushed last cannot approve, so pushes must come from the author's account and approval/merge from the code owner's. See `docs/dev/ci-cd.md`. |
+| 2026-10-19 | The one-line installer installs the newest tagged release by default, not `main`; an install that follows a branch keeps following it | A public install must run code that was tagged and tested, not whatever merged last. `VEXLYX_REPO_REF` still takes a tag or branch; with no release tag the installer warns and falls back to `main`. Release steps (version prepare PR, tag the merge commit, release candidate first, never move a published tag) are in `docs/dev/ci-cd.md`. |
+| 2026-10-19 | #41: the Dovecot users file is runtime state, not source: it left git, seeding the dev mailboxes is off by default, and production Dovecot refuses to start while the published credential is present | `main` had committed mailboxes with a publicly known password and production mounted them. Because installed servers modify that tracked file, a plain update aborts and the installer skips such checkouts, so existing servers need the one-time procedure in `docs/dev/email/mail-credential-remediation.md`. Umair's #102 supplied the design; the follow-ups were verified in a scratch clone. |
+| 2026-10-19 | Deleting a user revokes their sessions first, and aborts the delete if revocation fails | The Redis session entries outlived the deleted row, so the old cookie kept working for up to 24 hours on `requireAuth`-only routes. Found by comparing a test from a duplicate PR with `main`. |
 
 ---
 

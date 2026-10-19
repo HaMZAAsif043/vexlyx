@@ -35,9 +35,17 @@ Vexlyx surfaces logs in the dashboard rather than requiring SSH access for routi
 
 ## Recovering admin access
 
-There's no self-service "forgot password" flow — while logged in, **Settings → Change Password**
-is the only self-service option. If you're locked out entirely, create a brand-new admin account
-directly on the server (this never touches or resets any existing account):
+**Regular users** can reset a forgotten password themselves: **Forgot password?** on the sign-in
+page emails a single-use link that expires after 30 minutes. A reset ends all of that user's
+sessions and does not sign them in, and two-factor authentication stays on. This needs the
+panel's [system email](/reference/system-transactional-email) to be deliverable: **Settings →
+System Email** shows the status and has a test button.
+
+**Admin accounts are deliberately not reset by email**: an admin is effectively root on the
+server, so a compromised mailbox must not be enough to take one over (set
+`ALLOW_ADMIN_EMAIL_RESET=true` only if you accept that). While logged in, **Settings → Change
+Password** works for everyone. If an admin is locked out entirely, create a brand-new admin
+account directly on the server (this never touches or resets any existing account):
 
 ```bash
 cd /opt/vexlyx

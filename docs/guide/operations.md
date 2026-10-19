@@ -117,6 +117,16 @@ curl -fsSL https://vexlyx.atlantiqs.org/install.sh | sudo VEXLYX_REPO_REF=main b
 
 An install that already follows a branch keeps following it until you set `VEXLYX_REPO_REF=latest`.
 
+::: warning Servers installed before v0.3.0
+Older versions committed a mailbox file (`docker/dovecot/config/users`) containing accounts with a
+publicly known password, and the panel keeps rewriting that file on your server. Git therefore
+refuses to update such a checkout, and the installer leaves a checkout with local changes alone,
+so **re-running the installer does not upgrade it**. Follow the one-time procedure in
+[Remove exposed development mail credentials](/reference/email/mail-credential-remediation)
+first (it takes a backup, updates the checkout, and removes the known credentials; Dovecot refuses
+to start in production while they are present). Servers installed from v0.3.0 on are not affected.
+:::
+
 Every installer step checks real state before acting, so re-running it is always safe: nothing
 that already succeeded is redone, secrets are never regenerated or rotated, and only what actually
 needs updating (code, container images, migrations) changes. See the

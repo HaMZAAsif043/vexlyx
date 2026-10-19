@@ -73,14 +73,15 @@ Nobody can push to `main` directly, force-push it or delete it, and the rules ap
 
 ## CI and releases
 
-Every pull request runs the same four checks in GitHub Actions (`lint`, `typecheck`, `test`, `build`), so run them locally first. Maintainers cut a release by pushing a version tag:
+Every pull request runs the same checks in GitHub Actions (`lint`, `typecheck`, `test`, `build`, plus the mail-credential tests), so run them locally first. Python tests under `tests/` need Docker for the mail ones; run them with `python -m unittest tests.<name>`.
 
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
+Only maintainers cut releases, and the order matters:
 
-That creates a GitHub release with notes generated from your commit messages (which is why the `type(scope): summary` format above matters) and publishes the dashboard and API Docker images to GHCR. See [`docs/dev/ci-cd.md`](docs/dev/ci-cd.md) for details.
+1. A **prepare pull request** (`chore(release): prepare vX.Y.Z`) bumps every version and moves the `## Unreleased` entries of `CHANGELOG.md` into a `## [X.Y.Z]` section. A test fails if any version is missed.
+2. After it merges, a maintainer tags **that merge commit**, first as a release candidate (`vX.Y.Z-rc.1`), tests it on a fresh server, then tags `vX.Y.Z`.
+3. The tag creates a GitHub release with notes generated from commit messages (which is why the `type(scope): summary` format above matters) and publishes the dashboard and API images to GHCR. A published tag is never moved or deleted; a fix ships as the next patch version.
+
+The one-line installer installs the newest tagged release, so a merged change reaches new installs only through a release. If your change adds to `CHANGELOG.md`, put the line under `## Unreleased`. Details: [`docs/dev/ci-cd.md`](docs/dev/ci-cd.md).
 
 ## Reporting bugs / requesting features
 
