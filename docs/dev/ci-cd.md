@@ -23,7 +23,7 @@ Tags: `X.Y.Z`, plus `X.Y` and `latest` for stable tags. A tag containing `-` (fo
 
 A release is a version number, a tag and a published release that all say the same thing, so do it in this order:
 
-1. **Prepare the version in a pull request** (`chore(release): prepare vX.Y.Z`). Change every one of these to the new version: `package.json`, `apps/api/package.json`, `apps/dashboard/package.json`, `packages/shared/package.json` and `VEXLYX_VERSION` in `packages/shared/src/index.ts`. `apps/api/src/version.test.ts` fails CI if any of them disagree. Update `CHANGELOG.md` with `git cliff --tag vX.Y.Z -o CHANGELOG.md`.
+1. **Prepare the version in a pull request** (`chore(release): prepare vX.Y.Z`). Change every one of these to the new version: `package.json`, `apps/api/package.json`, `apps/dashboard/package.json`, `packages/shared/package.json` and `VEXLYX_VERSION` in `packages/shared/src/index.ts`. `apps/api/src/version.test.ts` fails CI if any of them disagree. Move the entries under `## Unreleased` in `CHANGELOG.md` into a new `## [X.Y.Z] - date` section (the file is kept by hand in the Keep a Changelog format; the GitHub release notes are generated separately by git-cliff from the commit messages).
 2. **Merge it, then tag that exact merge commit** (never an earlier one), starting with a prerelease such as `vX.Y.Z-rc.1`:
 
    ```bash
