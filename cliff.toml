@@ -27,7 +27,10 @@ conventional_commits = true
 filter_unconventional = false
 split_commits = false
 protect_breaking_commits = true
-tag_pattern = "v[0-9].*"
+# Matches only final release tags (v1.2.3), not pre-releases (v1.2.3-rc.1). Otherwise an rc tag
+# counts as a release boundary, and the final tag's notes only cover the delta since the last rc
+# instead of the full range since the previous final release.
+tag_pattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
 sort_commits = "oldest"
 commit_parsers = [
   { message = "^feat", group = "Features" },
