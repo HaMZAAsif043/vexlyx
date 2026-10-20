@@ -16,6 +16,7 @@ All notable changes to Vexlyx are documented here. The format follows [Keep a Ch
 - The installer no longer prints "Nixpacks install could not be verified" on working servers. Project builds run Nixpacks inside the API container, so the host copy was removed and Nixpacks is checked in the built API image instead (#124).
 - Restoring a MySQL or PostgreSQL database from a backup always failed with `flush of closed file`, and a MySQL database that had been dropped could not be restored at all. The restore now streams the dump correctly and recreates a missing MySQL database first. Found while testing a fresh server.
 - A normal install no longer ends with error-looking output: the mail images are built before the services start (no "pull access denied" lines, #133), the installer waits for the Let's Encrypt certificates before deciding whether to warn (#134), and the pnpm download prompt is gone (#135).
+- Outgoing mail was sent without a DKIM signature as soon as a mail domain was added or a key regenerated: the panel told OpenDKIM to reload with SIGHUP, which makes it exit. It now uses SIGUSR1, which reloads the tables and keeps the signer running (#138).
 
 ### Security
 

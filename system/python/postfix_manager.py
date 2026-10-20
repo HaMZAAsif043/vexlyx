@@ -238,14 +238,14 @@ def update_opendkim_tables(domain: str, selector: str, priv_path: str) -> None:
 def reload_opendkim() -> None:
     """
     OpenDKIM reads KeyTable/SigningTable/TrustedHosts once at startup and
-    keeps them in memory — a plain file write is invisible to it until it
-    gets SIGHUP. Without this, a newly written or corrected KeyTable entry
-    silently has no effect and every signing attempt for that domain keeps
-    failing the milter with a 451 temp-reject.
+    keeps them in memory — a plain file write is invisible to it until it is
+    told to reload. The reload signal is SIGUSR1: SIGHUP makes OpenDKIM exit
+    instead, and Postfix (milter_default_action = accept) then sends every
+    message unsigned with no error shown anywhere.
     """
     try:
         subprocess.run(
-            ["docker", "exec", "vexlyx-postfix", "pkill", "-HUP", "opendkim"],
+            ["docker", "exec", "vexlyx-postfix", "pkill", "-USR1", "opendkim"],
             capture_output=True,
             text=True,
             timeout=5,
