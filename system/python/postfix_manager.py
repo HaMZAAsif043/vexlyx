@@ -158,6 +158,7 @@ def generate_dkim_keys(domain: str, selector: str = "default", key_size: int = 2
             encryption_algorithm=serialization.NoEncryption(),
         )
         priv_file.write_bytes(priv_pem)
+        priv_file.chmod(0o600)
 
         public_key = private_key.public_key()
         pub_der = public_key.public_bytes(
@@ -235,20 +236,32 @@ def update_opendkim_tables(domain: str, selector: str, priv_path: str) -> None:
     reload_opendkim()
 
 
+OPENDKIM_RELOAD_SCRIPT = (
+    "chown -R opendkim:opendkim /etc/opendkim/keys; "
+    "find /etc/opendkim/keys -type d -exec chmod 750 {} +; "
+    "find /etc/opendkim/keys -type f -name '*.private' -exec chmod 600 {} +; "
+    "pkill -USR1 opendkim"
+)
+
+
 def reload_opendkim() -> None:
     """
     OpenDKIM reads KeyTable/SigningTable/TrustedHosts once at startup and
     keeps them in memory — a plain file write is invisible to it until it is
-    told to reload. The reload signal is SIGUSR1: SIGHUP makes OpenDKIM exit
-    instead, and Postfix (milter_default_action = accept) then sends every
-    message unsigned with no error shown anywhere.
+    told to reload with SIGUSR1 (SIGHUP makes it exit, and Postfix, with
+    milter_default_action = accept, then sends every message unsigned).
+
+    Keys are written here as root, but OpenDKIM refuses a private key it does
+    not own or that others can read (RequireSafeKeys) and answers every
+    message for that domain with a 451, so ownership and modes are fixed in
+    the container, as the entrypoint does at start-up, before the reload.
     """
     try:
         subprocess.run(
-            ["docker", "exec", "vexlyx-postfix", "pkill", "-USR1", "opendkim"],
+            ["docker", "exec", "vexlyx-postfix", "sh", "-c", OPENDKIM_RELOAD_SCRIPT],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=15,
         )
     except Exception:
         pass
