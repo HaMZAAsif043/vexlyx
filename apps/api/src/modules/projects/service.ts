@@ -8,6 +8,7 @@ import { assertUnderQuota, notifyQuotaThreshold } from "../../utils/quota.js";
 import { env } from "../../config/env.js";
 import { runDockerAction } from "../deploy/service.js";
 import type { AuditLogService } from "../audit-log/service.js";
+import { getScheduledTaskQueue, unscheduleTaskJob } from "../scheduled-tasks/scheduler.js";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -315,10 +316,43 @@ export class ProjectService {
       },
     });
 
+    // F5.28: stop this project's scheduled tasks before the workspace is torn
+    // down, so no task keeps firing (and emailing its owner) against a removed
+    // container.
+    await this.disableScheduledTasks(projectId);
+
     await this.teardownWorkspace(projectId);
 
     await this.auditLog.log(userId, "project.deleted", { type: "Project", id: projectId }, {
       before: { name: project.name, type: project.type },
     });
+  }
+
+  /**
+   * Disables every scheduled task of a project and disarms its BullMQ jobs.
+   * The rows are disabled first: even if disarming fails (already logged), the
+   * worker will not execute them and the next boot only re-arms enabled tasks.
+   */
+  private async disableScheduledTasks(projectId: string) {
+    const tasks = await this.prisma.scheduledTask.findMany({
+      where: { projectId },
+      select: { id: true },
+    });
+    if (tasks.length === 0) return;
+
+    await this.prisma.scheduledTask.updateMany({
+      where: { projectId },
+      data: { enabled: false, nextRunAt: null },
+    });
+
+    const queue = getScheduledTaskQueue();
+    if (!queue) return;
+    for (const task of tasks) {
+      try {
+        await unscheduleTaskJob(queue, task.id, this.logger);
+      } catch {
+        // Already logged by unscheduleTaskJob; the rows are disabled above.
+      }
+    }
   }
 }

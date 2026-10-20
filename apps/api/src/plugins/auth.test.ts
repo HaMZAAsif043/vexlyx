@@ -54,6 +54,15 @@ async function buildApp(options: { sessionUserId: string | null; findUniqueResul
     async () => ({ ok: true }),
   );
 
+  // Regression guard: requireAuth must be decorated by the plugin itself.
+  // If it ever goes missing again, every route using it fails registration
+  // (FST_ERR_HOOK_INVALID_HANDLER) and the API cannot boot.
+  app.get(
+    "/auth-only",
+    { preHandler: [app.requireAuth] },
+    async () => ({ ok: true }),
+  );
+
   return { app, findUnique };
 }
 
@@ -62,6 +71,26 @@ const withSession = { cookies: { [SESSION_COOKIE]: "test-session-id" } };
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe("requireAuth", () => {
+  it("is decorated by the plugin (a missing decorator breaks every protected route at boot)", async () => {
+    const { app } = await buildApp({ sessionUserId: null, findUniqueResult: null });
+    expect(typeof app.requireAuth).toBe("function");
+  });
+
+  it("returns 401 when there is no session", async () => {
+    const { app } = await buildApp({ sessionUserId: null, findUniqueResult: null });
+    const res = await app.inject({ method: "GET", url: "/auth-only" });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
+  it("allows a signed-in user without any role lookup", async () => {
+    const { app } = await buildApp({ sessionUserId: "user-1", findUniqueResult: null });
+    const res = await app.inject({ method: "GET", url: "/auth-only", ...withSession });
+    expect(res.statusCode).toBe(200);
+  });
 });
 
 describe("requireRoleOrPermission", () => {

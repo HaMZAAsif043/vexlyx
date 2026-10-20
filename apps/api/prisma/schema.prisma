@@ -140,6 +140,21 @@ enum CleanupTrigger {
   REDEPLOY
 }
 
+/// Status of a scheduled task run (F5.28).
+enum ScheduledTaskRunStatus {
+  RUNNING
+  SUCCESS
+  FAILED
+  TIMEOUT
+  SKIPPED
+}
+
+/// How a scheduled task run was triggered (F5.28).
+enum ScheduledTaskRunTrigger {
+  SCHEDULED
+  MANUAL
+}
+
 /// Transport protocol a firewall rule applies to.
 enum FirewallProtocol {
   TCP
@@ -164,51 +179,53 @@ enum FirewallPolicy {
 
 /// A panel user who can own projects, domains, databases, and mailboxes.
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String
-  password  String
-  role      Role     @default(USER)
+  id                  String       @id @default(cuid())
+  email               String       @unique
+  name                String
+  password            String
+  role                Role         @default(USER)
   /// Reseller (User.id) that owns this account, when this user is a
   /// reseller-created sub-account. Null for admins, resellers themselves,
   /// and directly-registered users.
-  resellerId String?  @map("reseller_id")
+  resellerId          String?      @map("reseller_id")
   /// Per-resource creation caps; null means unlimited. maxSubAccounts only
   /// applies to RESELLER users.
-  maxProjects    Int?     @map("max_projects")
-  maxDomains     Int?     @map("max_domains")
-  maxDatabases   Int?     @map("max_databases")
-  maxMailboxes   Int?     @map("max_mailboxes")
-  maxSubAccounts Int?     @map("max_sub_accounts")
+  maxProjects         Int?         @map("max_projects")
+  maxDomains          Int?         @map("max_domains")
+  maxDatabases        Int?         @map("max_databases")
+  maxMailboxes        Int?         @map("max_mailboxes")
+  maxSubAccounts      Int?         @map("max_sub_accounts")
+  maxScheduledTasks   Int?         @map("max_scheduled_tasks")
   /// Named capabilities granted on top of the role (F5.19). Additive only —
   /// never removes what the role itself already grants.
-  permissions Permission[] @default([])
+  permissions         Permission[] @default([])
   /// Reseller-only (F5.20): when true, this reseller's sub-account quotas may
   /// nominally sum above the reseller's own limit. Enforcement switches from
   /// nominal-sum (checked when a reseller sets sub-account quotas) to real
   /// aggregate usage across the reseller + all sub-accounts (checked at
   /// resource-creation time). ADMIN-only to toggle.
-  oversellingEnabled Boolean @default(false) @map("overselling_enabled")
-  totpSecretEncrypted String? @map("totp_secret_encrypted")
-  totpEnabled         Boolean  @default(false) @map("totp_enabled")
-  totpVerifiedAt      DateTime? @map("totp_verified_at")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  oversellingEnabled  Boolean      @default(false) @map("overselling_enabled")
+  totpSecretEncrypted String?      @map("totp_secret_encrypted")
+  totpEnabled         Boolean      @default(false) @map("totp_enabled")
+  totpVerifiedAt      DateTime?    @map("totp_verified_at")
+  createdAt           DateTime     @default(now()) @map("created_at")
+  updatedAt           DateTime     @updatedAt @map("updated_at")
 
-  sessions       Session[]
-  recoveryCodes RecoveryCode[]
+  sessions            Session[]
+  recoveryCodes       RecoveryCode[]
   passwordResetTokens PasswordResetToken[]
-  quotaNotices QuotaNotice[]
-  projects       Project[]
-  domains        Domain[]
-  databases      Database[]
-  mailboxes      Mailbox[]
-  virtualAliases VirtualAlias[]
-  dkimKeys       DkimKey[]
-  sftpUser       SftpUser?
+  quotaNotices        QuotaNotice[]
+  projects            Project[]
+  domains             Domain[]
+  databases           Database[]
+  mailboxes           Mailbox[]
+  virtualAliases      VirtualAlias[]
+  dkimKeys            DkimKey[]
+  sftpUser            SftpUser?
+  scheduledTasks      ScheduledTask[]
   githubInstallations GitHubInstallation[]
-  reseller       User?          @relation("ResellerAccounts", fields: [resellerId], references: [id], onDelete: SetNull)
-  subAccounts    User[]         @relation("ResellerAccounts")
+  reseller            User?                @relation("ResellerAccounts", fields: [resellerId], references: [id], onDelete: SetNull)
+  subAccounts         User[]               @relation("ResellerAccounts")
 
   @@index([resellerId])
   @@map("users")
@@ -315,11 +332,12 @@ model Project {
   createdAt         DateTime      @default(now()) @map("created_at")
   updatedAt         DateTime      @updatedAt @map("updated_at")
 
-  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  deployments Deployment[]
-  envVars     EnvVar[]
-  domains     Domain[]
-  databases   Database[]
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deployments        Deployment[]
+  envVars            EnvVar[]
+  domains            Domain[]
+  databases          Database[]
+  scheduledTasks     ScheduledTask[]
   githubInstallation GitHubInstallation? @relation(fields: [githubInstallationId], references: [id], onDelete: SetNull)
 
   @@unique([userId, name])
@@ -688,18 +706,64 @@ model CleanupSettings {
 /// triggered automatically after a redeploy's old image is confirmed safe
 /// to remove.
 model CleanupRun {
-  id                String          @id @default(cuid())
+  id                String         @id @default(cuid())
   trigger           CleanupTrigger
-  status            CleanupStatus   @default(RUNNING)
-  containersRemoved Int?            @map("containers_removed")
-  imagesRemoved     Int?            @map("images_removed")
-  reclaimedBytes    BigInt?         @map("reclaimed_bytes")
+  status            CleanupStatus  @default(RUNNING)
+  containersRemoved Int?           @map("containers_removed")
+  imagesRemoved     Int?           @map("images_removed")
+  reclaimedBytes    BigInt?        @map("reclaimed_bytes")
   error             String?
-  startedAt         DateTime        @default(now()) @map("started_at")
-  completedAt       DateTime?       @map("completed_at")
+  startedAt         DateTime       @default(now()) @map("started_at")
+  completedAt       DateTime?      @map("completed_at")
 
   @@index([startedAt])
   @@map("cleanup_runs")
+}
+
+/// A user-defined scheduled task (cron job) that runs a command inside a
+/// project's container (F5.28).
+model ScheduledTask {
+  id                  String    @id @default(cuid())
+  projectId           String    @map("project_id")
+  userId              String    @map("user_id")
+  name                String
+  command             String    @db.Text
+  schedule            String // 5-field cron expression
+  timeoutSeconds      Int       @default(300) @map("timeout_seconds")
+  enabled             Boolean   @default(true)
+  notifyOnFailure     Boolean   @default(true) @map("notify_on_failure")
+  consecutiveFailures Int       @default(0) @map("consecutive_failures")
+  lastRunAt           DateTime? @map("last_run_at")
+  nextRunAt           DateTime? @map("next_run_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  project Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  runs    ScheduledTaskRun[]
+
+  @@index([projectId])
+  @@index([userId])
+  @@index([enabled])
+  @@map("scheduled_tasks")
+}
+
+/// A single execution record of a scheduled task (F5.28).
+model ScheduledTaskRun {
+  id         String                  @id @default(cuid())
+  taskId     String                  @map("task_id")
+  trigger    ScheduledTaskRunTrigger
+  status     ScheduledTaskRunStatus
+  exitCode   Int?                  @map("exit_code")
+  output     String?                 @db.Text // capped at 64KB
+  startedAt  DateTime                @default(now()) @map("started_at")
+  finishedAt DateTime?               @map("finished_at")
+
+  task ScheduledTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([startedAt])
+  @@map("scheduled_task_runs")
 }
 
 /// A single UFW allow/deny rule (F5.4), mirrored to the host firewall via

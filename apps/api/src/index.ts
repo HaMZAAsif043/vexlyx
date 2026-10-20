@@ -38,6 +38,7 @@ import { cleanupRoutes } from "./modules/cleanup/routes.js";
 import { firewallRoutes } from "./modules/firewall/routes.js";
 import { servicesRoutes } from "./modules/services/routes.js";
 import { userRoutes } from "./modules/users/routes.js";
+import { scheduledTaskRoutes } from "./modules/scheduled-tasks/routes.js";
 import { auditLogRoutes } from "./modules/audit-log/routes.js";
 import { systemRoutes } from "./modules/system/routes.js";
 import { systemEmailRoutes } from "./modules/system-email/routes.js";
@@ -97,6 +98,7 @@ async function buildApp() {
   await app.register(deployRoutes, { prefix: "/api/projects" });
   await app.register(logRoutes, { prefix: "/api/projects" });
   await app.register(envRoutes, { prefix: "/api/projects" });
+  await app.register(scheduledTaskRoutes, { prefix: "/api/projects" });
   await app.register(wordpressRoutes, { prefix: "/api/projects" });
   await app.register(dockerfileRoutes, { prefix: "/api/projects" });
   await app.register(databaseRoutes, { prefix: "/api/databases" });

@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { SystemService } from "./service.js";
 import { UpdateSystemSettingsSchema } from "@vexlyx/shared";
 import { rescheduleBackupJob } from "../backups/scheduler.js";
+import { rescheduleAllTasks } from "../scheduled-tasks/scheduler.js";
 
 export async function systemRoutes(app: FastifyInstance) {
   const service = new SystemService(app.prisma);
@@ -46,6 +47,10 @@ export async function systemRoutes(app: FastifyInstance) {
     // effect without a restart, mirroring how a scheduleCron edit already
     // re-upserts (backups/routes.ts).
     await rescheduleBackupJob(timezone);
+
+    // Same for every enabled user scheduled task (F5.28) — its BullMQ
+    // schedulers carry the same `tz`, and nextRunAt is refreshed alongside.
+    await rescheduleAllTasks(app.prisma, timezone, app.log);
 
     return updated;
   });

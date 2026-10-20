@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import fp from "fastify-plugin";
-import { Queue, Worker, type Processor } from "bullmq";
+import { Queue, Worker, type Processor, type JobsOptions } from "bullmq";
 import { env } from "./env.js";
 
 declare module "fastify" {
@@ -26,8 +26,11 @@ function redisConnection() {
 // Exported helpers — used by feature modules to register their own queues
 // ---------------------------------------------------------------------------
 
-export function createQueue(name: string): Queue {
-  return new Queue(name, { connection: redisConnection() });
+export function createQueue(name: string, defaultJobOptions?: JobsOptions): Queue {
+  return new Queue(name, {
+    connection: redisConnection(),
+    ...(defaultJobOptions ? { defaultJobOptions } : {}),
+  });
 }
 
 export function createWorker<T>(

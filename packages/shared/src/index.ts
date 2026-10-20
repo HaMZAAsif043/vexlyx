@@ -342,6 +342,10 @@ export type {
   UpdateCleanupSettingsInput,
 } from "./schemas/cleanup.js";
 
+// NOTE: scheduled-task schemas are intentionally NOT re-exported here —
+// CLAUDE.md forbids adding barrel exports. Import them from
+// "@vexlyx/shared/schemas/scheduledTasks" instead.
+
 export {
   FirewallProtocolSchema,
   FirewallActionSchema,

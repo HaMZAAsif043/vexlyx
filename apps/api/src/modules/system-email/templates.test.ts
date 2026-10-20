@@ -16,6 +16,7 @@ const SAMPLES: { [E in keyof EmailParams]: EmailParams[E] } = {
   two_factor_reset: { name: "Ada" },
   quota_warning: { name: "Ada", resource: "project", used: 8, limit: 10, level: 80 },
   backup_failed: { error: "disk full", snapshotId: "snap-1" },
+  scheduled_task_failed: { taskName: "Laravel Scheduler", projectName: "My App", output: "Error: class not found", runId: "run-123" },
   test: {},
 };
 

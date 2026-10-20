@@ -43,6 +43,7 @@ import { DatabasePanel } from "@/components/projects/DatabasePanel";
 import { DomainPanel } from "@/components/projects/DomainPanel";
 import { FileManagerCard } from "@/components/projects/FileManagerCard";
 import { SftpPanel } from "@/components/projects/SftpPanel";
+import { ScheduledTasksPanel } from "@/components/projects/ScheduledTasksPanel";
 import type { Project, ProjectStatus, ProjectType } from "@vexlyx/shared";
 
 // ---------------------------------------------------------------------------
@@ -446,6 +447,9 @@ export default function ProjectDetailPage() {
               }}
             />
           )}
+
+          {/* Scheduled Tasks (Cron Jobs) (F5.28) */}
+          <ScheduledTasksPanel projectId={project.id} timezone={timezone} />
         </TabsContent>
       </Tabs>
 

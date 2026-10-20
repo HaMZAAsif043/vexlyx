@@ -32,6 +32,7 @@ export const UserResponseSchema = z.object({
   maxDatabases: z.number().int().nullable(),
   maxMailboxes: z.number().int().nullable(),
   maxSubAccounts: z.number().int().nullable(),
+  maxScheduledTasks: z.number().int().nullable(),
   permissions: z.array(PermissionSchema),
   // Reseller-only (F5.20); always present but only meaningful when role is
   // RESELLER. ADMIN-only to change.
@@ -88,6 +89,8 @@ export const UpdateUserQuotasSchema = z.object({
   maxDatabases: nullableQuota.optional(),
   maxMailboxes: nullableQuota.optional(),
   maxSubAccounts: nullableQuota.optional(),
+  // Scheduled tasks (F5.28).
+  maxScheduledTasks: nullableQuota.optional(),
   // Reseller-only (F5.20); ADMIN-only to set (enforced in the service, not
   // here, since that depends on who the requester is).
   oversellingEnabled: z.boolean().optional(),

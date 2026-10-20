@@ -25,6 +25,12 @@ export const PYTHON_SCRIPT_TIMEOUT_MS = {
   build: 3_660_000,
   /** docker compose up / start / stop / restart / down. */
   compose: 1_860_000,
+  /**
+   * `docker exec` of a scheduled task's command (F5.28). The script enforces
+   * the task's own timeout (max 3600s) plus the in-container kill grace — the
+   * backstop only has to sit above that.
+   */
+  exec: 3_780_000,
   /** git clone / fetch of a large repository. */
   git: 960_000,
   /** Database create / drop / test. */

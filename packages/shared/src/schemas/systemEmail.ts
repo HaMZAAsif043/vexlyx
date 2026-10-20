@@ -9,6 +9,7 @@ export const SYSTEM_EMAIL_EVENTS = [
   "two_factor_reset",
   "quota_warning",
   "backup_failed",
+  "scheduled_task_failed",
   "test",
 ] as const;
 export type SystemEmailEvent = (typeof SYSTEM_EMAIL_EVENTS)[number];

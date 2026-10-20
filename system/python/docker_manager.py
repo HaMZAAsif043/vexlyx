@@ -18,6 +18,8 @@ Commands:
   cleanup   -- `docker container prune` + `docker image prune -a` (F5.15).
   image_id  -- Resolve the current image ID for a tag, or null (F5.15).
   remove_image -- `docker image rm <id>`, no-ops if the image is in use (F5.15).
+  exec      -- Execute a command inside a project's running container (F5.28).
+               Returns: { exitCode, output, timedOut, containerId }
 
 Port allocation strategy:
   Each project gets a unique host port derived from a configurable range (default 8100-8999).
@@ -442,14 +444,26 @@ def generate_nginx_conf(
     return dest
 
 
-def get_container_id(compose_dir: str, docker_bin: str, project_type: str = "NODEJS") -> str | None:
-    """Return the short container ID of the primary (Traefik-facing) service, or None."""
+def compose_has_service(compose_dir: str | Path, service: str) -> bool:
+    """True when the project's generated compose file declares `service`."""
+    compose_file = Path(compose_dir) / "docker-compose.yml"
+    if not compose_file.is_file():
+        return False
+    try:
+        content = compose_file.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return re.search(r"(?m)^\s{2}%s:\s*$" % re.escape(service), content) is not None
+
+
+def service_container_id(compose_dir: str, docker_bin: str, service: str) -> str | None:
+    """Return the short container ID of a named Compose service, or None."""
     if not Path(compose_dir).is_dir() or not (Path(compose_dir) / "docker-compose.yml").is_file():
         return None
 
     result = run_bounded(
         QUICK_TIMEOUT,
-        [docker_bin, "compose", "ps", "-q", primary_service_name(project_type, compose_dir)],
+        [docker_bin, "compose", "ps", "-q", service],
         cwd=compose_dir,
         capture_output=True,
         text=True,
@@ -458,6 +472,34 @@ def get_container_id(compose_dir: str, docker_bin: str, project_type: str = "NOD
     )
     container_id = result.stdout.strip()
     return container_id if container_id else None
+
+
+def get_container_id(compose_dir: str, docker_bin: str, project_type: str = "NODEJS") -> str | None:
+    """Return the short container ID of the primary (Traefik-facing) service, or None."""
+    return service_container_id(
+        compose_dir,
+        docker_bin,
+        primary_service_name(project_type, compose_dir),
+    )
+
+
+# Every compose template names the service that runs application code "app".
+APP_SERVICE_NAME = "app"
+
+
+def app_container_id(compose_dir: str, docker_bin: str, project_type: str = "NODEJS") -> str | None:
+    """
+    Return the short container ID of the *application* service (F5.28).
+
+    Exec must not reuse the HTTP-facing lookup: WORDPRESS and no-build PHP
+    front a PHP-FPM "app" service with an nginx "web" service, so a command
+    like `php wp-cron.php` would otherwise be handed to nginx and fail. Falls
+    back to the HTTP-facing container only for a compose file that declares
+    no "app" service at all.
+    """
+    if compose_has_service(compose_dir, APP_SERVICE_NAME):
+        return service_container_id(compose_dir, docker_bin, APP_SERVICE_NAME)
+    return get_container_id(compose_dir, docker_bin, project_type)
 
 
 # ---------------------------------------------------------------------------
@@ -998,6 +1040,151 @@ def cmd_logs_follow(payload: dict) -> None:
                 pass
 
 
+# --- F5.28 exec tuning -------------------------------------------------------
+# Env marker stamped on every task exec; children inherit it, which is how a
+# timed-out command is located and stopped inside the container.
+EXEC_TASK_ENV = "VEXLYX_TASK_ID"
+# Read granularity for exec output — bounded so a noisy command cannot make the
+# host-side Python process buffer unbounded output in memory.
+READ_CHUNK_BYTES = 64 * 1024
+# Seconds the in-container kill gets before the local docker exec is dropped.
+KILL_GRACE_SECONDS = 10
+
+
+def cmd_exec(payload: dict) -> None:
+    """
+    Execute a command inside a project's running container (F5.28).
+
+    Required payload fields:
+      projectDir  -- absolute path to the deploy directory
+      projectType -- e.g. NODEJS, PYTHON, STATIC
+      shellCommand -- command string to execute
+      timeout     -- hard timeout in seconds (1-3600)
+      outputLimit -- max output bytes to capture (default 65536)
+
+    Returns: { exitCode, output, timedOut, containerId }
+    """
+    project_dir = require_field(payload, "projectDir")
+    project_type = payload.get("projectType", "NODEJS")
+    command = require_field(payload, "shellCommand")
+    timeout = int(payload.get("timeout", 300))
+    output_limit = int(payload.get("outputLimit", 65536))
+
+    if timeout < 1 or timeout > 3600:
+        fail("Timeout must be between 1 and 3600 seconds", "INVALID_TIMEOUT")
+
+    docker_bin = get_docker_binary()
+    compose_dir = str(Path(project_dir) / "deploy")
+
+    if not Path(compose_dir).is_dir() or not (Path(compose_dir) / "docker-compose.yml").is_file():
+        fail("Project not deployed (no compose directory)", "NOT_DEPLOYED")
+
+    # The *application* container, not the HTTP-facing one: WORDPRESS and
+    # no-build PHP front their PHP-FPM service with nginx, which cannot run
+    # the project's commands.
+    container_id = app_container_id(compose_dir, docker_bin, project_type)
+    if not container_id:
+        fail("No running container found for this project", "NO_CONTAINER")
+
+    # Unique marker for this exec's process tree. Children inherit their
+    # environment, so on timeout we can find and stop the command *inside* the
+    # container — killing only the local `docker exec` client would leave the
+    # command running while its run row is already marked TIMEOUT.
+    task_marker = os.urandom(16).hex()
+
+    # Use sh -c to support shell features; command is passed as argv[2] (not interpolated)
+    cmd = [docker_bin, "exec", "-e", f"{EXEC_TASK_ENV}={task_marker}", container_id, "sh", "-c", command]
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+    except Exception as e:
+        fail(f"Failed to start docker exec: {e}", "EXEC_SPAWN_ERROR")
+
+    # Captured output, hard-capped at output_limit bytes.
+    output = bytearray()
+    timed_out = False
+
+    def kill_in_container() -> None:
+        """TERM then KILL every process carrying this exec's env marker."""
+        kill_script = (
+            'pids="";'
+            "for p in /proc/[0-9]*; do "
+            'if tr "\\0" "\\n" < "$p/environ" 2>/dev/null | grep -qx "%s=%s"; then '
+            'pids="$pids ${p#/proc/}"; fi; done; '
+            "for pid in $pids; do kill -TERM $pid 2>/dev/null; done; "
+            "sleep 1; "
+            "for pid in $pids; do kill -KILL $pid 2>/dev/null; done"
+        ) % (EXEC_TASK_ENV, task_marker)
+        try:
+            subprocess.run(
+                [docker_bin, "exec", container_id, "sh", "-c", kill_script],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=KILL_GRACE_SECONDS + 10,
+            )
+        except Exception as e:
+            print(f"docker exec timeout-kill failed: {e}", file=sys.stderr, flush=True)
+
+    def on_deadline() -> None:
+        nonlocal timed_out
+        timed_out = True
+        # Stop the command inside the container first, then drop the local
+        # client so the read loop below gets EOF (the deadline stays armed
+        # until the command has actually stopped).
+        kill_in_container()
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
+    timer = threading.Timer(timeout, on_deadline)
+    timer.start()
+
+    try:
+        if proc.stdout:
+            while True:
+                try:
+                    # Fixed-size chunked reads: a command like
+                    # `head -c 1000000000 /dev/zero` must never be buffered
+                    # whole, only its first output_limit bytes are kept.
+                    chunk = proc.stdout.read1(READ_CHUNK_BYTES)
+                except (OSError, ValueError):
+                    break  # pipe torn down
+                if not chunk:
+                    break  # EOF — the exec client is gone, the command stopped
+                room = output_limit - len(output)
+                if room > 0:
+                    output.extend(chunk[: min(room, len(chunk))])
+                # Beyond the cap the stream keeps being drained and dropped,
+                # so the deadline still fires for a loud command that sleeps.
+    finally:
+        timer.cancel()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+
+    exit_code = proc.returncode
+
+    respond({
+        "exitCode": exit_code,
+        "output": output.decode("utf-8", errors="replace").rstrip("\n"),
+        "timedOut": timed_out,
+        "containerId": container_id,
+    })
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -1016,6 +1203,7 @@ COMMANDS = {
     "cleanup": cmd_cleanup,
     "image_id": cmd_image_id,
     "remove_image": cmd_remove_image,
+    "exec": cmd_exec,
 }
 
 

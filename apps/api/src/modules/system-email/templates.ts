@@ -10,6 +10,7 @@ export type EmailParams = {
   two_factor_reset: { name: string };
   quota_warning: { name: string; resource: string; used: number; limit: number; level: 80 | 100 };
   backup_failed: { error: string; snapshotId: string };
+  scheduled_task_failed: { taskName: string; projectName: string; output: string; runId: string };
   test: Record<string, never>;
 };
 
@@ -150,6 +151,18 @@ const TEMPLATES: { [E in SystemEmailEvent]: (params: EmailParams[E]) => Rendered
       paragraphs: [
         "This is a test message from your Vexlyx panel. If you can read it, system email is set up correctly.",
       ],
+    }),
+  scheduled_task_failed: ({ taskName, projectName, output, runId }) =>
+    render({
+      subject: `Scheduled task failed: ${taskName}`,
+      heading: `Scheduled task "${taskName}" failed`,
+      paragraphs: [
+        `The scheduled task "${taskName}" for project "${projectName}" has failed 3 times in a row.`,
+        `Run ID: ${runId}`,
+        `Output: ${output || "(no output)"}`,
+        "This task will not trigger failure emails again until it succeeds once.",
+      ],
+      action: { label: "View task in panel", url: panelUrl("/dashboard") },
     }),
 };
 

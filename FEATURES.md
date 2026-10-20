@@ -2341,7 +2341,7 @@ Hosted DNS (F5.25) could not actually serve the internet: CoreDNS was bound to l
 ---
 
 ### F5.28 — Scheduled Tasks (Cron Jobs)
-**Status:** 🔴 NOT STARTED
+**Status:** 🟢 COMPLETED
 
 **Description:**
 Users cannot schedule recurring work for their projects. A Laravel app needs `php artisan schedule:run` every minute, a WordPress site needs `wp-cron.php` triggered on a real schedule instead of on page views, and a Node or Python app often needs a nightly cleanup or report script. Today the only options are an external cron service or shell access to the host, and the panel deliberately gives users neither. The platform already schedules its own work with BullMQ (backups F5.3, Docker cleanup F5.15, both timezone-aware per F5.13), runs each project in its own container, and can email users (F5.23), so this feature adds a user-facing version of the same machinery: a command run **inside a project's container** on a cron schedule, with run history, a "Run now" button and failure emails.
@@ -2373,17 +2373,17 @@ Users cannot schedule recurring work for their projects. A Laravel app needs `ph
 - Daylight-saving transitions: rely on the cron library's `tz` handling and document that a 02:30 job may skip or repeat once a year.
 
 **Acceptance Criteria:**
-- [ ] A user can create, edit, enable/disable and delete scheduled tasks for their own project, with a 5-field cron expression and a command that runs inside the project's container
-- [ ] Tasks run on schedule in the configured server timezone (F5.13) and survive an API restart and a project redeploy
-- [ ] "Run now" executes a task immediately and the result appears in its run history
-- [ ] Each run records status, exit code, duration and capped output; only the latest 50 runs per task are kept
-- [ ] Runs are bounded by a timeout, never overlap for the same task, and are SKIPPED (not failed) when the project is not running
-- [ ] Commands execute through the Python system layer with an argument list, never through a host shell, and only in the owning project's container
-- [ ] Authorization: users see and manage only their own tasks, resellers their sub-accounts', admins all; unauthenticated calls return 401 and other users' tasks return 403/404
-- [ ] `maxScheduledTasks` quota enforced and shown like the other quotas, with F5.23 warnings at 80% and 100%
-- [ ] Failure email after 3 consecutive failures, sent once per failure streak, with a per-task opt-out
-- [ ] Create, update, delete and run-now are written to the audit log
-- [ ] Cron expressions faster than once a minute, invalid expressions and over-long commands are rejected with clear errors
+- [x] A user can create, edit, enable/disable and delete scheduled tasks for their own project, with a 5-field cron expression and a command that runs inside the project's container
+- [x] Tasks run on schedule in the configured server timezone (F5.13) and survive an API restart and a project redeploy
+- [x] "Run now" executes a task immediately and the result appears in its run history
+- [x] Each run records status, exit code, duration and capped output; only the latest 50 runs per task are kept
+- [x] Runs are bounded by a timeout, never overlap for the same task, and are SKIPPED (not failed) when the project is not running
+- [x] Commands execute through the Python system layer with an argument list, never through a host shell, and only in the owning project's container
+- [x] Authorization: users see and manage only their own tasks, resellers their sub-accounts', admins all; unauthenticated calls return 401 and other users' tasks return 403/404
+- [x] `maxScheduledTasks` quota enforced and shown like the other quotas, with F5.23 warnings at 80% and 100%
+- [x] Failure email after 3 consecutive failures, sent once per failure streak, with a per-task opt-out
+- [x] Create, update, delete and run-now are written to the audit log
+- [x] Cron expressions faster than once a minute, invalid expressions and over-long commands are rejected with clear errors
 
 **Test Plan:**
 1. Create a task `echo hello` every minute on a running project → after a minute a run appears with status SUCCESS and output `hello`
