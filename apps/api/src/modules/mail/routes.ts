@@ -11,10 +11,18 @@ import { isZodError, handleZodError } from "../../plugins/error-handler.js";
 
 function handleMailError(err: unknown, reply: FastifyReply): void {
   if (err instanceof MailError || err instanceof DomainError) {
+    if (err.statusCode >= 500)
+      reply.log.error(
+        {
+          code: err.code,
+          details: err instanceof MailError ? err.details : undefined,
+        },
+        "Mail synchronization failed",
+      );
     reply.status(err.statusCode).send({
       error: err.message,
       code: err.code,
-      details: {},
+      details: err instanceof MailError ? err.details : {},
     });
     return;
   }
@@ -86,7 +94,10 @@ export async function mailRoutes(app: FastifyInstance) {
     async (request, reply) => {
       try {
         const { domainId } = MailDomainParamSchema.parse(request.params);
-        const result = await service.getOrGenerateDkim(request.userId!, domainId);
+        const result = await service.getOrGenerateDkim(
+          request.userId!,
+          domainId,
+        );
         return reply.status(200).send(result);
       } catch (err) {
         handleMailError(err, reply);
@@ -103,7 +114,10 @@ export async function mailRoutes(app: FastifyInstance) {
     async (request, reply) => {
       try {
         const { domainId } = MailDomainParamSchema.parse(request.params);
-        const result = await service.ensureEmailAuthRecords(request.userId!, domainId);
+        const result = await service.ensureEmailAuthRecords(
+          request.userId!,
+          domainId,
+        );
         return reply.status(200).send(result);
       } catch (err) {
         handleMailError(err, reply);
@@ -120,7 +134,10 @@ export async function mailRoutes(app: FastifyInstance) {
     async (request, reply) => {
       try {
         const { domainId } = MailDomainParamSchema.parse(request.params);
-        const result = await service.getMailAuthStatus(request.userId!, domainId);
+        const result = await service.getMailAuthStatus(
+          request.userId!,
+          domainId,
+        );
         return reply.status(200).send(result);
       } catch (err) {
         handleMailError(err, reply);

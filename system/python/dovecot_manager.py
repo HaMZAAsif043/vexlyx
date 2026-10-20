@@ -20,6 +20,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from mail_state import (MailStateError, state_lock, active_directory, stage, publish, passwd_lines, run_service)
 
 # Stream Encoding Configuration
 if hasattr(sys.stdin, "reconfigure"):
@@ -56,25 +57,8 @@ def get_dovecot_dir() -> Path:
     return target
 
 
-def _make_world_readable(path: Path) -> None:
-    """The passwd-file is bind-mounted into the Dovecot container, whose `dovecot`
-    user differs from the host user that writes it (created 0640 under the usual
-    host umask). Unreadable, every IMAP/webmail login fails with a temporary
-    authentication failure. It holds password hashes only."""
-    try:
-        os.chmod(path, 0o644)
-    except OSError:
-        pass
-
-
 def get_users_file() -> Path:
-    config_dir = get_dovecot_dir() / "config"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    users_file = config_dir / "users"
-    if not users_file.exists():
-        users_file.write_text("", encoding="utf-8", newline="\n")
-    _make_world_readable(users_file)
-    return users_file
+    return active_directory("dovecot") / "users"
 
 
 # ---------------------------------------------------------------------------
@@ -111,52 +95,13 @@ def _format_passwd_line(address: str, password_hash: str, quota_mb: int) -> str:
 
 
 def sync_mailboxes(mailboxes: list, domains: list) -> dict:
-    """
-    Upserts Mailbox rows (scoped to `domains`) into the Dovecot passwd-file.
-
-    Existing lines for addresses under `domains` are replaced entirely by the
-    incoming `mailboxes` list (so deleted mailboxes disappear); lines for
-    addresses under domains NOT in `domains` (e.g. dev fixtures seeded by
-    entrypoint.sh) are left untouched.
-    """
-    users_file = get_users_file()
-    domains_lower = set(d.strip().lower() for d in domains if d.strip())
-
-    existing_lines = []
-    if users_file.exists():
-        existing_lines = [
-            line for line in users_file.read_text(encoding="utf-8").splitlines() if line.strip()
-        ]
-
-    # Keep lines whose address domain is NOT part of this sync's scope.
-    kept_lines = [
-        line for line in existing_lines
-        if _address_domain(line.split(":", 1)[0]) not in domains_lower
-    ]
-
-    new_lines = []
-    for m in mailboxes:
-        address = str(m.get("address", "")).strip().lower()
-        password_hash = str(m.get("passwordHash", ""))
-        quota_mb = int(m.get("quotaMb", DEFAULT_QUOTA_MB))
-        if "@" not in address or not password_hash:
-            continue
-        new_lines.append(_format_passwd_line(address, password_hash, quota_mb))
-
-    all_lines = kept_lines + new_lines
-    # newline="\n": Python's default text-mode write on Windows translates
-    # "\n" to "\r\n", which corrupts this passwd-file for the Linux Dovecot
-    # container (see the matching note in postfix_manager.py).
-    users_file.write_text(
-        "\n".join(all_lines) + ("\n" if all_lines else ""), encoding="utf-8", newline="\n"
-    )
-    _make_world_readable(users_file)
-
-    return {
-        "success": True,
-        "syncedCount": len(new_lines),
-        "mailboxes": [line.split(":", 1)[0] for line in new_lines],
-    }
+    with state_lock():
+        scope = {domain.strip().lower() for domain in domains}
+        kept = [line for line in get_users_file().read_text(encoding="utf-8").splitlines()
+                if line.strip() and _address_domain(line.split(":", 1)[0]) not in scope]
+        content = "\n".join(kept) + ("\n" if kept else "") + passwd_lines(mailboxes)
+        result = publish({"dovecot": stage("dovecot", {"users": content})})
+        return {**result, "syncedCount": len(mailboxes), "mailboxes": [item["address"] for item in mailboxes]}
 
 
 def get_vhosts_dir() -> Path:
@@ -242,14 +187,23 @@ def get_dovecot_status(host: str = "127.0.0.1") -> dict:
     except Exception:
         pass
 
-    users_file = get_dovecot_dir() / "config" / "users"
+    try:
+        users_file = get_users_file()
+    except MailStateError:
+        users_file = Path("/__vexlyx_uninitialized_users__")
     mailbox_count = 0
     if users_file.exists():
         mailbox_count = len(
             [line for line in users_file.read_text(encoding="utf-8").splitlines() if line.strip()]
         )
 
-    is_active = port143_open or port993_open or container_running
+    is_active = False
+    if container_running:
+        try:
+            run_service("dovecot", "health")
+            is_active = True
+        except MailStateError:
+            pass
     status_str = "active" if is_active else "inactive"
 
     return {
@@ -454,6 +408,9 @@ def main():
         else:
             respond({"error": f"Unknown command: {cmd}", "code": "UNKNOWN_COMMAND"})
             sys.exit(1)
+    except MailStateError as exc:
+        respond({"error": str(exc), "code": exc.code, "details": exc.details})
+        sys.exit(1)
     except Exception as e:
         respond({"error": str(e), "code": "EXECUTION_ERROR"})
         sys.exit(1)

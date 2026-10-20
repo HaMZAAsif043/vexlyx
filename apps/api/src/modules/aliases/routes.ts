@@ -1,3 +1,4 @@
+import { MailError } from "../mail/service.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { AliasService, AliasError } from "./service.js";
 import {
@@ -9,6 +10,22 @@ import {
 import { isZodError, handleZodError } from "../../plugins/error-handler.js";
 
 function handleAliasError(err: unknown, reply: FastifyReply): void {
+  if (err instanceof MailError) {
+    reply.log.error(
+      { code: err.code, details: err.details },
+      "Mail activation failed after a saved change",
+    );
+    reply
+      .status(err.statusCode)
+      .send({
+        error:
+          "The change was saved, but mail activation failed. Use Mail > Synchronize after correcting the service error. " +
+          err.message,
+        code: err.code,
+        details: { ...err.details, databaseChanged: true },
+      });
+    return;
+  }
   if (err instanceof AliasError) {
     reply.status(err.statusCode).send({
       error: err.message,
@@ -31,37 +48,29 @@ export async function aliasRoutes(app: FastifyInstance) {
   // ---------------------------------------------------------------------------
   // GET /api/aliases — list aliases (optionally filtered by domainId)
   // ---------------------------------------------------------------------------
-  app.get(
-    "/",
-    { preHandler: [app.requireAuth] },
-    async (request, reply) => {
-      try {
-        const query = AliasListQuerySchema.parse(request.query);
-        const aliases = await service.list(request.userId!, query);
-        return reply.status(200).send({ aliases });
-      } catch (err) {
-        handleAliasError(err, reply);
-      }
-    },
-  );
+  app.get("/", { preHandler: [app.requireAuth] }, async (request, reply) => {
+    try {
+      const query = AliasListQuerySchema.parse(request.query);
+      const aliases = await service.list(request.userId!, query);
+      return reply.status(200).send({ aliases });
+    } catch (err) {
+      handleAliasError(err, reply);
+    }
+  });
 
   // ---------------------------------------------------------------------------
   // POST /api/aliases — create alias (201 Created)
   // ---------------------------------------------------------------------------
-  app.post(
-    "/",
-    { preHandler: [app.requireAuth] },
-    async (request, reply) => {
-      try {
-        const input = CreateAliasSchema.parse(request.body);
-        const alias = await service.create(request.userId!, input);
-        reply.status(201);
-        return { alias };
-      } catch (err) {
-        handleAliasError(err, reply);
-      }
-    },
-  );
+  app.post("/", { preHandler: [app.requireAuth] }, async (request, reply) => {
+    try {
+      const input = CreateAliasSchema.parse(request.body);
+      const alias = await service.create(request.userId!, input);
+      reply.status(201);
+      return { alias };
+    } catch (err) {
+      handleAliasError(err, reply);
+    }
+  });
 
   // ---------------------------------------------------------------------------
   // PATCH /api/aliases/:id/destinations — replace destination list

@@ -1,5 +1,7 @@
 # Dovecot IMAP Server (F4.2)
 
+> Current deployments use [persistent mail state](mail-state.md), directory mounts, generation-specific passwd files, and Dovecot reloads with auth caching disabled. Paths and synchronization examples below document the original layout; use the linked guide for upgrades and operational commands.
+
 > **Feature:** F4.2 — Dovecot IMAP Server
 > **Status:** 🟢 COMPLETED
 > **Package:** `@vexlyx/api`, `@vexlyx/dashboard`, `@vexlyx/shared`

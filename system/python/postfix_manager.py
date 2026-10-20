@@ -29,6 +29,7 @@ import time
 from collections import deque
 from datetime import date, datetime, timezone
 from pathlib import Path
+from mail_state import (MailStateError, state_root, state_lock, active_directory, read_lines, stage, publish, postfix_files, reconcile, run_service)
 
 # Add possible site-packages
 if sys.platform == "win32":
@@ -89,7 +90,7 @@ def get_postfix_dir() -> Path:
 
 
 def get_dkim_dir() -> Path:
-    base = get_postfix_dir() / "opendkim"
+    base = state_root() / "opendkim"
     base.mkdir(parents=True, exist_ok=True)
     return base
 
@@ -536,206 +537,25 @@ def get_delivery_log(domain: str = None, mailbox: str = None, status: str = None
 # Virtual Domains & Mailbox Synchronization
 # ---------------------------------------------------------------------------
 
-class PostfixMapError(RuntimeError):
-    """A Postfix lookup table could not be recompiled into its .lmdb file."""
-
-    code = "POSTFIX_MAP_COMPILE_FAILED"
-
-    def __init__(self, map_name: str, detail: str) -> None:
-        super().__init__(
-            f"Failed to rebuild Postfix map '{map_name}' ({detail}). "
-            "Mail routing for recent mailbox/alias changes may be stale or "
-            "unreadable until it is rebuilt."
-        )
-        self.map_name = map_name
-
-
-def _make_world_readable(path: Path) -> None:
-    """Domain/mailbox tables are bind-mounted into the mail containers, whose
-    service users differ from the host user that writes them (created 0640 under
-    the usual host umask). Without read access Postfix cannot see the domain list."""
-    try:
-        os.chmod(path, 0o644)
-    except OSError:
-        pass
-
-
-def _compile_lmdb_map(map_name: str) -> None:
-    """Rebuild /etc/postfix/<map_name>.lmdb inside the Postfix container.
-
-    postmap drops privileges to the owner of the source file, and the bind-mounted
-    source is owned by the (non-root) host user, so it cannot write into the
-    root-owned /etc/postfix. Compiling a root-owned copy and moving the result
-    into place avoids that. The result must stay world-readable: delivery runs in
-    the unprivileged `virtual` service."""
-    # The exit status of the cp/postmap/mv/chmod chain is saved before the
-    # cleanup `rm`, otherwise `rm -f` (which always succeeds) would mask a
-    # failed rebuild and report success.
-    script = (
-        f"cp /etc/postfix/{map_name} /tmp/{map_name} && "
-        f"postmap lmdb:/tmp/{map_name} && "
-        f"mv /tmp/{map_name}.lmdb /etc/postfix/{map_name}.lmdb && "
-        f"chmod 644 /etc/postfix/{map_name}.lmdb; "
-        f"rc=$?; rm -f /tmp/{map_name}; exit $rc"
-    )
-    try:
-        proc = subprocess.run(
-            ["docker", "exec", "vexlyx-postfix", "sh", "-c", script],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except subprocess.TimeoutExpired as exc:
-        # A stale .lmdb silently keeps routing mail to old destinations
-        # (550 for new recipients), so a failed rebuild must be reported.
-        raise PostfixMapError(
-            map_name, f"timed out after {exc.timeout}s waiting for postmap"
-        ) from exc
-    except OSError as exc:
-        raise PostfixMapError(map_name, f"could not run docker: {exc}") from exc
-
-    if proc.returncode != 0:
-        output = (proc.stderr or proc.stdout or "").strip() or "no output"
-        raise PostfixMapError(map_name, f"exit {proc.returncode}: {output}")
-
-
 def sync_virtual_domains(domains: list, mailboxes: list = None) -> dict:
-    postfix_dir = get_postfix_dir()
-    config_dir = postfix_dir / "config"
-    config_dir.mkdir(parents=True, exist_ok=True)
+    with state_lock():
+        aliases = []
+        for line in read_lines("postfix", "virtual_alias_maps"):
+            parts = line.split(None, 1)
+            if len(parts) == 2:
+                aliases.append({"source": parts[0], "destinations": parts[1].split(",")})
+        files = postfix_files(domains, mailboxes or [], aliases)
+        result = publish({"postfix": stage("postfix", files)})
+        return {**result, "syncedCount": len(set(domains)), "domains": sorted(set(domains)), "reloaded": True}
 
-    virtual_domains_file = config_dir / "virtual_domains"
-    virtual_mailbox_file = config_dir / "virtual_mailbox_maps"
-
-    unique_domains = sorted(list(set(d.strip().lower() for d in domains if d.strip())))
-    # virtual_mailbox_domains has no lmdb:/hash: prefix in main.cf, so Postfix
-    # parses it as a plain whitespace-separated domain list rather than an
-    # indexed key-value map — a trailing "# comment" on the same line is not
-    # valid syntax there (only a full-line comment is) and logs a warning on
-    # every trivial-rewrite lookup.
-    lines = unique_domains
-    virtual_domains_file.write_text(
-        "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8", newline="\n"
-    )
-
-    mailbox_lines = []
-    if mailboxes:
-        for m in mailboxes:
-            m = m.strip().lower()
-            if "@" in m:
-                local_part, mailbox_domain = m.split("@", 1)
-                # Must match Dovecot's mail_location exactly (dovecot.conf):
-                # maildir:/var/mail/vhosts/%d/%n/Maildir — domain, THEN local
-                # part, THEN a "Maildir" subfolder. Postfix's virtual_mailbox_base
-                # is /var/mail/vhosts (main.cf), so this relative path is what
-                # decides where Postfix physically writes the message; getting
-                # the order or the "Maildir" segment wrong means mail is
-                # delivered somewhere Dovecot's IMAP will never look.
-                mailbox_lines.append(f"{m} {mailbox_domain}/{local_part}/Maildir/")
-    virtual_mailbox_file.write_text(
-        "\n".join(mailbox_lines) + ("\n" if mailbox_lines else ""), encoding="utf-8", newline="\n"
-    )
-    _make_world_readable(virtual_domains_file)
-    _make_world_readable(virtual_mailbox_file)
-
-    # Docker Desktop's Windows bind-mount (gRPC-FUSE/virtiofs) occasionally
-    # serves a transient read error for a fraction of a second right after a
-    # host-side write — same class of flakiness already noted for Dovecot's
-    # index files in dovecot.conf. Postfix's trivial-rewrite process has no
-    # retry logic: if it starts and hits that window, it fatals, and Postfix
-    # then throttles respawning it for up to service_throttle_time (60s),
-    # rejecting virtual-domain lookups the whole time. A brief settle delay
-    # before reload makes it very unlikely reload lands inside that window.
-    time.sleep(0.3)
-
-    # virtual_mailbox_maps is an lmdb: lookup table (see main.cf) — Postfix reads
-    # the compiled .lmdb file, not the plain-text source, so every write here
-    # must be recompiled with postmap before a reload picks it up. Without this,
-    # Postfix keeps rejecting mail for mailboxes added/removed after container
-    # startup (entrypoint.sh only runs postmap once, at boot).
-    #
-    # `docker exec` runs as root, so postmap writes the .lmdb file as
-    # root:root mode 640 — but actual mail delivery happens in the unprivileged
-    # `virtual` service, which runs as the postfix:postfix mail_owner and
-    # can't read a root-only file. Without the chmod below, every delivery
-    # fails with "Permission denied" / "mail system configuration error",
-    # even though the lookup table itself is correct and reload succeeds.
-    _compile_lmdb_map("virtual_mailbox_maps")
-
-    # If running in docker or host with postfix installed, attempt reload
-    reloaded = False
-    try:
-        proc = subprocess.run(
-            ["docker", "exec", "vexlyx-postfix", "postfix", "reload"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if proc.returncode == 0:
-            reloaded = True
-    except Exception:
-        pass
-
-    return {
-        "success": True,
-        "syncedCount": len(unique_domains),
-        "domains": unique_domains,
-        "reloaded": reloaded,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Virtual Aliases & Forwarding (F4.6)
-# ---------------------------------------------------------------------------
 
 def sync_virtual_aliases(aliases: list) -> dict:
-    """
-    Writes Postfix's virtual_alias_maps lookup table from VirtualAlias rows.
-    Each entry is "source\tdest1,dest2,..." — Postfix's native comma-separated
-    RHS syntax for multi-destination forwarding. A catch-all is stored with a
-    bare "@domain.com" source (no local part), which Postfix matches against
-    any address at that domain not otherwise listed in virtual_mailbox_maps.
-    """
-    postfix_dir = get_postfix_dir()
-    config_dir = postfix_dir / "config"
-    config_dir.mkdir(parents=True, exist_ok=True)
-
-    virtual_alias_file = config_dir / "virtual_alias_maps"
-
-    lines = []
-    for a in sorted(aliases, key=lambda a: a["source"]):
-        source = a["source"].strip().lower()
-        dests = ",".join(d.strip().lower() for d in a.get("destinations", []) if d.strip())
-        if source and dests:
-            lines.append(f"{source}\t{dests}")
-
-    virtual_alias_file.write_text(
-        "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8", newline="\n"
-    )
-    _make_world_readable(virtual_alias_file)
-
-    # See sync_virtual_domains: Windows bind-mount write-then-read race workaround.
-    time.sleep(0.3)
-
-    # Same postmap/chmod dance as virtual_mailbox_maps: postmap runs as root
-    # inside the container, but the unprivileged `virtual` delivery agent
-    # can't read a root-only .lmdb file without the chmod.
-    _compile_lmdb_map("virtual_alias_maps")
-
-    reloaded = False
-    try:
-        proc = subprocess.run(
-            ["docker", "exec", "vexlyx-postfix", "postfix", "reload"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if proc.returncode == 0:
-            reloaded = True
-    except Exception:
-        pass
-
-    return {"success": True, "syncedCount": len(lines), "reloaded": reloaded}
+    with state_lock():
+        domains = read_lines("postfix", "virtual_domains")
+        addresses = [line.split()[0] for line in read_lines("postfix", "virtual_mailbox_maps")]
+        files = postfix_files(domains, addresses, aliases)
+        result = publish({"postfix": stage("postfix", files)})
+        return {**result, "syncedCount": len(aliases), "reloaded": True}
 
 
 # ---------------------------------------------------------------------------
@@ -907,7 +727,10 @@ def get_postfix_status(host: str = "127.0.0.1") -> dict:
         pass
 
     # Count virtual domains
-    config_file = get_postfix_dir() / "config" / "virtual_domains"
+    try:
+        config_file = active_directory("postfix") / "virtual_domains"
+    except MailStateError:
+        config_file = Path("/__vexlyx_uninitialized_domains__")
     domain_count = 0
     if config_file.exists():
         lines = [l.strip() for l in config_file.read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#")]
@@ -917,7 +740,13 @@ def get_postfix_status(host: str = "127.0.0.1") -> dict:
     opendkim_open, _ = check_port_open(host, 8891, timeout=1.0)
 
     # Service overall status
-    is_active = (port25_open or port587_open or container_running)
+    is_active = False
+    if container_running:
+        try:
+            run_service("postfix", "health")
+            is_active = True
+        except MailStateError:
+            pass
     status_str = "active" if is_active else "inactive"
 
     return {
@@ -1075,6 +904,19 @@ def main():
         sys.exit(1)
 
     cmd = sys.argv[1]
+    if cmd == "reconcile_locked":
+        try:
+            with state_lock():
+                respond({"ready": True})
+                payload = json.loads(sys.stdin.readline(64 * 1024 * 1024))
+                respond(reconcile(payload))
+        except MailStateError as exc:
+            respond({"error": str(exc), "code": exc.code, "details": exc.details})
+            sys.exit(1)
+        except Exception:
+            respond({"error": "Mail state reconciliation failed.", "code": "MAIL_STATE_EXECUTION_ERROR"})
+            sys.exit(1)
+        return
     payload = {}
     if len(sys.argv) >= 3:
         try:
@@ -1090,7 +932,11 @@ def main():
             payload = {}
 
     try:
-        if cmd == "status":
+        if cmd == "verify_state":
+            run_service("dovecot", "health")
+            run_service("postfix", "health")
+            respond({"success": True})
+        elif cmd == "status":
             host = payload.get("host", "127.0.0.1")
             respond(get_postfix_status(host))
         elif cmd == "sync_virtual_domains":
@@ -1162,6 +1008,9 @@ def main():
         else:
             respond({"error": f"Unknown command: {cmd}", "code": "UNKNOWN_COMMAND"})
             sys.exit(1)
+    except MailStateError as exc:
+        respond({"error": str(exc), "code": exc.code, "details": exc.details})
+        sys.exit(1)
     except Exception as e:
         respond({"error": str(e), "code": getattr(e, "code", "EXECUTION_ERROR")})
         sys.exit(1)

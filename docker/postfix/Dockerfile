@@ -18,9 +18,13 @@ COPY main.cf /etc/postfix/main.cf
 COPY master.cf /etc/postfix/master.cf
 COPY opendkim.conf /etc/opendkim/opendkim.conf
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY mail-state.sh /usr/local/bin/mail-state.sh
 
 RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh && \
-    chmod +x /usr/local/bin/entrypoint.sh
+    sed -i 's/\r$//' /usr/local/bin/mail-state.sh && \
+    chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/mail-state.sh
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 CMD /usr/local/bin/mail-state.sh health
 
 # Expose SMTP (25) and Submission (587)
 EXPOSE 25 587 8891

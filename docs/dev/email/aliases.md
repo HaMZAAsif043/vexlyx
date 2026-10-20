@@ -1,5 +1,7 @@
 # Email Forwarding & Aliases (F4.6)
 
+> Runtime storage and synchronization now use [persistent mail state](mail-state.md). The original single-file mounts and settle-delay workaround described below are historical; follow the linked guide for current deployment and recovery commands. Activation failures return HTTP 503 after a saved database change and must be corrected and retried.
+
 ## What it does
 
 Lets a user forward mail from an address (`sales@domain.com`) to one or more real destination mailboxes, and configure a single catch-all address per domain (`@domain.com`) that receives anything not otherwise matched. This is the first developer doc for the mail subsystem — F4.1–F4.5 (Postfix, Dovecot, mailbox CRUD, webmail, SPF/DKIM/DMARC) are documented only in code comments.

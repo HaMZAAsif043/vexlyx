@@ -1,3 +1,4 @@
+import { MailError } from "../mail/service.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { MailboxService, MailboxError } from "./service.js";
 import { AuditLogService } from "../audit-log/service.js";
@@ -10,6 +11,22 @@ import {
 import { isZodError, handleZodError } from "../../plugins/error-handler.js";
 
 function handleMailboxError(err: unknown, reply: FastifyReply): void {
+  if (err instanceof MailError) {
+    reply.log.error(
+      { code: err.code, details: err.details },
+      "Mail activation failed after a saved change",
+    );
+    reply
+      .status(err.statusCode)
+      .send({
+        error:
+          "The change was saved, but mail activation failed. Use Mail > Synchronize after correcting the service error. " +
+          err.message,
+        code: err.code,
+        details: { ...err.details, databaseChanged: true },
+      });
+    return;
+  }
   if (err instanceof MailboxError) {
     reply.status(err.statusCode).send({
       error: err.message,
@@ -33,37 +50,29 @@ export async function mailboxRoutes(app: FastifyInstance) {
   // ---------------------------------------------------------------------------
   // GET /api/mailboxes — list mailboxes (optionally filtered by domainId)
   // ---------------------------------------------------------------------------
-  app.get(
-    "/",
-    { preHandler: [app.requireAuth] },
-    async (request, reply) => {
-      try {
-        const query = MailboxListQuerySchema.parse(request.query);
-        const mailboxes = await service.list(request.userId!, query);
-        return reply.status(200).send({ mailboxes });
-      } catch (err) {
-        handleMailboxError(err, reply);
-      }
-    },
-  );
+  app.get("/", { preHandler: [app.requireAuth] }, async (request, reply) => {
+    try {
+      const query = MailboxListQuerySchema.parse(request.query);
+      const mailboxes = await service.list(request.userId!, query);
+      return reply.status(200).send({ mailboxes });
+    } catch (err) {
+      handleMailboxError(err, reply);
+    }
+  });
 
   // ---------------------------------------------------------------------------
   // POST /api/mailboxes — create mailbox (201 Created)
   // ---------------------------------------------------------------------------
-  app.post(
-    "/",
-    { preHandler: [app.requireAuth] },
-    async (request, reply) => {
-      try {
-        const input = CreateMailboxSchema.parse(request.body);
-        const result = await service.create(request.userId!, input);
-        reply.status(201);
-        return result;
-      } catch (err) {
-        handleMailboxError(err, reply);
-      }
-    },
-  );
+  app.post("/", { preHandler: [app.requireAuth] }, async (request, reply) => {
+    try {
+      const input = CreateMailboxSchema.parse(request.body);
+      const result = await service.create(request.userId!, input);
+      reply.status(201);
+      return result;
+    } catch (err) {
+      handleMailboxError(err, reply);
+    }
+  });
 
   // ---------------------------------------------------------------------------
   // DELETE /api/mailboxes/:id — delete mailbox (204 No Content)

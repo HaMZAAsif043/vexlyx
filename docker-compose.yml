@@ -128,6 +128,18 @@ services:
       - default
       - traefik-net
 
+  mail-state-init:
+    image: alpine:3.20
+    restart: "no"
+    network_mode: none
+    environment:
+      VEXLYX_MAIL_UID: ${VEXLYX_MAIL_UID:-}
+      VEXLYX_MAIL_GID: ${VEXLYX_MAIL_GID:-}
+    volumes:
+      - ${VEXLYX_MAIL_STATE_DIR:-./docker/mail-data/state}:/state
+      - .:/source:ro
+    entrypoint: ["/bin/sh", "-ec", "sed 's/\\r$$//' /source/docker/mail-state-init.sh > /tmp/mail-state-init.sh; exec sh /tmp/mail-state-init.sh"]
+
   postfix:
     build:
       context: ./docker/postfix
@@ -139,10 +151,8 @@ services:
       - "${SMTP_PORT:-25}:25"
       - "${SUBMISSION_PORT:-587}:587"
     volumes:
-      - ./docker/postfix/config/virtual_domains:/etc/postfix/virtual_domains
-      - ./docker/postfix/config/virtual_mailbox_maps:/etc/postfix/virtual_mailbox_maps
-      - ./docker/postfix/config/virtual_alias_maps:/etc/postfix/virtual_alias_maps
-      - ./docker/postfix/opendkim:/etc/opendkim
+      - ${VEXLYX_MAIL_STATE_DIR:-./docker/mail-data/state}/postfix:/var/lib/vexlyx-mail/postfix
+      - ${VEXLYX_MAIL_STATE_DIR:-./docker/mail-data/state}/opendkim:/etc/opendkim
       - ./docker/postfix/opendkim/opendkim.conf:/etc/opendkim/opendkim.conf:ro
       # Shared Maildir storage with Dovecot (F4.2) — a host bind mount rather
       # than a named volume, since named volumes reset ownership to root on
@@ -160,7 +170,10 @@ services:
       - default
       - traefik-net
     depends_on:
-      - dovecot
+      mail-state-init:
+        condition: service_completed_successfully
+      dovecot:
+        condition: service_healthy
 
   dovecot:
     build:
@@ -171,13 +184,15 @@ services:
     restart: unless-stopped
     environment:
       VEXLYX_SEED_DEV_FIXTURES: "true"
+    depends_on:
+      mail-state-init:
+        condition: service_completed_successfully
     ports:
       - "${IMAP_PORT:-143}:143"
       - "${IMAPS_PORT:-993}:993"
     volumes:
       - ./docker/mail-data/vhosts:/var/mail/vhosts
-      # Mount the directory: a fresh checkout has no runtime users file yet.
-      - ./docker/dovecot/config:/etc/dovecot/virtual
+      - ${VEXLYX_MAIL_STATE_DIR:-./docker/mail-data/state}/dovecot:/var/lib/vexlyx-mail/dovecot
     networks:
       - default
       - traefik-net

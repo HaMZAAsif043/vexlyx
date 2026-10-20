@@ -4,7 +4,11 @@ import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
 import { fetchAPI, ApiRequestError } from "@/lib/api";
 import { useRefreshAnimation } from "@/hooks/useRefreshAnimation";
-import type { MailboxResponse, CreateMailboxInput, QuotaPreset } from "@vexlyx/shared";
+import type {
+  MailboxResponse,
+  CreateMailboxInput,
+  QuotaPreset,
+} from "@vexlyx/shared";
 
 function showWarnings(warnings: string[] | undefined): void {
   for (const warning of warnings ?? []) {
@@ -20,10 +24,15 @@ export function useMailboxes() {
 
   const fetchMailboxes = useCallback(async () => {
     try {
-      const data = await fetchAPI<{ mailboxes: MailboxResponse[] }>("/api/mailboxes");
+      const data = await fetchAPI<{ mailboxes: MailboxResponse[] }>(
+        "/api/mailboxes",
+      );
       setMailboxes(data.mailboxes ?? []);
     } catch (err) {
-      const msg = err instanceof ApiRequestError ? err.message : "Failed to load mailboxes";
+      const msg =
+        err instanceof ApiRequestError
+          ? err.message
+          : "Failed to load mailboxes";
       setError(msg);
     } finally {
       setIsLoading(false);
@@ -41,31 +50,46 @@ export function useMailboxes() {
   const createMailbox = async (
     input: CreateMailboxInput,
   ): Promise<{ mailbox: MailboxResponse; password: string }> => {
-    const result = await fetchAPI<{
-      mailbox: MailboxResponse;
-      password: string;
-      warnings?: string[];
-    }>("/api/mailboxes", { method: "POST", body: JSON.stringify(input) });
-    showWarnings(result.warnings);
-    await fetchMailboxes();
-    return result;
+    try {
+      const result = await fetchAPI<{
+        mailbox: MailboxResponse;
+        password: string;
+        warnings?: string[];
+      }>("/api/mailboxes", { method: "POST", body: JSON.stringify(input) });
+      showWarnings(result.warnings);
+      return result;
+    } finally {
+      await fetchMailboxes();
+    }
   };
 
   const deleteMailbox = async (id: string): Promise<void> => {
-    const result = await fetchAPI<{ warnings?: string[] } | undefined>(`/api/mailboxes/${id}`, {
-      method: "DELETE",
-    });
-    showWarnings(result?.warnings);
-    await fetchMailboxes();
+    try {
+      const result = await fetchAPI<{ warnings?: string[] } | undefined>(
+        `/api/mailboxes/${id}`,
+        {
+          method: "DELETE",
+        },
+      );
+      showWarnings(result?.warnings);
+    } finally {
+      await fetchMailboxes();
+    }
   };
 
   const updateQuota = async (id: string, quota: QuotaPreset): Promise<void> => {
-    const result = await fetchAPI<{ warnings?: string[] }>(`/api/mailboxes/${id}/quota`, {
-      method: "PATCH",
-      body: JSON.stringify({ quota }),
-    });
-    showWarnings(result.warnings);
-    await fetchMailboxes();
+    try {
+      const result = await fetchAPI<{ warnings?: string[] }>(
+        `/api/mailboxes/${id}/quota`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ quota }),
+        },
+      );
+      showWarnings(result.warnings);
+    } finally {
+      await fetchMailboxes();
+    }
   };
 
   const resetPassword = async (id: string): Promise<{ password: string }> => {

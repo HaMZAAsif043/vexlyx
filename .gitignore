@@ -41,6 +41,13 @@ docker/data/
 # Shared Maildir storage between Postfix and Dovecot (F4.1/F4.2) — runtime mail data
 docker/mail-data/*
 !docker/mail-data/.gitkeep
+docker/postfix/config/virtual_domains
+docker/postfix/config/virtual_mailbox_maps
+docker/postfix/config/virtual_alias_maps
+docker/dovecot/config/users
+docker/postfix/opendkim/KeyTable
+docker/postfix/opendkim/SigningTable
+docker/postfix/opendkim/TrustedHosts
 
 # Runtime mailbox credentials and offline remediation backups
 docker/dovecot/config/*

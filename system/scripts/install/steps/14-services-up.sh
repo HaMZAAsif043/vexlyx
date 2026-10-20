@@ -14,7 +14,7 @@ install -d -m 0755 \
 
 COMPOSE=(docker compose --env-file "${VEXLYX_SECRETS_FILE}" -f docker-compose.yml -f docker-compose.prod.yml)
 
-"${COMPOSE[@]}" up -d
+"${COMPOSE[@]}" up -d --wait --wait-timeout 120
 
 log_info "Waiting for the panel API to respond..."
 tries=30
@@ -23,11 +23,20 @@ until "${COMPOSE[@]}" exec -T api curl -fsS http://localhost:5000/api/health >/d
   (( tries-- ))
 done
 
+if ! "${COMPOSE[@]}" exec -T api curl -fsS http://localhost:5000/api/health >/dev/null; then
+  die "The panel API did not become ready — inspect Compose logs before retrying."
+fi
+
 if "${COMPOSE[@]}" ps --status running --services | grep -qx api; then
   log_ok "All services started."
 else
-  log_warn "The api container is not running — check: docker compose -f docker-compose.yml -f docker-compose.prod.yml logs api"
+  die "The api container is not running — inspect Compose logs before retrying."
 fi
+
+log_info "Reconciling mail state from PostgreSQL and verifying live lookups..."
+"${COMPOSE[@]}" exec -T api node dist/scripts/sync-mail-state.js
+"${COMPOSE[@]}" exec -T api python "${VEXLYX_HOME}/system/python/postfix_manager.py" verify_state
+log_ok "Postfix maps and Dovecot users are synchronized and ready."
 
 install -m 0755 system/scripts/install/sync-mail-tls.sh /usr/local/sbin/vexlyx-sync-mail-tls
 cat > /etc/systemd/system/vexlyx-mail-tls.service <<EOF

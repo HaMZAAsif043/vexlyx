@@ -49,13 +49,20 @@ export class AliasService {
    * Creates an alias under a domain owned by the user. A catch-all is stored
    * as "@domain.com" (no local part) and is capped at one per domain.
    */
-  async create(userId: string, input: CreateAliasInput): Promise<AliasResponse> {
+  async create(
+    userId: string,
+    input: CreateAliasInput,
+  ): Promise<AliasResponse> {
     const domain = await this.prisma.domain.findFirst({
       where: { id: input.domainId, userId },
     });
 
     if (!domain) {
-      throw new AliasError("Domain not found or unauthorized", "DOMAIN_NOT_FOUND", 404);
+      throw new AliasError(
+        "Domain not found or unauthorized",
+        "DOMAIN_NOT_FOUND",
+        404,
+      );
     }
 
     if (input.isCatchAll) {
@@ -71,9 +78,15 @@ export class AliasService {
       }
     }
 
-    const source = (input.isCatchAll ? `@${domain.hostname}` : `${input.localPart}@${domain.hostname}`).toLowerCase();
+    const source = (
+      input.isCatchAll
+        ? `@${domain.hostname}`
+        : `${input.localPart}@${domain.hostname}`
+    ).toLowerCase();
 
-    const existing = await this.prisma.virtualAlias.findUnique({ where: { source } });
+    const existing = await this.prisma.virtualAlias.findUnique({
+      where: { source },
+    });
     if (existing) {
       throw new AliasError("Alias address already exists", "ALIAS_EXISTS", 409);
     }
@@ -91,12 +104,7 @@ export class AliasService {
       include: { domain: true },
     });
 
-    try {
-      await this.mailService.syncVirtualAliases(userId);
-    } catch {
-      // Non-fatal: the alias exists regardless of sync outcome. The user can
-      // still trigger a sync manually via the mail dashboard.
-    }
+    await this.mailService.syncVirtualAliases(userId);
 
     return this.toResponse(alias);
   }
@@ -114,7 +122,11 @@ export class AliasService {
     });
 
     if (!alias) {
-      throw new AliasError("Alias not found or unauthorized", "ALIAS_NOT_FOUND", 404);
+      throw new AliasError(
+        "Alias not found or unauthorized",
+        "ALIAS_NOT_FOUND",
+        404,
+      );
     }
 
     await this.prisma.virtualAlias.update({
@@ -122,11 +134,7 @@ export class AliasService {
       data: { destinations: input.destinations.map((d) => d.toLowerCase()) },
     });
 
-    try {
-      await this.mailService.syncVirtualAliases(userId);
-    } catch {
-      // Non-fatal, see create().
-    }
+    await this.mailService.syncVirtualAliases(userId);
   }
 
   /**
@@ -138,16 +146,16 @@ export class AliasService {
     });
 
     if (!alias) {
-      throw new AliasError("Alias not found or unauthorized", "ALIAS_NOT_FOUND", 404);
+      throw new AliasError(
+        "Alias not found or unauthorized",
+        "ALIAS_NOT_FOUND",
+        404,
+      );
     }
 
     await this.prisma.virtualAlias.delete({ where: { id: alias.id } });
 
-    try {
-      await this.mailService.syncVirtualAliases(userId);
-    } catch {
-      // Non-fatal, see create().
-    }
+    await this.mailService.syncVirtualAliases(userId);
   }
 
   private toResponse(alias: {

@@ -1,0 +1,3 @@
+FROM docker:27-cli
+RUN apk add --no-cache python3 bash git
+WORKDIR /workspace

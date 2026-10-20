@@ -13,7 +13,7 @@ import unittest
 import uuid
 from pathlib import Path
 
-from tests.test_mail_credential_security import GUARD, IMAGE, PUBLISHED, USERS, docker, row
+from tests.test_mail_credential_security import GUARD, IMAGE, PUBLISHED, USERS, STATE_ROOT, initialize_state, docker, row
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -38,9 +38,10 @@ class MailStack:
     def start(self, webmail=False):
         docker("network", "create", self.network)
         docker("volume", "create", self.volume)
-        mount = f"type=volume,src={self.volume},dst=/etc/dovecot/virtual"
+        mount = f"type=volume,src={self.volume},dst={STATE_ROOT}"
         docker("run", "-d", "--name", self.names["offline"], "--mount", mount,
                "--entrypoint", "sh", IMAGE, "-c", "sleep 3600")
+        initialize_state(self.names["offline"])
         good = docker("exec", self.names["offline"], "doveadm", "-c", "/dev/null", "pw",
                       "-s", "ARGON2ID", "-p", PASSWORD).stdout.strip()
         docker("exec", "-i", self.names["offline"], "sh", "-c", f"cat > {USERS}",
@@ -57,13 +58,16 @@ class MailStack:
         self.wait_for_imap()
         self.wait_for_smtp()
         # Test-only local routing. No public recipients or external mail traffic.
+        state = "/var/lib/vexlyx-mail/postfix"
+        generation = docker("exec", self.names["postfix"], "sed", "-n",
+                            "1s/^# generation://p", f"{state}/active.conf").stdout.strip()
+        directory = f"{state}/generations/{generation}"
         docker("exec", "-i", self.names["postfix"], "sh", "-c",
-               "cat > /etc/postfix/virtual_domains", input="credential-test.example\n")
+               f"cat > {directory}/virtual_domains", input="credential-test.example\n")
         docker("exec", "-i", self.names["postfix"], "sh", "-c",
-               "cat > /etc/postfix/virtual_mailbox_maps",
+               f"cat > {directory}/virtual_mailbox_maps",
                input=f"{ADDRESS} credential-test.example/customer/Maildir/\n")
-        docker("exec", self.names["postfix"], "postmap", "lmdb:/etc/postfix/virtual_mailbox_maps")
-        docker("exec", self.names["postfix"], "chmod", "644", "/etc/postfix/virtual_mailbox_maps.lmdb")
+        docker("exec", self.names["postfix"], "/usr/local/bin/mail-state.sh", "prepare", generation)
         docker("exec", self.names["postfix"], "postfix", "reload")
         if webmail:
             docker("create", "--name", self.names["roundcube"], "--network", self.network,
@@ -93,7 +97,8 @@ class MailStack:
         return client
 
     def wait_for_imap(self):
-        for _ in range(30):
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
             try:
                 with self.imap():
                     return
@@ -102,7 +107,8 @@ class MailStack:
         raise AssertionError("Isolated IMAPS server did not start")
 
     def wait_for_smtp(self):
-        for _ in range(30):
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
             try:
                 with self.smtp():
                     return

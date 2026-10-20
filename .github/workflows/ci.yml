@@ -18,6 +18,13 @@ env:
   DATABASE_URL: postgresql://vexlyx:placeholder@localhost:5432/vexlyx_dev
 
 jobs:
+  mail-state:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh tests/mail-state/run.sh
+
   mail-credential-security:
     runs-on: ubuntu-latest
     steps:

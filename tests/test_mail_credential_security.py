@@ -17,7 +17,9 @@ from pathlib import Path
 
 
 IMAGE = "vexlyx-dovecot:credentials-test"
-USERS = "/etc/dovecot/virtual/users"
+STATE_ROOT = "/var/lib/vexlyx-mail/dovecot"
+GENERATION = "a" * 32
+USERS = f"{STATE_ROOT}/generations/{GENERATION}/users"
 GUARD = "/usr/local/bin/users-security.sh"
 PUBLISHED = (
     "{ARGON2ID}$argon2id$v=19$m=65536,t=3,p=1$U+cApES5CNwhZn7jxTvr0w$"
@@ -27,13 +29,23 @@ PUBLISHED = (
 
 def docker(*args, input=None, check=True, timeout=60):
     result = subprocess.run(
-        ["docker", *args], input=input, capture_output=True,
-        text=True, encoding="utf-8", timeout=timeout,
+        ["docker", *args], input=input.encode("utf-8") if input is not None else None,
+        capture_output=True, timeout=timeout,
     )
+    # Keep fixture files byte-exact: Windows text pipes otherwise turn LF into CRLF.
+    result.stdout = result.stdout.decode("utf-8")
+    result.stderr = result.stderr.decode("utf-8")
     if check and result.returncode:
         # Do not put passwords/hashes from argv or stdin in failure messages.
         raise AssertionError(f"Docker command failed ({result.returncode}): {result.stderr}")
     return result
+
+
+def initialize_state(container):
+    from system.python.mail_state import activation
+    docker("exec", container, "mkdir", "-p", f"{STATE_ROOT}/generations/{GENERATION}")
+    docker("exec", "-i", container, "sh", "-c", f"cat > {STATE_ROOT}/active.conf",
+           input=activation("dovecot", GENERATION))
 
 
 def row(address, hash_value):
@@ -80,11 +92,12 @@ class TestMailCredentialSecurity(unittest.TestCase):
         self.addCleanup(lambda: docker("rm", "-f", self.box, check=False))
         docker("run", "-d", "--name", self.box, "--mount", self.mount,
                "--entrypoint", "sh", IMAGE, "-c", "sleep 3600")
+        initialize_state(self.box)
         self.addCleanup(self.remove_servers)
 
     @property
     def mount(self):
-        return f"type=volume,src={self.volume},dst=/etc/dovecot/virtual"
+        return f"type=volume,src={self.volume},dst={STATE_ROOT}"
 
     def remove_servers(self):
         for name in reversed(self.containers):
@@ -97,7 +110,7 @@ class TestMailCredentialSecurity(unittest.TestCase):
         return docker("exec", self.box, "cat", USERS).stdout
 
     def guard(self, action="check", check=True):
-        return docker("exec", self.box, GUARD, action, check=check)
+        return docker("exec", self.box, GUARD, action, USERS, check=check)
 
     def start(self, seed=None):
         name = self.prefix + "-server-" + str(len(self.containers))
@@ -137,6 +150,7 @@ class TestMailCredentialSecurity(unittest.TestCase):
         docker("exec", self.box, "doveadm", "-c", "/dev/null", "pw", "-t", PUBLISHED, "-p", "vexlyx-dev")
 
     def test_fresh_image_defaults_to_empty_and_rejects_public_login(self):
+        self.write("")
         name = self.start()
         with self.connect(name) as client:
             self.assertEqual(self.read(), "")
@@ -196,7 +210,7 @@ class TestMailCredentialSecurity(unittest.TestCase):
         self.write(original)
         self.assertNotEqual(self.guard("remediate", check=False).returncode, 0)
         self.assertEqual(self.read(), original)
-        leftovers = docker("exec", self.box, "sh", "-c", f"find /etc/dovecot/virtual -name 'users.*'").stdout
+        leftovers = docker("exec", self.box, "sh", "-c", f"find {STATE_ROOT} -name 'users.*'").stdout
         self.assertEqual(leftovers, "")
 
     def test_backup_failure_leaves_original_untouched(self):

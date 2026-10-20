@@ -43,11 +43,14 @@ collect_config() {
   env_or_prompt VEXLYX_MAIL_DOMAIN "Mail domain" "${VEXLYX_DOMAIN}"
 
   VEXLYX_ENABLE_PUBLIC_DNS="${VEXLYX_ENABLE_PUBLIC_DNS:-false}"
+  VEXLYX_MAIL_STATE_DIR="${VEXLYX_MAIL_STATE_DIR:-/var/lib/vexlyx/mail}"
+  [[ "$VEXLYX_MAIL_STATE_DIR" =~ ^/[a-zA-Z0-9_./-]+$ && "$VEXLYX_MAIL_STATE_DIR" != / ]] || die "VEXLYX_MAIL_STATE_DIR must be a dedicated absolute path without whitespace or shell characters."
   VEXLYX_REPO_URL="${VEXLYX_REPO_URL:-https://github.com/atlantiqs-org/vexlyx.git}"
   VEXLYX_REPO_REF="${VEXLYX_REPO_REF:-latest}"
 
   export VEXLYX_DOMAIN VEXLYX_BASE_DOMAIN VEXLYX_ADMIN_EMAIL VEXLYX_ADMIN_NAME VEXLYX_ADMIN_PASSWORD
   export VEXLYX_MAIL_HOSTNAME VEXLYX_MAIL_DOMAIN VEXLYX_ENABLE_PUBLIC_DNS
+  export VEXLYX_MAIL_STATE_DIR
   export VEXLYX_REPO_URL VEXLYX_REPO_REF VEXLYX_HOME
 }
 
@@ -59,6 +62,9 @@ generate_secrets() {
   if [[ -f "${VEXLYX_SECRETS_FILE}" ]]; then
     log_ok "Secrets already present at ${VEXLYX_SECRETS_FILE} — leaving them untouched."
     load_secrets_file
+    if ! grep -q '^VEXLYX_MAIL_STATE_DIR=' "${VEXLYX_SECRETS_FILE}"; then
+      printf '\nVEXLYX_MAIL_STATE_DIR=%s\n' "${VEXLYX_MAIL_STATE_DIR:-/var/lib/vexlyx/mail}" >> "${VEXLYX_SECRETS_FILE}"
+    fi
     return 0
   fi
 
@@ -82,6 +88,7 @@ VEXLYX_BASE_DOMAIN=${VEXLYX_BASE_DOMAIN}
 VEXLYX_ADMIN_EMAIL=${VEXLYX_ADMIN_EMAIL}
 VEXLYX_MAIL_HOSTNAME=${VEXLYX_MAIL_HOSTNAME}
 VEXLYX_MAIL_DOMAIN=${VEXLYX_MAIL_DOMAIN}
+VEXLYX_MAIL_STATE_DIR=${VEXLYX_MAIL_STATE_DIR}
 SESSION_SECRET=${SESSION_SECRET}
 ENCRYPTION_KEY=${ENCRYPTION_KEY}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}

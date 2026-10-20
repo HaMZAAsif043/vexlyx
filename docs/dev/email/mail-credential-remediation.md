@@ -6,45 +6,58 @@ those existing accounts. Treat those credentials as compromised.
 
 ## Before upgrading an existing deployment
 
-Schedule a mail maintenance window. Run these commands from the existing
-checkout **before pulling/checking out the fix**: Git may delete the formerly
-tracked file during the upgrade. Use your normal production Compose environment.
+Schedule a mail maintenance window and back up PostgreSQL and message storage.
+Run the new standalone migrator against the old checkout **before pulling or
+checking out the fix**. Git removes tracked Postfix maps and OpenDKIM tables as
+well as the old users file; backing up only users is insufficient.
+
+Keep mail services and API writers stopped throughout the upgrade. Set
+`MAIL_STATE_DIR` below to the same `VEXLYX_MAIL_STATE_DIR` configured in
+`/etc/vexlyx/vexlyx.env`. Run from the existing checkout:
 
 ```sh
 docker compose --env-file /etc/vexlyx/vexlyx.env \
   -f docker-compose.yml -f docker-compose.prod.yml stop api roundcube postfix dovecot
-sudo install -d -m 0700 /etc/vexlyx/mail-backups
-MAIL_USERS_BACKUP=$(sudo mktemp /etc/vexlyx/mail-backups/users.XXXXXX)
-sudo install -m 0600 docker/dovecot/config/users "$MAIL_USERS_BACKUP"
-printf 'Mailbox users backup: %s\n' "$MAIL_USERS_BACKUP"
+MAIL_STATE_DIR=/var/lib/vexlyx/mail
+git fetch origin main
+MAIL_MIGRATOR=$(mktemp)
+git show FETCH_HEAD:system/python/mail_state_migrate.py > "$MAIL_MIGRATOR"
+sudo python3 "$MAIL_MIGRATOR" --source "$PWD" --state-root "$MAIL_STATE_DIR"
+rm -f "$MAIL_MIGRATOR"
 ```
 
-Record the backup filename. Keep mail services and mailbox provisioning stopped
-throughout the procedure; do not allow another process to rewrite the users file.
+Stop here if migration fails. Do not restore or update tracked files until it
+succeeds. Migration copies all three Postfix maps, the Dovecot users file, and
+OpenDKIM tables and private keys. It verifies backup checksums and initializes
+the active runtime generations. Its result reports the backup directory, also
+recorded in `$MAIL_STATE_DIR/.migration.json`. Existing Maildirs stay in place.
 
-The panel rewrites that tracked file whenever mailboxes change, so on a running
-server Git sees it as modified and **refuses to update** ("Please commit your
-changes or stash them"). The installer behaves the same way: it leaves a checkout
-with local changes alone, so re-running `install.sh` will not upgrade it. With the
-backup safely taken, discard the local change and update the checkout (use
-`git pull`, not the installer, so mail services are not started before the
-remediation below):
+Preserve staged or unrelated source edits separately. After verifying the
+migration backup, restore only the backed-up, tracked runtime files so dirty
+generated maps do not block the update:
 
 ```sh
-git checkout -- docker/dovecot/config/users
-git pull --ff-only origin main   # or: git fetch origin tag vX.Y.Z && git checkout vX.Y.Z
+git diff --cached --quiet || { echo "Preserve staged changes before upgrading" >&2; exit 1; }
+for file in \
+  docker/postfix/config/virtual_domains \
+  docker/postfix/config/virtual_mailbox_maps \
+  docker/postfix/config/virtual_alias_maps \
+  docker/dovecot/config/users \
+  docker/postfix/opendkim/KeyTable \
+  docker/postfix/opendkim/SigningTable \
+  docker/postfix/opendkim/TrustedHosts; do
+  if git ls-files --error-unmatch "$file" >/dev/null 2>&1; then
+    git restore --worktree -- "$file" || exit 1
+  fi
+done
+git merge --ff-only FETCH_HEAD
 ```
 
-The file is no longer tracked after this update, so Git leaves it alone from now on.
-Restore the backup (set `MAIL_USERS_BACKUP` to the recorded filename if using a new
-shell):
-
-```sh
-sudo install -m 0600 "$MAIL_USERS_BACKUP" docker/dovecot/config/users
-```
-
-Do not copy backup credentials into tickets or logs. Back up the mailbox
-database using your normal database backup procedure too.
+Stop if the merge fails; do not discard source edits to force it through. For a
+release-tag upgrade, fetch that exact tag instead of main and use the same
+FETCH_HEAD throughout migration and checkout. The updated installer performs
+these preservation checks automatically when run from outside the checkout.
+Do not copy backup credentials into tickets or logs.
 
 ## Remediate and restart
 
@@ -56,7 +69,7 @@ block startup until the operator reviews and rotates them.
 
 ```sh
 docker compose --env-file /etc/vexlyx/vexlyx.env \
-  -f docker-compose.yml -f docker-compose.prod.yml build dovecot
+  -f docker-compose.yml -f docker-compose.prod.yml build dovecot postfix
 docker compose --env-file /etc/vexlyx/vexlyx.env \
   -f docker-compose.yml -f docker-compose.prod.yml run --rm --no-deps \
   --entrypoint /usr/local/bin/users-security.sh dovecot remediate
@@ -78,8 +91,17 @@ vulnerability; remediate restored backups before restarting production.
 
 ```sh
 docker compose --env-file /etc/vexlyx/vexlyx.env \
-  -f docker-compose.yml -f docker-compose.prod.yml up -d dovecot postfix roundcube api
+  -f docker-compose.yml -f docker-compose.prod.yml up -d --wait dovecot postfix api
+docker compose --env-file /etc/vexlyx/vexlyx.env \
+  -f docker-compose.yml -f docker-compose.prod.yml exec -T api node dist/scripts/sync-mail-state.js
+docker compose --env-file /etc/vexlyx/vexlyx.env \
+  -f docker-compose.yml -f docker-compose.prod.yml exec -T api python /opt/vexlyx/system/python/postfix_manager.py verify_state
+docker compose --env-file /etc/vexlyx/vexlyx.env \
+  -f docker-compose.yml -f docker-compose.prod.yml up -d roundcube
 ```
+
+Rebuild the API through the normal installer/build procedure before this restart.
+Do not admit mail traffic until reconciliation and verification succeed.
 
 Confirm the exposed credentials fail IMAP and SMTP AUTH, and verify a legitimate
 mailbox can log in and send/receive mail. Review available authentication and mail
@@ -87,10 +109,14 @@ logs for possible misuse; removing credentials cannot undo prior access.
 
 ## Fresh deployments and development
 
-A fresh checkout contains only an empty configuration directory placeholder.
 The container creates its runtime `users` file with mode 0640, readable by the
-Dovecot auth worker. Both passdb and userdb use `/etc/dovecot/virtual/users`.
-The host path used by mailbox synchronization remains unchanged.
+Dovecot auth worker. Both passdb and userdb use the generation selected in
+`/var/lib/vexlyx-mail/dovecot/active.conf`. The remediation command resolves that
+active generation automatically. Production host state is stored under
+`VEXLYX_MAIL_STATE_DIR` (normally `/var/lib/vexlyx/mail`); use that same directory
+for the migration command above if your deployment customizes it. Every staged
+generation is checked before activation, so synchronization cannot restore an
+exposed credential in production.
 
 Seeding defaults to disabled in the image. Base development Compose explicitly
 sets `VEXLYX_SEED_DEV_FIXTURES: "true"`; the production overlay overrides it with

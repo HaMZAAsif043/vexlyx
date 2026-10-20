@@ -32,25 +32,32 @@ export function useAliases() {
   }, [fetchAliases]);
 
   const createAlias = async (input: CreateAliasInput): Promise<AliasResponse> => {
-    const result = await fetchAPI<{ alias: AliasResponse }>("/api/aliases", {
-      method: "POST",
-      body: JSON.stringify(input),
-    });
-    await fetchAliases();
-    return result.alias;
+    try {
+      const result = await fetchAPI<{ alias: AliasResponse }>("/api/aliases", {
+        method: "POST", body: JSON.stringify(input),
+      });
+      return result.alias;
+    } finally {
+      await fetchAliases();
+    }
   };
 
   const updateAliasDestinations = async (id: string, destinations: string[]): Promise<void> => {
-    await fetchAPI(`/api/aliases/${id}/destinations`, {
-      method: "PATCH",
-      body: JSON.stringify({ destinations }),
-    });
-    await fetchAliases();
+    try {
+      await fetchAPI(`/api/aliases/${id}/destinations`, {
+        method: "PATCH", body: JSON.stringify({ destinations }),
+      });
+    } finally {
+      await fetchAliases();
+    }
   };
 
   const deleteAlias = async (id: string): Promise<void> => {
-    await fetchAPI(`/api/aliases/${id}`, { method: "DELETE" });
-    await fetchAliases();
+    try {
+      await fetchAPI(`/api/aliases/${id}`, { method: "DELETE" });
+    } finally {
+      await fetchAliases();
+    }
   };
 
   return {

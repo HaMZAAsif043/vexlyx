@@ -18,6 +18,10 @@
 # installer — see docs/dev/installer.md).
 
 services:
+  mail-state-init:
+    volumes:
+      - ${VEXLYX_MAIL_STATE_DIR:-/var/lib/vexlyx/mail}:/state
+
   postgres:
     ports: !reset []
     environment:
@@ -86,12 +90,15 @@ services:
       # Never seed the known-password dev test mailboxes in production.
       VEXLYX_SEED_DEV_FIXTURES: "false"
     volumes:
+      - ${VEXLYX_MAIL_STATE_DIR:-/var/lib/vexlyx/mail}/postfix:/var/lib/vexlyx-mail/postfix
+      - ${VEXLYX_MAIL_STATE_DIR:-/var/lib/vexlyx/mail}/opendkim:/etc/opendkim
       - ./docker/mail-data/certs:/etc/postfix/certs:ro
 
   dovecot:
     environment:
       VEXLYX_SEED_DEV_FIXTURES: "false"
     volumes:
+      - ${VEXLYX_MAIL_STATE_DIR:-/var/lib/vexlyx/mail}/dovecot:/var/lib/vexlyx-mail/dovecot
       - ./docker/mail-data/certs:/etc/dovecot/certs:ro
 
   # The base file routes Roundcube on the dev hostname over plain HTTP, which
@@ -171,8 +178,10 @@ services:
     volumes:
       - ${VEXLYX_HOME:-/opt/vexlyx}:${VEXLYX_HOME:-/opt/vexlyx}
       - /var/run/docker.sock:/var/run/docker.sock
+      - ${VEXLYX_MAIL_STATE_DIR:-/var/lib/vexlyx/mail}:${VEXLYX_MAIL_STATE_DIR:-/var/lib/vexlyx/mail}
     environment:
       NODE_ENV: production
+      VEXLYX_MAIL_STATE_DIR: ${VEXLYX_MAIL_STATE_DIR:-/var/lib/vexlyx/mail}
       PORT: "5000"
       HOST: 0.0.0.0
       CORS_ORIGIN: https://${VEXLYX_DOMAIN}

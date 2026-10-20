@@ -42,7 +42,10 @@ export class MailboxService {
    * Lists mailboxes owned by the user, optionally filtered by domain, joined
    * with real Maildir disk usage from Dovecot.
    */
-  async list(userId: string, query: MailboxListQuery): Promise<MailboxResponse[]> {
+  async list(
+    userId: string,
+    query: MailboxListQuery,
+  ): Promise<MailboxResponse[]> {
     const mailboxes = await this.prisma.mailbox.findMany({
       where: {
         userId,
@@ -79,12 +82,17 @@ export class MailboxService {
   async create(
     userId: string,
     input: CreateMailboxInput,
-  ): Promise<{ mailbox: MailboxResponse; password: string; warnings?: string[] }> {
+  ): Promise<{
+    mailbox: MailboxResponse;
+    password: string;
+    warnings?: string[];
+  }> {
     await assertUnderQuota(
       this.prisma,
       userId,
       "mailbox",
-      (message, code, statusCode) => new MailboxError(message, code, statusCode),
+      (message, code, statusCode) =>
+        new MailboxError(message, code, statusCode),
     );
 
     const domain = await this.prisma.domain.findFirst({
@@ -92,19 +100,31 @@ export class MailboxService {
     });
 
     if (!domain) {
-      throw new MailboxError("Domain not found or unauthorized", "DOMAIN_NOT_FOUND", 404);
+      throw new MailboxError(
+        "Domain not found or unauthorized",
+        "DOMAIN_NOT_FOUND",
+        404,
+      );
     }
 
     const address = `${input.localPart}@${domain.hostname}`.toLowerCase();
 
-    const existing = await this.prisma.mailbox.findUnique({ where: { address } });
+    const existing = await this.prisma.mailbox.findUnique({
+      where: { address },
+    });
     if (existing) {
-      throw new MailboxError("Mailbox address already exists", "MAILBOX_EXISTS", 409);
+      throw new MailboxError(
+        "Mailbox address already exists",
+        "MAILBOX_EXISTS",
+        409,
+      );
     }
 
     // Determined before creation: whether this will be the domain's first
     // mailbox, used to trigger F4.5 SPF/DKIM/DMARC/MX auto-configuration.
-    const isFirstMailbox = (await this.prisma.mailbox.count({ where: { domainId: domain.id } })) === 0;
+    const isFirstMailbox =
+      (await this.prisma.mailbox.count({ where: { domainId: domain.id } })) ===
+      0;
 
     const password = generatePassword();
     const passwordHash = await argon2.hash(password, { type: argon2.argon2id });
@@ -121,9 +141,14 @@ export class MailboxService {
     });
     void notifyQuotaThreshold(this.prisma, userId, "mailbox");
 
-    await this.auditLog.log(userId, "mailbox.created", { type: "Mailbox", id: mailbox.id }, {
-      after: { address: mailbox.address },
-    });
+    await this.auditLog.log(
+      userId,
+      "mailbox.created",
+      { type: "Mailbox", id: mailbox.id },
+      {
+        after: { address: mailbox.address },
+      },
+    );
 
     const warnings = await this.syncMailServer(userId);
 
@@ -184,7 +209,11 @@ export class MailboxService {
     });
 
     if (!mailbox) {
-      throw new MailboxError("Mailbox not found or unauthorized", "MAILBOX_NOT_FOUND", 404);
+      throw new MailboxError(
+        "Mailbox not found or unauthorized",
+        "MAILBOX_NOT_FOUND",
+        404,
+      );
     }
 
     const password = generatePassword();
@@ -213,7 +242,11 @@ export class MailboxService {
     });
 
     if (!mailbox) {
-      throw new MailboxError("Mailbox not found or unauthorized", "MAILBOX_NOT_FOUND", 404);
+      throw new MailboxError(
+        "Mailbox not found or unauthorized",
+        "MAILBOX_NOT_FOUND",
+        404,
+      );
     }
 
     await this.prisma.mailbox.update({
@@ -227,20 +260,32 @@ export class MailboxService {
   /**
    * Deletes a mailbox and removes it from Dovecot's passwd-file.
    */
-  async delete(userId: string, mailboxId: string): Promise<{ warnings: string[] }> {
+  async delete(
+    userId: string,
+    mailboxId: string,
+  ): Promise<{ warnings: string[] }> {
     const mailbox = await this.prisma.mailbox.findFirst({
       where: { id: mailboxId, userId },
     });
 
     if (!mailbox) {
-      throw new MailboxError("Mailbox not found or unauthorized", "MAILBOX_NOT_FOUND", 404);
+      throw new MailboxError(
+        "Mailbox not found or unauthorized",
+        "MAILBOX_NOT_FOUND",
+        404,
+      );
     }
 
     await this.prisma.mailbox.delete({ where: { id: mailbox.id } });
 
-    await this.auditLog.log(userId, "mailbox.deleted", { type: "Mailbox", id: mailboxId }, {
-      before: { address: mailbox.address },
-    });
+    await this.auditLog.log(
+      userId,
+      "mailbox.deleted",
+      { type: "Mailbox", id: mailboxId },
+      {
+        before: { address: mailbox.address },
+      },
+    );
 
     return { warnings: await this.syncMailServer(userId) };
   }

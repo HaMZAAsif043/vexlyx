@@ -7,6 +7,8 @@ set -euo pipefail
 
 log_step "[7/16] Rendering production Traefik config"
 
+python3 system/python/mail_state_migrate.py --source "${VEXLYX_HOME}" --state-root "${VEXLYX_MAIL_STATE_DIR}"
+
 sed "s/__ACME_EMAIL__/${VEXLYX_ADMIN_EMAIL}/" \
   docker/traefik/traefik.prod.yml.tmpl > docker/traefik/traefik.prod.yml
 

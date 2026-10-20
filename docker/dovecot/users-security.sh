@@ -4,7 +4,14 @@ set -euo pipefail
 umask 077
 
 action=${1:-check}
-users=${2:-/etc/dovecot/virtual/users}
+if [[ -n "${2:-}" ]]; then
+    users=$2
+else
+    root=/var/lib/vexlyx-mail/dovecot
+    generation=$(sed -n '1s/^# generation://p' "$root/active.conf")
+    [[ "$generation" =~ ^[0-9a-f]{32}$ ]] || { echo "Invalid Dovecot generation" >&2; exit 1; }
+    users="$root/generations/$generation/users"
+fi
 case "$action" in
     check|remediate) ;;
     *) echo "Usage: users-security.sh check|remediate [users-file]" >&2; exit 2 ;;

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { reconcileMailState, MailStateSyncError } from "./state-sync.js";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,38 +28,22 @@ import { DnsService } from "../domains/dns-service.js";
 import { getServerIp } from "../domains/resolvers.js";
 import { getPythonBin } from "../../utils/pythonBin.js";
 import type { FastifyBaseLogger } from "fastify";
-import { PYTHON_SCRIPT_TIMEOUT_MS, watchChildTimeout } from "../../utils/processWatchdog.js";
+import {
+  PYTHON_SCRIPT_TIMEOUT_MS,
+  watchChildTimeout,
+} from "../../utils/processWatchdog.js";
 import {
   buildRequiredMailRecords,
   isRecordLive,
   lookupLiveMailRecords,
 } from "./required-records.js";
 
-/** Shape of the sync_virtual_* results, including the error payload form. */
-interface PostfixSyncResult {
-  success: boolean;
-  syncedCount: number;
-  error?: string;
-  code?: string;
-}
-
-/**
- * runPostfixManager resolves whatever JSON the script printed, including
- * `{ error, code }` with a non-zero exit. For the map syncs that must not look
- * like success: a failed postmap rebuild leaves Postfix on a stale map.
- */
-function assertPostfixSyncSucceeded<T extends PostfixSyncResult>(result: T): T {
-  if (result.error) {
-    throw new MailError(result.error, result.code ?? "POSTFIX_SYNC_FAILED", 502);
-  }
-  return result;
-}
-
 export class MailError extends Error {
   constructor(
     message: string,
     public readonly code: string,
     public readonly statusCode: number = 400,
+    public readonly details: Record<string, unknown> = {},
   ) {
     super(message);
     this.name = "MailError";
@@ -80,7 +65,9 @@ function getPostfixManagerScriptPath(): string {
     }
   }
 
-  return candidates[0] ?? resolve(process.cwd(), "system/python/postfix_manager.py");
+  return (
+    candidates[0] ?? resolve(process.cwd(), "system/python/postfix_manager.py")
+  );
 }
 
 function getDovecotManagerScriptPath(): string {
@@ -98,7 +85,9 @@ function getDovecotManagerScriptPath(): string {
     }
   }
 
-  return candidates[0] ?? resolve(process.cwd(), "system/python/dovecot_manager.py");
+  return (
+    candidates[0] ?? resolve(process.cwd(), "system/python/dovecot_manager.py")
+  );
 }
 
 function getWebmailManagerScriptPath(): string {
@@ -116,7 +105,9 @@ function getWebmailManagerScriptPath(): string {
     }
   }
 
-  return candidates[0] ?? resolve(process.cwd(), "system/python/webmail_manager.py");
+  return (
+    candidates[0] ?? resolve(process.cwd(), "system/python/webmail_manager.py")
+  );
 }
 
 function getPythonExe(): string {
@@ -127,9 +118,18 @@ function getPythonExe(): string {
     const candidates = [
       resolve(process.cwd(), "Python/pythoncore-3.14-64/python.exe"),
       resolve(process.cwd(), "apps/api/Python/pythoncore-3.14-64/python.exe"),
-      resolve(process.cwd(), "../../apps/api/Python/pythoncore-3.14-64/python.exe"),
-      resolve(process.env.LOCALAPPDATA || "", "Python/pythoncore-3.14-64/python.exe"),
-      resolve(process.env.USERPROFILE || "", "AppData/Local/Python/pythoncore-3.14-64/python.exe"),
+      resolve(
+        process.cwd(),
+        "../../apps/api/Python/pythoncore-3.14-64/python.exe",
+      ),
+      resolve(
+        process.env.LOCALAPPDATA || "",
+        "Python/pythoncore-3.14-64/python.exe",
+      ),
+      resolve(
+        process.env.USERPROFILE || "",
+        "AppData/Local/Python/pythoncore-3.14-64/python.exe",
+      ),
     ];
     for (const c of candidates) {
       if (c && existsSync(c)) {
@@ -177,20 +177,66 @@ export async function runPostfixManager<T = Record<string, unknown>>(
     });
 
     child.on("error", (err) => {
-      rej(new MailError(`Failed to spawn postfix_manager: ${err.message}`, "SPAWN_ERROR", 500));
+      rej(
+        new MailError(
+          `Failed to spawn postfix_manager: ${err.message}`,
+          "SPAWN_ERROR",
+          500,
+        ),
+      );
     });
 
     child.on("close", (code) => {
       if (code !== 0 && !stdout.trim()) {
-        rej(new MailError(`postfix_manager failed (code ${code}): ${stderr}`, "PROCESS_ERROR", 500));
+        rej(
+          new MailError(
+            `postfix_manager failed (code ${code}): ${stderr}`,
+            "PROCESS_ERROR",
+            500,
+          ),
+        );
         return;
       }
 
       try {
-        const parsed = JSON.parse(stdout.trim()) as T;
-        res(parsed);
+        const parsed: unknown = JSON.parse(stdout.trim());
+        if (parsed && typeof parsed === "object" && "error" in parsed) {
+          const failure = parsed as Record<string, unknown>;
+          rej(
+            new MailError(
+              typeof failure.error === "string"
+                ? failure.error
+                : "Mail synchronization failed",
+              typeof failure.code === "string"
+                ? failure.code
+                : "MAIL_SYNC_FAILED",
+              503,
+              failure.details && typeof failure.details === "object"
+                ? (failure.details as Record<string, unknown>)
+                : {},
+            ),
+          );
+          return;
+        }
+        if (code !== 0) {
+          rej(
+            new MailError(
+              "The mail service operation did not complete.",
+              "MAIL_PROCESS_ERROR",
+              503,
+            ),
+          );
+          return;
+        }
+        res(parsed as T);
       } catch {
-        rej(new MailError(`Failed to parse manager response: ${stdout}`, "PARSE_ERROR", 500));
+        rej(
+          new MailError(
+            `Failed to parse manager response: ${stdout}`,
+            "PARSE_ERROR",
+            500,
+          ),
+        );
       }
     });
 
@@ -236,20 +282,66 @@ export async function runDovecotManager<T = Record<string, unknown>>(
     });
 
     child.on("error", (err) => {
-      rej(new MailError(`Failed to spawn dovecot_manager: ${err.message}`, "SPAWN_ERROR", 500));
+      rej(
+        new MailError(
+          `Failed to spawn dovecot_manager: ${err.message}`,
+          "SPAWN_ERROR",
+          500,
+        ),
+      );
     });
 
     child.on("close", (code) => {
       if (code !== 0 && !stdout.trim()) {
-        rej(new MailError(`dovecot_manager failed (code ${code}): ${stderr}`, "PROCESS_ERROR", 500));
+        rej(
+          new MailError(
+            `dovecot_manager failed (code ${code}): ${stderr}`,
+            "PROCESS_ERROR",
+            500,
+          ),
+        );
         return;
       }
 
       try {
-        const parsed = JSON.parse(stdout.trim()) as T;
-        res(parsed);
+        const parsed: unknown = JSON.parse(stdout.trim());
+        if (parsed && typeof parsed === "object" && "error" in parsed) {
+          const failure = parsed as Record<string, unknown>;
+          rej(
+            new MailError(
+              typeof failure.error === "string"
+                ? failure.error
+                : "Mail synchronization failed",
+              typeof failure.code === "string"
+                ? failure.code
+                : "MAIL_SYNC_FAILED",
+              503,
+              failure.details && typeof failure.details === "object"
+                ? (failure.details as Record<string, unknown>)
+                : {},
+            ),
+          );
+          return;
+        }
+        if (code !== 0) {
+          rej(
+            new MailError(
+              "The mail service operation did not complete.",
+              "MAIL_PROCESS_ERROR",
+              503,
+            ),
+          );
+          return;
+        }
+        res(parsed as T);
       } catch {
-        rej(new MailError(`Failed to parse manager response: ${stdout}`, "PARSE_ERROR", 500));
+        rej(
+          new MailError(
+            `Failed to parse manager response: ${stdout}`,
+            "PARSE_ERROR",
+            500,
+          ),
+        );
       }
     });
 
@@ -295,26 +387,130 @@ async function runWebmailManager<T = Record<string, unknown>>(
     });
 
     child.on("error", (err) => {
-      rej(new MailError(`Failed to spawn webmail_manager: ${err.message}`, "SPAWN_ERROR", 500));
+      rej(
+        new MailError(
+          `Failed to spawn webmail_manager: ${err.message}`,
+          "SPAWN_ERROR",
+          500,
+        ),
+      );
     });
 
     child.on("close", (code) => {
       if (code !== 0 && !stdout.trim()) {
-        rej(new MailError(`webmail_manager failed (code ${code}): ${stderr}`, "PROCESS_ERROR", 500));
+        rej(
+          new MailError(
+            `webmail_manager failed (code ${code}): ${stderr}`,
+            "PROCESS_ERROR",
+            500,
+          ),
+        );
         return;
       }
 
       try {
-        const parsed = JSON.parse(stdout.trim()) as T;
-        res(parsed);
+        const parsed: unknown = JSON.parse(stdout.trim());
+        if (parsed && typeof parsed === "object" && "error" in parsed) {
+          const failure = parsed as Record<string, unknown>;
+          rej(
+            new MailError(
+              typeof failure.error === "string"
+                ? failure.error
+                : "Mail synchronization failed",
+              typeof failure.code === "string"
+                ? failure.code
+                : "MAIL_SYNC_FAILED",
+              503,
+              failure.details && typeof failure.details === "object"
+                ? (failure.details as Record<string, unknown>)
+                : {},
+            ),
+          );
+          return;
+        }
+        if (code !== 0) {
+          rej(
+            new MailError(
+              "The mail service operation did not complete.",
+              "MAIL_PROCESS_ERROR",
+              503,
+            ),
+          );
+          return;
+        }
+        res(parsed as T);
       } catch {
-        rej(new MailError(`Failed to parse manager response: ${stdout}`, "PARSE_ERROR", 500));
+        rej(
+          new MailError(
+            `Failed to parse manager response: ${stdout}`,
+            "PARSE_ERROR",
+            500,
+          ),
+        );
       }
     });
 
     child.stdin.write(JSON.stringify(payload));
     child.stdin.end();
   });
+}
+
+export async function synchronizeMailState(prisma: PrismaClient) {
+  const readSnapshot = async () => {
+    const [domains, aliases] = await prisma.$transaction(
+      [
+        prisma.domain.findMany({
+          select: {
+            hostname: true,
+            userId: true,
+            mailboxes: {
+              select: { address: true, password: true, quota: true },
+            },
+          },
+        }),
+        prisma.virtualAlias.findMany({
+          select: { source: true, destinations: true, userId: true },
+        }),
+      ],
+      { isolationLevel: "RepeatableRead" },
+    );
+    return { domains, aliases };
+  };
+  let synchronized: Awaited<ReturnType<typeof readSnapshot>> | undefined;
+  try {
+    await reconcileMailState(
+      getPythonExe(),
+      getPostfixManagerScriptPath(),
+      async () => {
+        synchronized = await readSnapshot();
+        return {
+          domains: synchronized.domains.map((domain) => domain.hostname),
+          mailboxes: synchronized.domains.flatMap((domain) =>
+            domain.mailboxes.map((mailbox) => ({
+              address: mailbox.address,
+              passwordHash: mailbox.password,
+              quotaMb: mailbox.quota,
+            })),
+          ),
+          aliases: synchronized.aliases.map((alias) => ({
+            source: alias.source,
+            destinations: alias.destinations,
+          })),
+        };
+      },
+    );
+  } catch (error) {
+    if (error instanceof MailStateSyncError)
+      throw new MailError(error.message, error.code, 503, error.details);
+    throw error;
+  }
+  if (!synchronized)
+    throw new MailError(
+      "Mail synchronization did not read a database snapshot.",
+      "MAIL_SYNC_PROTOCOL_ERROR",
+      503,
+    );
+  return synchronized;
 }
 
 export class MailService {
@@ -354,12 +550,22 @@ export class MailService {
     domain: {
       hostname: string;
       dnsMode: "CONNECTED" | "MANAGED";
-      dnsRecords: Array<{ type: string; name: string; value: string; priority: number | null }>;
+      dnsRecords: Array<{
+        type: string;
+        name: string;
+        value: string;
+        priority: number | null;
+      }>;
     },
     activeSelector: string,
     dkimValue: string | undefined,
   ): Promise<{
-    records: Array<{ type: string; name: string; value: string; priority: number | null }>;
+    records: Array<{
+      type: string;
+      name: string;
+      value: string;
+      priority: number | null;
+    }>;
     requiredRecords?: RequiredMailRecordResponse[];
   }> {
     if (domain.dnsMode === "MANAGED") return { records: domain.dnsRecords };
@@ -372,7 +578,10 @@ export class MailService {
     const live = await lookupLiveMailRecords(domain.hostname, required);
     return {
       records: live,
-      requiredRecords: required.map((r) => ({ ...r, live: isRecordLive(r, live) })),
+      requiredRecords: required.map((r) => ({
+        ...r,
+        live: isRecordLive(r, live),
+      })),
     };
   }
 
@@ -407,7 +616,9 @@ export class MailService {
       where: { domainId: { in: domains.map((d) => d.id) }, status: "ACTIVE" },
       select: { domainId: true, selector: true },
     });
-    const activeSelectorByDomainId = new Map(activeDkimKeys.map((k) => [k.domainId, k.selector]));
+    const activeSelectorByDomainId = new Map(
+      activeDkimKeys.map((k) => [k.domainId, k.selector]),
+    );
 
     const result: VirtualDomain[] = [];
 
@@ -433,7 +644,10 @@ export class MailService {
         (r) => r.type === "TXT" && r.name === `${activeSelector}._domainkey`,
       );
 
-      const { checks, score, grade } = this.computeAuthChecks(records, activeSelector);
+      const { checks, score, grade } = this.computeAuthChecks(
+        records,
+        activeSelector,
+      );
 
       result.push({
         domainId: d.id,
@@ -474,36 +688,59 @@ export class MailService {
    * (CONNECTED, see resolveAuthRecords).
    */
   private computeAuthChecks(
-    dnsRecords: Array<{ type: string; name: string; value: string; priority: number | null }>,
+    dnsRecords: Array<{
+      type: string;
+      name: string;
+      value: string;
+      priority: number | null;
+    }>,
     activeDkimSelector: string = "default",
   ): {
-    checks: { spf: MailAuthCheck; dkim: MailAuthCheck; dmarc: MailAuthCheck; mx: MailAuthCheck };
+    checks: {
+      spf: MailAuthCheck;
+      dkim: MailAuthCheck;
+      dmarc: MailAuthCheck;
+      mx: MailAuthCheck;
+    };
     score: number;
     grade: MailAuthStatusResponse["grade"];
   } {
     const unquote = (value: string) => value.replace(/^"|"$/g, "").trim();
 
     const spfRecord = dnsRecords.find(
-      (r) => r.type === "TXT" && r.name === "@" && unquote(r.value).startsWith("v=spf1"),
+      (r) =>
+        r.type === "TXT" &&
+        r.name === "@" &&
+        unquote(r.value).startsWith("v=spf1"),
     );
     const dmarcRecord = dnsRecords.find(
-      (r) => r.type === "TXT" && r.name === "_dmarc" && unquote(r.value).startsWith("v=DMARC1"),
+      (r) =>
+        r.type === "TXT" &&
+        r.name === "_dmarc" &&
+        unquote(r.value).startsWith("v=DMARC1"),
     );
     const dkimRecord = dnsRecords.find(
       (r) => r.type === "TXT" && r.name === `${activeDkimSelector}._domainkey`,
     );
     const mxRecord = dnsRecords.find((r) => r.type === "MX" && r.name === "@");
 
-    const spfValid = !!spfRecord && /^v=spf1(\s+\S+)*\s+[-~?]all$/.test(unquote(spfRecord.value));
+    const spfValid =
+      !!spfRecord &&
+      /^v=spf1(\s+\S+)*\s+[-~?]all$/.test(unquote(spfRecord.value));
     const dmarcValid =
-      !!dmarcRecord && /^v=DMARC1;\s*p=(none|quarantine|reject)/.test(unquote(dmarcRecord.value));
+      !!dmarcRecord &&
+      /^v=DMARC1;\s*p=(none|quarantine|reject)/.test(
+        unquote(dmarcRecord.value),
+      );
     const dkimPublished = !!dkimRecord;
     const mxPresent = !!mxRecord;
 
     const checks = {
       spf: {
         pass: spfValid,
-        detail: spfRecord ? unquote(spfRecord.value) : "No SPF TXT record found at @",
+        detail: spfRecord
+          ? unquote(spfRecord.value)
+          : "No SPF TXT record found at @",
       },
       dkim: {
         pass: dkimPublished,
@@ -513,11 +750,15 @@ export class MailService {
       },
       dmarc: {
         pass: dmarcValid,
-        detail: dmarcRecord ? unquote(dmarcRecord.value) : "No DMARC TXT record found at _dmarc",
+        detail: dmarcRecord
+          ? unquote(dmarcRecord.value)
+          : "No DMARC TXT record found at _dmarc",
       },
       mx: {
         pass: mxPresent,
-        detail: mxRecord ? `${mxRecord.value} (priority ${mxRecord.priority})` : "No MX record found",
+        detail: mxRecord
+          ? `${mxRecord.value} (priority ${mxRecord.priority})`
+          : "No MX record found",
       },
     };
 
@@ -528,7 +769,13 @@ export class MailService {
       (checks.mx.pass ? 25 : 0);
 
     const grade: MailAuthStatusResponse["grade"] =
-      score === 100 ? "Excellent" : score >= 75 ? "Good" : score >= 50 ? "Needs Improvement" : "Poor";
+      score === 100
+        ? "Excellent"
+        : score >= 75
+          ? "Good"
+          : score >= 50
+            ? "Needs Improvement"
+            : "Poor";
 
     return { checks, score, grade };
   }
@@ -536,14 +783,21 @@ export class MailService {
   /**
    * Computes the F4.5 deliverability scorecard for a single domain.
    */
-  async getMailAuthStatus(userId: string, domainId: string): Promise<MailAuthStatusResponse> {
+  async getMailAuthStatus(
+    userId: string,
+    domainId: string,
+  ): Promise<MailAuthStatusResponse> {
     const domain = await this.prisma.domain.findFirst({
       where: { id: domainId, userId },
       include: { dnsRecords: true },
     });
 
     if (!domain) {
-      throw new MailError("Domain not found or unauthorized", "DOMAIN_NOT_FOUND", 404);
+      throw new MailError(
+        "Domain not found or unauthorized",
+        "DOMAIN_NOT_FOUND",
+        404,
+      );
     }
 
     const activeDkimKey = await this.prisma.dkimKey.findFirst({
@@ -554,10 +808,13 @@ export class MailService {
     const selector = activeDkimKey?.selector ?? "default";
     const dkim =
       domain.dnsMode === "CONNECTED"
-        ? await runPostfixManager<{ found: boolean; dnsRecordValue: string }>("get_dkim", {
-            domain: domain.hostname,
-            selector,
-          })
+        ? await runPostfixManager<{ found: boolean; dnsRecordValue: string }>(
+            "get_dkim",
+            {
+              domain: domain.hostname,
+              selector,
+            },
+          )
         : undefined;
 
     const { records, requiredRecords } = await this.resolveAuthRecords(
@@ -587,7 +844,10 @@ export class MailService {
    * (F4.5). Safe to call repeatedly — record creation is check-then-create,
    * never destructive.
    */
-  async ensureEmailAuthRecords(userId: string, domainId: string): Promise<MailAuthStatusResponse> {
+  async ensureEmailAuthRecords(
+    userId: string,
+    domainId: string,
+  ): Promise<MailAuthStatusResponse> {
     await this.dnsService.initializeEmailAuthRecords(userId, domainId);
     await this.getOrGenerateDkim(userId, domainId, true);
     return this.getMailAuthStatus(userId, domainId);
@@ -598,62 +858,47 @@ export class MailService {
    * map, and their Mailbox rows into Dovecot's passwd-file (passdb + userdb)
    * so IMAP logins and Maildir++ quota rules stay current (F4.2).
    */
-  async syncVirtualDomains(
-    userId: string,
-  ): Promise<{ success: boolean; syncedCount: number; domains: string[]; mailboxesSynced: number }> {
-    const domains = await this.prisma.domain.findMany({
-      where: { userId },
-      select: {
-        hostname: true,
-        mailboxes: { select: { address: true, password: true, quota: true } },
-      },
-    });
-
-    const hostnames = domains.map((d) => d.hostname);
-    const mailboxes = domains.flatMap((d) =>
-      d.mailboxes.map((m) => ({
-        address: m.address,
-        passwordHash: m.password,
-        quotaMb: m.quota,
-      })),
+  async syncVirtualDomains(userId: string): Promise<{
+    success: boolean;
+    syncedCount: number;
+    domains: string[];
+    mailboxesSynced: number;
+  }> {
+    const snapshot = await synchronizeMailState(this.prisma);
+    const domains = snapshot.domains.filter(
+      (domain) => domain.userId === userId,
     );
-
-    const [syncRes, dovecotRes] = await Promise.all([
-      runPostfixManager<PostfixSyncResult & { domains: string[] }>(
-        "sync_virtual_domains",
-        { domains: hostnames, mailboxes: mailboxes.map((m) => m.address) },
-      ).then(assertPostfixSyncSucceeded),
-      runDovecotManager<{ success: boolean; syncedCount: number }>("sync_mailboxes", {
-        domains: hostnames,
-        mailboxes,
-      }).catch(() => ({ success: false, syncedCount: 0 })),
-    ]);
-
-    return { ...syncRes, mailboxesSynced: dovecotRes.syncedCount };
+    return {
+      success: true,
+      syncedCount: domains.length,
+      domains: domains.map((domain) => domain.hostname),
+      mailboxesSynced: domains.reduce(
+        (count, domain) => count + domain.mailboxes.length,
+        0,
+      ),
+    };
   }
 
-  /**
-   * Synchronizes a user's VirtualAlias rows to Postfix's virtual_alias_maps
-   * (F4.6) — forwarding and catch-all addresses. Independent of
-   * syncVirtualDomains: aliases don't touch virtual_domains/virtual_mailbox_maps.
-   */
-  async syncVirtualAliases(userId: string): Promise<{ success: boolean; syncedCount: number }> {
-    const aliases = await this.prisma.virtualAlias.findMany({
-      where: { userId },
-      select: { source: true, destinations: true },
-    });
-
-    const result = await runPostfixManager<PostfixSyncResult>("sync_virtual_aliases", {
-      aliases: aliases.map((a) => ({ source: a.source, destinations: a.destinations })),
-    });
-    return assertPostfixSyncSucceeded(result);
+  async syncVirtualAliases(
+    userId: string,
+  ): Promise<{ success: boolean; syncedCount: number }> {
+    const snapshot = await synchronizeMailState(this.prisma);
+    return {
+      success: true,
+      syncedCount: snapshot.aliases.filter((alias) => alias.userId === userId)
+        .length,
+    };
   }
 
   /**
    * Generates or retrieves 2048-bit RSA DKIM keys and formats DNS TXT record for a domain.
    * Also optionally auto-adds the TXT record to CoreDNS zone if domain exists.
    */
-  async getOrGenerateDkim(userId: string, domainId: string, autoAddToDns: boolean = true): Promise<DkimRecordResponse> {
+  async getOrGenerateDkim(
+    userId: string,
+    domainId: string,
+    autoAddToDns: boolean = true,
+  ): Promise<DkimRecordResponse> {
     const domain = await this.prisma.domain.findFirst({
       where: { id: domainId, userId },
       include: {
@@ -662,10 +907,16 @@ export class MailService {
     });
 
     if (!domain) {
-      throw new MailError("Domain not found or unauthorized", "DOMAIN_NOT_FOUND", 404);
+      throw new MailError(
+        "Domain not found or unauthorized",
+        "DOMAIN_NOT_FOUND",
+        404,
+      );
     }
 
-    const dkimRes = await runPostfixManager<DkimRecordResponse & { isNew: boolean }>("generate_dkim", {
+    const dkimRes = await runPostfixManager<
+      DkimRecordResponse & { isNew: boolean }
+    >("generate_dkim", {
       domain: domain.hostname,
       selector: "default",
       keyLength: 2048,
@@ -682,7 +933,8 @@ export class MailService {
         selector: dkimRes.selector,
         value: dkimRes.dnsRecordValue,
       }).filter((r) => r.purpose === "DKIM");
-      inDns = (await lookupLiveMailRecords(domain.hostname, required)).length > 0;
+      inDns =
+        (await lookupLiveMailRecords(domain.hostname, required)).length > 0;
     } else if (existingDns) {
       inDns = true;
     } else if (autoAddToDns) {
@@ -716,21 +968,32 @@ export class MailService {
   /**
    * Sends a test email via Postfix SMTP, returning the full SMTP handshake transcript.
    */
-  async sendTestEmail(userId: string, input: SendTestEmailInput): Promise<TestEmailResultResponse> {
+  async sendTestEmail(
+    userId: string,
+    input: SendTestEmailInput,
+  ): Promise<TestEmailResultResponse> {
     const host = process.env.SMTP_HOST || "127.0.0.1";
     const payload = {
       ...input,
       host,
     };
 
-    const result = await runPostfixManager<TestEmailResultResponse>("send_test_email", payload);
+    const result = await runPostfixManager<TestEmailResultResponse>(
+      "send_test_email",
+      payload,
+    );
     return result;
   }
 
   /**
    * Verifies open relay protection by simulating an unauthorized external-to-external delivery.
    */
-  async testOpenRelay(): Promise<{ safe: boolean; relayDenied: boolean; rcptResponse: string; transcript: string[] }> {
+  async testOpenRelay(): Promise<{
+    safe: boolean;
+    relayDenied: boolean;
+    rcptResponse: string;
+    transcript: string[];
+  }> {
     const host = process.env.SMTP_HOST || "127.0.0.1";
     const port = Number(process.env.SMTP_PORT || 25);
     const result = await runPostfixManager<{
@@ -784,7 +1047,9 @@ export class MailService {
    * across all tenants — gated at the route level to ADMIN only, so no
    * per-user domain/mailbox ownership check is applied here.
    */
-  async getDeliveryLog(filter: DeliveryLogFilterInput): Promise<DeliveryLogResponse> {
+  async getDeliveryLog(
+    filter: DeliveryLogFilterInput,
+  ): Promise<DeliveryLogResponse> {
     return runPostfixManager<DeliveryLogResponse>("delivery_log", filter);
   }
 
@@ -794,10 +1059,19 @@ export class MailService {
    * and DNS TXT record untouched (RETIRING) so in-flight mail signed with it
    * still validates until an admin confirms DNS propagation and removes it.
    */
-  async rotateDkim(userId: string, domainId: string): Promise<DkimRotateResponse> {
-    const domain = await this.prisma.domain.findFirst({ where: { id: domainId, userId } });
+  async rotateDkim(
+    userId: string,
+    domainId: string,
+  ): Promise<DkimRotateResponse> {
+    const domain = await this.prisma.domain.findFirst({
+      where: { id: domainId, userId },
+    });
     if (!domain) {
-      throw new MailError("Domain not found or unauthorized", "DOMAIN_NOT_FOUND", 404);
+      throw new MailError(
+        "Domain not found or unauthorized",
+        "DOMAIN_NOT_FOUND",
+        404,
+      );
     }
 
     let active = await this.prisma.dkimKey.findFirst({
@@ -807,10 +1081,11 @@ export class MailService {
     if (!active) {
       // Backfill: a domain generated before F4.8 only has a filesystem key
       // under the "default" selector, with no DkimKey row yet.
-      const existing = await runPostfixManager<{ found: boolean; selector: string; publicKey: string }>(
-        "get_dkim",
-        { domain: domain.hostname, selector: "default" },
-      );
+      const existing = await runPostfixManager<{
+        found: boolean;
+        selector: string;
+        publicKey: string;
+      }>("get_dkim", { domain: domain.hostname, selector: "default" });
       if (existing.found) {
         active = await this.prisma.dkimKey.create({
           data: {
@@ -833,7 +1108,10 @@ export class MailService {
       newPublicKey: string;
       keyLength: number;
       oldSelector: string;
-    }>("rotate_dkim", { domain: domain.hostname, oldSelector: active?.selector ?? "default" });
+    }>("rotate_dkim", {
+      domain: domain.hostname,
+      oldSelector: active?.selector ?? "default",
+    });
 
     await this.prisma.$transaction([
       this.prisma.dkimKey.updateMany({
@@ -889,18 +1167,16 @@ export class MailService {
         selector: rotateRes.oldSelector,
         dnsRecordName: `${rotateRes.oldSelector}._domainkey.${domain.hostname}`,
       },
-      keys: keys.map(
-        (k): DkimKey => ({
-          id: k.id,
-          domainId: k.domainId,
-          selector: k.selector,
-          status: k.status,
-          publicKey: k.publicKey,
-          keyLength: k.keyLength,
-          createdAt: k.createdAt.toISOString(),
-          retiredAt: k.retiredAt ? k.retiredAt.toISOString() : null,
-        }),
-      ),
+      keys: keys.map((k): DkimKey => ({
+        id: k.id,
+        domainId: k.domainId,
+        selector: k.selector,
+        status: k.status,
+        publicKey: k.publicKey,
+        keyLength: k.keyLength,
+        createdAt: k.createdAt.toISOString(),
+        retiredAt: k.retiredAt ? k.retiredAt.toISOString() : null,
+      })),
     };
   }
 

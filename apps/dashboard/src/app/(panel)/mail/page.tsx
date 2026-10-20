@@ -87,6 +87,7 @@ export default function MailPage() {
   const [expandedDomainId, setExpandedDomainId] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [generatingDkimId, setGeneratingDkimId] = useState<string | null>(null);
   const [regeneratingAuthId, setRegeneratingAuthId] = useState<string | null>(null);
   const [checkingAuthId, setCheckingAuthId] = useState<string | null>(null);
@@ -134,13 +135,16 @@ export default function MailPage() {
 
   const handleSyncDomains = async () => {
     setIsSyncing(true);
+    setSyncError(null);
     try {
       const res = await syncDomains();
       toast.success(
         `Synchronized ${res.syncedCount} virtual domains with Postfix and ${res.mailboxesSynced} mailboxes with Dovecot`,
       );
-    } catch {
-      toast.error("Failed to sync virtual domains");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to synchronize mail. Check the mail services and retry Synchronize.";
+      setSyncError(message);
+      toast.error(message);
     } finally {
       setIsSyncing(false);
     }
@@ -297,6 +301,15 @@ export default function MailPage() {
 
       <Separator />
 
+      {syncError && (
+        <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+          <p>{syncError}</p>
+          <Button variant="outline" size="sm" className="mt-3" onClick={handleSyncDomains} disabled={isSyncing}>
+            {isSyncing ? "Synchronizing…" : "Retry Synchronize"}
+          </Button>
+        </div>
+      )}
+
       <Tabs defaultValue="domains" className="w-full">
         <TabsList>
           <TabsTrigger value="domains">Domains & Email Auth</TabsTrigger>
@@ -343,7 +356,7 @@ export default function MailPage() {
                   </span>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Postfix daemon listening
+                  {status?.status === "active" ? "Postfix and recipient maps ready" : "Mail service needs attention"}
                 </p>
               </div>
             )}

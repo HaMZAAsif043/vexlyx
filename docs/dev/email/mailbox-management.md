@@ -1,5 +1,7 @@
 # Mailbox Management UI (F4.3)
 
+> Synchronization now uses [persistent mail state](mail-state.md). A saved database change followed by failed activation returns HTTP 503 with recovery guidance; mailbox creation or password reset must be retried with a new reset after recovery to obtain a plaintext password. The legacy file paths below are historical references.
+
 > **Feature:** F4.3 — Mailbox Management UI
 > **Status:** 🟢 COMPLETED
 > **Package:** `@vexlyx/api`, `@vexlyx/dashboard`, `@vexlyx/shared`
