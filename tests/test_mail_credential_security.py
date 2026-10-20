@@ -53,6 +53,18 @@ def row(address, hash_value):
 
 
 class TestCredentialBuildContexts(unittest.TestCase):
+    def test_dkim_private_keys_are_not_tracked(self):
+        root = Path(__file__).resolve().parent.parent
+        result = subprocess.run(
+            ["git", "ls-files", "--cached", "-z", "--", "docker/postfix/opendkim/keys"],
+            cwd=root, capture_output=True, check=True,
+        )
+        tracked_keys = [
+            path.decode("utf-8") for path in result.stdout.split(b"\0")
+            if path.endswith(b".private")
+        ]
+        self.assertEqual(tracked_keys, [], "DKIM private keys must remain untracked runtime state")
+
     def test_runtime_credentials_and_backups_are_excluded_from_build_contexts(self):
         root = Path(__file__).resolve().parent.parent
         for ignore_file, relative_config in (

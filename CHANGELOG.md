@@ -4,6 +4,12 @@ All notable changes to Vexlyx are documented here. The format follows [Keep a Ch
 
 ## Unreleased
 
+### Fixed
+
+- Keep the dashboard's jsdom dependency compatible with the declared Node 22 minimum, and remove tracked development DKIM private keys from the checkout.
+- Dashboard tests now collect React component tests in jsdom while keeping utility tests in Node, with initial login and project-list smoke coverage (#54).
+- Switching to two-factor verification starts with an empty code field instead of retaining the sign-in email address, caught by the new login smoke test.
+
 ## [0.4.0] - 2026-10-21
 
 ### Added

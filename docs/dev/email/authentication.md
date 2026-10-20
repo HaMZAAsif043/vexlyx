@@ -134,3 +134,23 @@ Records are only written to a zone when the domain's `dnsMode` is `MANAGED` (see
 - Rotating DKIM on a CONNECTED domain switches signing immediately, but the new record must be added at the registrar. The rotate dialog warns about this and `newKey.inDns` is `false`.
 - With `NODE_ENV=test` or `VEXLYX_MOCK_DNS=true` the live lookup reports every required record as present.
 
+## Exposed development DKIM keys
+
+The `default` signing keys previously tracked for `api.wp-blogs.vexlyx.localhost`,
+`wp-blogs.vexlyx.localhost`, `test-postfix-mailer.org` and `vexlyx-test.com` are
+public and must not be used. Private keys are runtime state, including keys for
+local development and tests; generate fresh keys on each installation.
+
+Removing the files from the checkout does not revoke copies in runtime state or
+older Git history. If any deployment used one of these keys, rotate it through
+the Mail domain's DKIM rotation flow, publish the new selector's TXT record at
+the authoritative DNS provider, and retire the exposed selector's DNS record.
+The legacy mail-state migrator preserves existing keys; migration is not key
+rotation.
+
+Run the tracking regression without mail services:
+
+```bash
+python -m unittest tests.test_mail_credential_security.TestCredentialBuildContexts.test_dkim_private_keys_are_not_tracked
+```
+

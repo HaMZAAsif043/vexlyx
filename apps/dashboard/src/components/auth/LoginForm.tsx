@@ -130,7 +130,7 @@ export function LoginForm() {
       </CardHeader>
       <CardContent>
         {challengeToken ? (
-          <form onSubmit={handleCodeSubmit} className="space-y-4">
+          <form key="two-factor" onSubmit={handleCodeSubmit} className="space-y-4">
             {errors.root && (
               <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
                 {errors.root}
@@ -173,7 +173,7 @@ export function LoginForm() {
           </form>
         ) : (
           <>
-            <form onSubmit={handleSubmit} className="space-y-4">
+            <form key="password" onSubmit={handleSubmit} className="space-y-4">
               {errors.root && (
                 <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
                   {errors.root}

@@ -172,6 +172,44 @@ Tests: `src/lib/securityHeaders.test.ts`.
 
 ---
 
+## Component and Utility Tests (#54)
+
+Run all dashboard tests from the monorepo root:
+
+```bash
+pnpm --filter @vexlyx/dashboard test
+pnpm --filter @vexlyx/dashboard test --project components
+pnpm --filter @vexlyx/dashboard test --project unit
+```
+
+`vitest.config.ts` defines two test projects: adjacent `src/**/*.test.ts` files
+run in Node, while `src/**/*.test.tsx` files run in jsdom with React's automatic
+JSX runtime. Both inherit the `@/` source alias. Vitest 5 uses `projects` rather
+than the removed `environmentMatchGlobs` option.
+
+Keep jsdom on the 26.x line: it supports the declared Node 22 minimum. Newer
+major versions require newer Node minor releases; check their engine requirements
+before upgrading the test environment.
+
+Component tests use `@testing-library/react` to render real components and
+`@testing-library/user-event` for typing and clicks. The component setup file
+(`src/test/setup.ts`) unmounts rendered trees after every test; Vitest globals
+are disabled, so cleanup is registered explicitly. Import test functions from
+`vitest` and place new tests next to their page or component.
+
+The initial smoke tests cover the login page's form submission, validation,
+rejected credentials and two-factor challenge, plus project cards, navigation,
+loading and empty-list creation. Login tests mock the auth hooks and toast
+boundary; project tests render the actual cards. These tests need no running API,
+database or Docker services. Broader UI and end-to-end coverage remains separate
+work.
+
+The password and two-factor forms in `LoginForm.tsx` have distinct React keys so
+uncontrolled input values reset when switching between them. The two-factor test
+guards against the email address being reused as the authenticator code.
+
+---
+
 ## Running Locally
 
 ```bash
