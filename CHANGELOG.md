@@ -4,6 +4,22 @@ All notable changes to Vexlyx are documented here. The format follows [Keep a Ch
 
 ## Unreleased
 
+## [0.4.0] - 2026-10-21
+
+### Added
+
+- Scheduled tasks run project commands on a cron schedule, with manual runs, run history, server timezone support, per-user and reseller quotas, and optional failure emails. Commands run inside the project's application container with timeouts, bounded output, and overlap protection (#132).
+
+### Fixed
+
+- Mailbox, password, and alias changes now activate through validated Postfix and Dovecot state generations. Runtime maps and credentials persist across container recreation; failed activation returns an actionable error and rolls back to the previous state. Failed preparations remove unused generations, and development state ownership lets the host API write while keeping password files private (#100).
+- Release notes exclude prerelease tags when selecting the previous release boundary (#143).
+
+### Upgrade notes
+
+- Back up existing mail state and migrate it **before updating the checkout**. Follow `docs/dev/email/mail-credential-remediation.md` to preserve routing maps and signing tables, then restart the mail services with the updated Compose configuration (#100).
+- Apply the database migrations before starting the updated API; scheduled tasks adds task and run tables and the `maxScheduledTasks` user quota (#132).
+
 ## [0.3.0] - 2026-10-20
 
 ### Changed
