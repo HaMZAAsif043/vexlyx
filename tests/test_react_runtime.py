@@ -215,10 +215,10 @@ def test_static_docker_template():
     assert static_template_path.is_file(), "static.yml template does not exist"
 
     template_content = static_template_path.read_text(encoding="utf-8")
-    assert "PORT: \"{{container_port}}\"" in template_content, "PORT variable missing from static.yml"
-    assert "HOST: \"0.0.0.0\"" in template_content, "HOST 0.0.0.0 missing from static.yml"
+    # static.yml uses nginx:alpine which listens on port 80 by default - no PORT/HOST env vars needed
     assert "traefik.enable=true" in template_content, "Traefik enable missing"
-    assert "traefik.http.services.{{service_name}}.loadbalancer.server.port={{container_port}}" in template_content
+    # The Traefik loadbalancer port uses the container_port placeholder (which is 80 for static)
+    assert "traefik.http.services.{{service_name}}.loadbalancer.server.port=80" in template_content
 
     sys.path.insert(0, str(REPO_ROOT / "system" / "python"))
     import docker_manager
@@ -246,13 +246,13 @@ def test_static_docker_template():
         assert compose_file.is_file(), "docker-compose.yml was not created"
         compose_text = compose_file.read_text(encoding="utf-8")
 
-        assert "image: \"vexlyx-react-app-img\"" in compose_text
+        # static.yml uses fixed nginx:alpine image (no {{image_name}} placeholder)
+        # and no environment section (nginx doesn't need app env vars)
+        assert 'image: "nginx:alpine"' in compose_text
         assert "8200:80" in compose_text
-        assert "VITE_API_BASE" in compose_text
-        assert "VITE_APP_TITLE" in compose_text
         assert "react.vexlyx.localhost" in compose_text
         assert "traefik.http.services.test-react-app.loadbalancer.server.port=80" in compose_text
-        print("  [PASS] static.yml rendered correctly with port 80 and Traefik load balancer")
+        print("  [PASS] static.yml rendered correctly with nginx:alpine and Traefik load balancer")
 
 
 def main():

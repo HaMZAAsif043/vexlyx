@@ -16,6 +16,20 @@ class TestInstallerDnsGuidance(unittest.TestCase):
         if not bash:
             self.skipTest("bash is required to execute the installer summary")
 
+        # Verify bash actually works (WSL bash may be found but fail to execute)
+        try:
+            test_result = subprocess.run(
+                [bash, "-c", "echo test"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=5,
+            )
+            if test_result.returncode != 0:
+                self.skipTest(f"bash found but failed to execute: {test_result.stderr}")
+        except Exception as e:
+            self.skipTest(f"bash found but failed to execute: {e}")
+
         with tempfile.TemporaryDirectory() as temporary_directory:
             bin_dir = Path(temporary_directory)
             docker = bin_dir / "docker"
