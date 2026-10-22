@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import dns from "node:dns/promises";
 import fs from "node:fs";
 import path from "node:path";
-import { exec } from "node:child_process";
+import type { FastifyBaseLogger } from "fastify";
 import type { PrismaClient, Domain, Project, Certificate } from "@prisma/client";
 import {
   isWildcardHostname,
@@ -111,15 +111,17 @@ function defaultContainerPort(type?: string): number {
   return 3000;
 }
 
-function reloadTraefik(): void {
+// Traefik's file provider runs with `watch: true`, so a route only has to
+// appear on disk. The write is a rename so the watcher never parses a
+// half-written file; the temp name ends in .tmp, which the provider ignores.
+function writeRouteFileAtomically(configPath: string, content: string): void {
+  const tempPath = `${configPath}.${crypto.randomBytes(4).toString("hex")}.tmp`;
   try {
-    exec("docker restart vexlyx-traefik", (err) => {
-      if (err) {
-        console.warn("[DomainService] Note: docker restart vexlyx-traefik:", err.message);
-      }
-    });
-  } catch {
-    // Ignore
+    fs.writeFileSync(tempPath, content, "utf-8");
+    fs.renameSync(tempPath, configPath);
+  } catch (err) {
+    fs.rmSync(tempPath, { force: true });
+    throw err;
   }
 }
 
@@ -165,6 +167,7 @@ export class DomainService {
   constructor(
     private readonly prisma: PrismaClient,
     private readonly auditLog?: AuditLogService,
+    private readonly logger?: Pick<FastifyBaseLogger, "error" | "warn">,
   ) {}
 
   /**
@@ -278,10 +281,12 @@ http:
     }
 
     try {
-      fs.writeFileSync(configPath, ymlContent, "utf-8");
-      reloadTraefik();
+      writeRouteFileAtomically(configPath, ymlContent);
     } catch (err) {
-      console.error(`[DomainService] Failed to write Traefik config for domain ${domain.id}:`, err);
+      this.logger?.error(
+        { err, domainId: domain.id },
+        "Failed to write Traefik config for domain",
+      );
     }
   }
 
@@ -293,9 +298,11 @@ http:
     if (fs.existsSync(configPath)) {
       try {
         fs.unlinkSync(configPath);
-        reloadTraefik();
       } catch (err) {
-        console.error(`[DomainService] Failed to remove Traefik config for domain ${domainId}:`, err);
+        this.logger?.error(
+          { err, domainId },
+          "Failed to remove Traefik config for domain",
+        );
       }
     }
 

@@ -27,6 +27,8 @@ Custom Domain Management allows users to attach custom fully-qualified domain na
 
 When a domain is verified, Vexlyx generates a dynamic router configuration in `docker/traefik/dynamic/domain-{domainId}.yml` routing all incoming web traffic matching `Host(...)` to the project's container on `traefik-net`. When a domain is deleted, the dynamic configuration file is removed immediately with zero downtime or container restarts.
 
+The API never restarts or signals the shared `vexlyx-traefik` container: restarting it would drop TLS for every site on the server. Route files are written to a `.tmp` file in the same directory and renamed into place, so Traefik's file provider (`watch: true`) only ever sees a complete file, and Let's Encrypt issuance starts when the router with `tls.certResolver` appears. On Docker Desktop for Windows the bind-mount watcher can miss changes (see `docs/dev/email/webmail.md`); that is a development-only caveat, and a manual `docker restart vexlyx-traefik` there is not needed on Linux servers.
+
 ---
 
 ## 2. Architecture & Data Flow
