@@ -1,5 +1,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
+import fs from "node:fs/promises";
 import { WordPressService, WordPressError } from "./service.js";
 import {
   ProjectIdParamSchema,
@@ -22,6 +24,15 @@ function handleWordPressError(err: unknown, reply: FastifyReply): void {
     return;
   }
   throw err;
+}
+
+/** Discards a stream without collecting its contents in memory. */
+async function drainStream(stream: NodeJS.ReadableStream): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    stream.on("end", resolve);
+    stream.on("error", reject);
+    stream.resume();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -61,9 +72,12 @@ export async function wordpressRoutes(app: FastifyInstance) {
     "/:id/wordpress/upload",
     { preHandler: [app.requireAuth] },
     async (request, reply) => {
-      try {
-        const { id } = ProjectIdParamSchema.parse(request.params);
+      const { id } = ProjectIdParamSchema.parse(request.params);
+      // Every archive this request put on disk, so the finally block below
+      // can remove it no matter how the request exits.
+      const tempPaths: string[] = [];
 
+      try {
         let assetType: string | undefined;
         let zipPath: string | undefined;
 
@@ -80,13 +94,20 @@ export async function wordpressRoutes(app: FastifyInstance) {
               part.filename.toLowerCase().endsWith(".zip")
             ) {
               // Never trust the client filename for disk paths: strip any
-              // directory components and non-name characters, then prefix a
-              // timestamp so concurrent uploads cannot collide.
-              const safeName = `${Date.now()}-${basename(part.filename).replace(/[^\w.-]/g, "_")}`;
-              zipPath = await service.saveTempUpload(id, part.file, safeName);
+              // directory components and non-name characters, and use a
+              // random prefix so concurrent uploads can never share a path.
+              const safeName = `${randomUUID()}-${basename(part.filename).replace(/[^\w.-]/g, "_")}`;
+              zipPath = await service.saveTempUpload(
+                id,
+                part.file,
+                safeName,
+                request.log,
+              );
+              tempPaths.push(zipPath);
             } else {
-              // Drain rejected files so the request can complete cleanly.
-              await part.toBuffer();
+              // Drain rejected files without buffering them — a single file
+              // may be as large as FILE_UPLOAD_MAX_MB (1 GiB by default).
+              await drainStream(part.file);
             }
           }
         }
@@ -97,6 +118,21 @@ export async function wordpressRoutes(app: FastifyInstance) {
         return result;
       } catch (err) {
         handleWordPressError(err, reply);
+      } finally {
+        // The archive is only needed while uploadAsset streams it into the
+        // extractor. Remove it on EVERY exit path — schema rejection, failed
+        // ownership checks, extraction errors — so repeated rejected uploads
+        // cannot accumulate on the host disk.
+        await Promise.all(
+          tempPaths.map((p) =>
+            fs.rm(p, { force: true }).catch((err: unknown) => {
+              request.log.error(
+                { err, path: p },
+                "failed to remove temporary WordPress upload",
+              );
+            }),
+          ),
+        );
       }
     },
   );

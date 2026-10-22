@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify from "fastify";
 import multipart from "@fastify/multipart";
+import { createWriteStream, existsSync, mkdtempSync } from "node:fs";
+import fs from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import type { PrismaClient } from "@prisma/client";
 
 process.env.DATABASE_URL ??=
@@ -11,7 +17,45 @@ const { wordpressRoutes } = await import("./routes.js");
 const { errorHandlerPlugin } = await import("../../plugins/error-handler.js");
 const { WordPressService } = await import("./service.js");
 
-afterEach(() => vi.restoreAllMocks());
+// Per-test scratch dirs, removed after every test so no uploaded bytes
+// accumulate on the machine running the suite.
+const testDirs: string[] = [];
+
+function makeTempDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "vexlyx-wp-upload-test-"));
+  testDirs.push(dir);
+  return dir;
+}
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await Promise.all(
+    testDirs.splice(0).map((d) => fs.rm(d, { recursive: true, force: true })),
+  );
+});
+
+/**
+ * saveTempUpload double that really streams the part into the per-test
+ * scratch dir (same semantics as production, redirected), so tests can
+ * assert the route removes the archive on every exit path.
+ */
+function mockSaveTempUpload(tmp: string) {
+  return vi
+    .spyOn(WordPressService.prototype, "saveTempUpload")
+    .mockImplementation(async (_projectId, stream, filename) => {
+      const dest = join(tmp, filename);
+      await pipeline(stream as NodeJS.ReadableStream, createWriteStream(dest));
+      return dest;
+    });
+}
+
+const completeResult = {
+  message: "ok",
+  success: true,
+  assetType: "theme",
+  extractedFiles: 1,
+  targetDir: "/tmp",
+};
 
 // 3 MiB ceiling so the suite can prove both directions: an ordinary multi-MB
 // theme archive is accepted (#154's regression), and a genuinely oversized
@@ -91,16 +135,12 @@ describe("POST /api/projects/:id/wordpress/upload (multipart, #154)", () => {
     }
   });
 
-  it("accepts a multi-MB theme archive that base64 JSON could not deliver", async () => {
+  it("accepts a multi-MB theme archive and removes it after the upload", async () => {
+    const tmp = makeTempDir();
+    const save = mockSaveTempUpload(tmp);
     const uploadAsset = vi
       .spyOn(WordPressService.prototype, "uploadAsset")
-      .mockResolvedValue({
-        message: "ok",
-        success: true,
-        assetType: "theme",
-        extractedFiles: 1,
-        targetDir: "/tmp",
-      });
+      .mockResolvedValue(completeResult);
     const app = await appFixture();
     try {
       // ~2.5 MB — comfortably past the ~0.75 MB ceiling the old base64-JSON
@@ -125,23 +165,49 @@ describe("POST /api/projects/:id/wordpress/upload (multipart, #154)", () => {
       expect(userId).toBe("u1");
       expect(projectId).toBe("p1");
       expect(input.assetType).toBe("theme");
-      expect(input.zipPath).toMatch(/vexlyx-imports[\\/]p1[\\/]/);
       expect(input.zipPath).toMatch(/\.zip$/);
+
+      // The route's finally block must delete the archive once consumed.
+      const savedPath = await save.mock.results[0]!.value;
+      expect(existsSync(savedPath)).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("removes the saved archive when validation fails after the write", async () => {
+    // Regression for the disk-fill risk: the file was written before
+    // assetType was validated, and a 400 used to leave it behind.
+    const tmp = makeTempDir();
+    const save = mockSaveTempUpload(tmp);
+    const uploadAsset = vi.spyOn(WordPressService.prototype, "uploadAsset");
+    const app = await appFixture();
+    try {
+      const { body, contentType } = multipartPayload({
+        file: { filename: "a.zip", content: Buffer.from("PK\x03\x04") },
+      });
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/projects/p1/wordpress/upload",
+        headers: { ...authed, "content-type": contentType },
+        payload: body,
+      });
+      expect(response.statusCode).toBe(400);
+      expect(uploadAsset).not.toHaveBeenCalled();
+
+      const savedPath = await save.mock.results[0]!.value;
+      expect(existsSync(savedPath)).toBe(false);
     } finally {
       await app.close();
     }
   });
 
   it("passes through the asset type field", async () => {
+    const tmp = makeTempDir();
+    mockSaveTempUpload(tmp);
     const uploadAsset = vi
       .spyOn(WordPressService.prototype, "uploadAsset")
-      .mockResolvedValue({
-        message: "ok",
-        success: true,
-        assetType: "plugin",
-        extractedFiles: 1,
-        targetDir: "/tmp",
-      });
+      .mockResolvedValue({ ...completeResult, assetType: "plugin" });
     const app = await appFixture();
     try {
       const { body, contentType } = multipartPayload({
@@ -161,7 +227,8 @@ describe("POST /api/projects/:id/wordpress/upload (multipart, #154)", () => {
     }
   });
 
-  it("rejects a non-zip file part with 400", async () => {
+  it("rejects a non-zip file part with 400 without touching disk", async () => {
+    const save = vi.spyOn(WordPressService.prototype, "saveTempUpload");
     const uploadAsset = vi.spyOn(WordPressService.prototype, "uploadAsset");
     const app = await appFixture();
     try {
@@ -176,26 +243,7 @@ describe("POST /api/projects/:id/wordpress/upload (multipart, #154)", () => {
         payload: body,
       });
       expect(response.statusCode).toBe(400);
-      expect(uploadAsset).not.toHaveBeenCalled();
-    } finally {
-      await app.close();
-    }
-  });
-
-  it("rejects a missing assetType with 400", async () => {
-    const uploadAsset = vi.spyOn(WordPressService.prototype, "uploadAsset");
-    const app = await appFixture();
-    try {
-      const { body, contentType } = multipartPayload({
-        file: { filename: "a.zip", content: Buffer.from("PK\x03\x04") },
-      });
-      const response = await app.inject({
-        method: "POST",
-        url: "/api/projects/p1/wordpress/upload",
-        headers: { ...authed, "content-type": contentType },
-        payload: body,
-      });
-      expect(response.statusCode).toBe(400);
+      expect(save).not.toHaveBeenCalled();
       expect(uploadAsset).not.toHaveBeenCalled();
     } finally {
       await app.close();
@@ -203,6 +251,8 @@ describe("POST /api/projects/:id/wordpress/upload (multipart, #154)", () => {
   });
 
   it("still enforces the multipart size ceiling with 413", async () => {
+    const tmp = makeTempDir();
+    mockSaveTempUpload(tmp);
     const uploadAsset = vi.spyOn(WordPressService.prototype, "uploadAsset");
     const app = await appFixture();
     try {
@@ -222,5 +272,25 @@ describe("POST /api/projects/:id/wordpress/upload (multipart, #154)", () => {
     } finally {
       await app.close();
     }
+  });
+});
+
+describe("WordPressService.saveTempUpload", () => {
+  it("removes the partial archive when the stream fails mid-write", async () => {
+    const service = new WordPressService({} as PrismaClient);
+    const projectId = `ptest-partial-${Date.now()}`;
+    const dest = join("/tmp", "vexlyx-imports", projectId, "x.zip");
+
+    const failing = new Readable({
+      read() {
+        this.push(Buffer.alloc(64 * 1024, 0x41));
+        this.destroy(new Error("stream exploded"));
+      },
+    });
+
+    await expect(
+      service.saveTempUpload(projectId, failing, "x.zip"),
+    ).rejects.toThrow("stream exploded");
+    expect(existsSync(dest)).toBe(false);
   });
 });

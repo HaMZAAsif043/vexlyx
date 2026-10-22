@@ -208,27 +208,22 @@ export class WordPressService {
     await this.findOwnedProject(userId, projectId);
     const projectDir = resolve(env.PROJECTS_DIR, projectId);
 
-    try {
-      const result = await runPythonCommand<{
-        success: boolean;
-        assetType: string;
-        extractedFiles: number;
-        targetDir: string;
-      }>({
-        command: "wordpress-upload",
-        projectDir,
-        assetType: input.assetType,
-        zipPath: input.zipPath,
-      });
+    const result = await runPythonCommand<{
+      success: boolean;
+      assetType: string;
+      extractedFiles: number;
+      targetDir: string;
+    }>({
+      command: "wordpress-upload",
+      projectDir,
+      assetType: input.assetType,
+      zipPath: input.zipPath,
+    });
 
-      return {
-        message: `WordPress ${input.assetType} uploaded and extracted successfully`,
-        ...result,
-      };
-    } finally {
-      // Best-effort cleanup of the temp multipart upload, success or failure.
-      await fs.rm(input.zipPath, { force: true }).catch(() => undefined);
-    }
+    return {
+      message: `WordPress ${input.assetType} uploaded and extracted successfully`,
+      ...result,
+    };
   }
 
   async getStatus(userId: string, projectId: string) {
@@ -323,12 +318,25 @@ export class WordPressService {
     projectId: string,
     readableStream: NodeJS.ReadableStream,
     originalFilename: string,
+    log?: { error: (obj: object, msg: string) => void },
   ): Promise<string> {
     const uploadDir = join("/tmp", "vexlyx-imports", projectId);
     await fs.mkdir(uploadDir, { recursive: true });
     const tarPath = join(uploadDir, originalFilename);
     const ws = createWriteStream(tarPath);
-    await pipeline(readableStream, ws);
+    try {
+      await pipeline(readableStream, ws);
+    } catch (err) {
+      // A failed write must not leave a partial archive on disk; the caller
+      // only ever sees the path of a fully written upload.
+      await fs.rm(tarPath, { force: true }).catch((rmErr: unknown) => {
+        log?.error(
+          { err: rmErr, path: tarPath },
+          "failed to remove partial upload after stream error",
+        );
+      });
+      throw err;
+    }
     return tarPath;
   }
 
