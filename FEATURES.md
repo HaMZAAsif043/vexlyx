@@ -2485,7 +2485,7 @@ Connecting a repository today is manual and per project (F1.3, F2.7): the user p
 ---
 
 ### F5.30 — Redis Instances
-**Status:** 🔴 NOT STARTED
+**Status:** 🟢 COMPLETED
 
 **Description:**
 Users can create PostgreSQL and MySQL databases (F2.6) but have no key-value store: an app that needs a cache, a session store or a job queue (BullMQ, Sidekiq, Celery, Laravel queues) has to bundle its own Redis in its project or go without. This feature lets a user create a **Redis instance** from the dashboard: a dedicated, password-protected Redis container with a memory limit that their projects reach over the internal Docker network, with a ready-to-paste connection URL. It is a standalone feature with its own module, table, manager script, quota and UI, and does not depend on any other database feature.
@@ -2520,17 +2520,17 @@ Users can create PostgreSQL and MySQL databases (F2.6) but have no key-value sto
 - The image line has a licence decision attached; do not float on `latest`.
 
 **Acceptance Criteria:**
-- [ ] A user can create, list, start, stop, restart and delete Redis instances from the dashboard and API, each running in its own container with a password
-- [ ] Each instance has an enforced memory limit (`maxmemory` plus a Docker limit) and a chosen eviction policy and persistence mode
-- [ ] The connection URL works from a project container on the internal network and the instance publishes no host port
-- [ ] The panel's own Redis is never reachable through this feature
-- [ ] The password is encrypted at rest, can be rotated, and is never returned by list endpoints or written to logs or the audit log
-- [ ] `maxRedisInstances` quota enforced and shown like the other quotas, with F5.23 warnings at 80% and 100%
-- [ ] Users see and manage only their own instances; admins see all; unauthenticated calls return 401 and other users' instances return 403/404
-- [ ] Deleting an instance removes its container and volume; a failed teardown is reported but does not leave the instance stuck
-- [ ] Create, update, rotate and delete are written to the audit log
-- [ ] The image is pinned to a documented version line, and the licence choice is recorded in the docs
-- [ ] The feature works with PostgreSQL/MySQL provisioning (F2.6) untouched, and can ship without any other new database feature
+- [x] A user can create, list, start, stop, restart and delete Redis instances from the dashboard and API, each running in its own container with a password
+- [x] Each instance has an enforced memory limit (`maxmemory` plus a Docker limit) and a chosen eviction policy and persistence mode
+- [x] The connection URL works from a project container on the internal network and the instance publishes no host port
+- [x] The panel's own Redis is never reachable through this feature
+- [x] The password is encrypted at rest, can be rotated, and is never returned by list endpoints or written to logs or the audit log
+- [x] `maxRedisInstances` quota enforced and shown like the other quotas, with F5.23 warnings at 80% and 100%
+- [x] Users see and manage only their own instances; admins see all; unauthenticated calls return 401 and other users' instances return 403/404
+- [x] Deleting an instance removes its container and volume; a failed teardown is reported but does not leave the instance stuck
+- [x] Create, update, rotate and delete are written to the audit log
+- [x] The image is pinned to a documented version line, and the licence choice is recorded in the docs
+- [x] The feature works with PostgreSQL/MySQL provisioning (F2.6) untouched, and can ship without any other new database feature
 
 **Test Plan:**
 1. Create an instance with 64 MB → container running, `redis-cli -a <password> ping` from a project container returns PONG

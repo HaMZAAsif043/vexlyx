@@ -40,7 +40,7 @@ interface EditUserDialogProps {
   onReset2FA: (id: string) => Promise<void>;
 }
 
-type QuotaField = "maxProjects" | "maxDomains" | "maxDatabases" | "maxMailboxes" | "maxSubAccounts" | "maxScheduledTasks";
+type QuotaField = "maxProjects" | "maxDomains" | "maxDatabases" | "maxMailboxes" | "maxSubAccounts" | "maxScheduledTasks" | "maxRedisInstances";
 
 const QUOTA_FIELDS: { key: QuotaField; label: string }[] = [
   { key: "maxProjects", label: "Max projects" },
@@ -49,6 +49,7 @@ const QUOTA_FIELDS: { key: QuotaField; label: string }[] = [
   { key: "maxMailboxes", label: "Max mailboxes" },
   { key: "maxSubAccounts", label: "Max sub-accounts" },
   { key: "maxScheduledTasks", label: "Max scheduled tasks" },
+  { key: "maxRedisInstances", label: "Max Redis instances" },
 ];
 
 const PERMISSION_FIELDS: { key: Permission; label: string; description: string }[] = [
@@ -75,6 +76,7 @@ export function EditUserDialog({ user, isSaving, canEditRole, isSelf, canReset2F
     maxMailboxes: "",
     maxSubAccounts: "",
     maxScheduledTasks: "",
+    maxRedisInstances: "",
   });
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [oversellingEnabled, setOversellingEnabled] = useState(false);
@@ -91,6 +93,7 @@ export function EditUserDialog({ user, isSaving, canEditRole, isSelf, canReset2F
       maxMailboxes: toFormValue(user.maxMailboxes),
       maxSubAccounts: toFormValue(user.maxSubAccounts),
       maxScheduledTasks: toFormValue(user.maxScheduledTasks),
+      maxRedisInstances: toFormValue(user.maxRedisInstances),
     });
     setPermissions(user.permissions);
     setOversellingEnabled(user.oversellingEnabled);
@@ -115,6 +118,7 @@ export function EditUserDialog({ user, isSaving, canEditRole, isSelf, canReset2F
         maxMailboxes: fromFormValue(quotas.maxMailboxes),
         maxSubAccounts: fromFormValue(quotas.maxSubAccounts),
         maxScheduledTasks: fromFormValue(quotas.maxScheduledTasks),
+        maxRedisInstances: fromFormValue(quotas.maxRedisInstances),
         oversellingEnabled: canEditOverselling ? oversellingEnabled : undefined,
       },
       permissions: canEditRole ? permissions : undefined,

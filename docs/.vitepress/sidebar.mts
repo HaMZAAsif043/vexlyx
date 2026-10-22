@@ -111,6 +111,7 @@ const groups: Group[] = [
     text: "Databases and files",
     pages: [
       "reference/database-provisioning",
+      "reference/redis-instances",
       "reference/file-manager-sftp",
       "reference/file-manager-permissions-archives",
     ],

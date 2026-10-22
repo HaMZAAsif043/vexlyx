@@ -90,6 +90,7 @@ export function UserList({ users, isLoading, currentUserId, isAdmin, onEdit, onD
                 <div>Databases: {formatQuota(u.maxDatabases)}</div>
                 <div>Mailboxes: {formatQuota(u.maxMailboxes)}</div>
                 <div>Scheduled tasks: {formatQuota(u.maxScheduledTasks)}</div>
+                <div>Redis instances: {formatQuota(u.maxRedisInstances)}</div>
                 {u.role === "RESELLER" && <div>Sub-accounts: {formatQuota(u.maxSubAccounts)}</div>}
               </TableCell>
               <TableCell className="text-sm text-muted-foreground">
