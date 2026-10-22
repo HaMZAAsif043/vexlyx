@@ -22,6 +22,7 @@ import { envRoutes } from "./modules/env/routes.js";
 import { wordpressRoutes } from "./modules/wordpress/routes.js";
 import { dockerfileRoutes } from "./modules/dockerfile/routes.js";
 import { databaseRoutes } from "./modules/databases/routes.js";
+import { redisInstanceRoutes } from "./modules/redis/routes.js";
 import { webhookRoutes } from "./modules/webhooks/routes.js";
 import { domainRoutes } from "./modules/domains/routes.js";
 import { DnsService, checkDnsZonesDirWritable } from "./modules/domains/dns-service.js";
@@ -102,6 +103,7 @@ async function buildApp() {
   await app.register(wordpressRoutes, { prefix: "/api/projects" });
   await app.register(dockerfileRoutes, { prefix: "/api/projects" });
   await app.register(databaseRoutes, { prefix: "/api/databases" });
+  await app.register(redisInstanceRoutes, { prefix: "/api/redis" });
   await app.register(webhookRoutes, { prefix: "/api/webhooks" });
   await app.register(domainRoutes, { prefix: "/api/domains" });
   await app.register(mailRoutes, { prefix: "/api/mail" });

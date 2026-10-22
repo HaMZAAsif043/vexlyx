@@ -76,6 +76,7 @@ jobs:
       - run: python3 -m unittest discover -s tests -p test_git_url_policy.py
       - run: python3 -m unittest discover -s tests -p test_installer_release_channel.py
       - run: python3 -m unittest discover -s tests -p test_installer_nixpacks.py
+      - run: python3 -m unittest discover -s tests -p test_redis_manager.py
 
   build:
     runs-on: ubuntu-latest
