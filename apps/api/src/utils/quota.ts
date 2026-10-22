@@ -1,13 +1,13 @@
 import type { PrismaClient } from "@prisma/client";
 import { notifyUser } from "../modules/system-email/notifier.js";
 
-export type QuotaResource = "project" | "domain" | "database" | "mailbox" | "subAccount" | "scheduledTask";
+export type QuotaResource = "project" | "domain" | "database" | "mailbox" | "subAccount" | "scheduledTask" | "redisInstance";
 
 /** Resources that participate in reseller pooling/overselling (F5.20). `subAccount` is excluded — there's no reseller-of-reseller nesting, so sub-account counts don't aggregate the same way. */
 type PoolResource = Exclude<QuotaResource, "subAccount">;
 
-const QUOTA_RESOURCES: QuotaResource[] = ["project", "domain", "database", "mailbox", "subAccount", "scheduledTask"];
-const POOL_RESOURCES: PoolResource[] = ["project", "domain", "database", "mailbox", "scheduledTask"];
+const QUOTA_RESOURCES: QuotaResource[] = ["project", "domain", "database", "mailbox", "subAccount", "scheduledTask", "redisInstance"];
+const POOL_RESOURCES: PoolResource[] = ["project", "domain", "database", "mailbox", "scheduledTask", "redisInstance"];
 
 const QUOTA_FIELD: Record<QuotaResource, string> = {
   project: "maxProjects",
@@ -16,6 +16,7 @@ const QUOTA_FIELD: Record<QuotaResource, string> = {
   mailbox: "maxMailboxes",
   subAccount: "maxSubAccounts",
   scheduledTask: "maxScheduledTasks",
+  redisInstance: "maxRedisInstances",
 };
 
 export interface QuotaUsage {
@@ -44,6 +45,8 @@ async function countExisting(prisma: PrismaClient, userId: string, resource: Quo
       // unreachable from the panel (list 404s) — counting them would let a
       // deleted project block its owner (and the reseller pool) forever.
       return prisma.scheduledTask.count({ where: { userId, project: { deletedAt: null } } });
+    case "redisInstance":
+      return prisma.redisInstance.count({ where: { userId } });
   }
 }
 
@@ -143,13 +146,14 @@ export async function assertNominalPoolWithinCap(
       maxDatabases: true,
       maxMailboxes: true,
       maxScheduledTasks: true,
+      maxRedisInstances: true,
     },
   });
   if (!reseller || reseller.oversellingEnabled) return;
 
   const siblings = await prisma.user.findMany({
     where: { resellerId, id: { not: targetSubAccountId } },
-    select: { maxProjects: true, maxDomains: true, maxDatabases: true, maxMailboxes: true, maxScheduledTasks: true },
+    select: { maxProjects: true, maxDomains: true, maxDatabases: true, maxMailboxes: true, maxScheduledTasks: true, maxRedisInstances: true },
   });
 
   for (const resource of POOL_RESOURCES) {
@@ -202,6 +206,7 @@ export async function getUsageSummary(
       maxMailboxes: true,
       maxSubAccounts: true,
       maxScheduledTasks: true,
+      maxRedisInstances: true,
     },
   });
 
@@ -211,7 +216,7 @@ export async function getUsageSummary(
   const subAccountQuotas = isReseller
     ? await prisma.user.findMany({
         where: { resellerId: userId },
-        select: { maxProjects: true, maxDomains: true, maxDatabases: true, maxMailboxes: true, maxScheduledTasks: true },
+        select: { maxProjects: true, maxDomains: true, maxDatabases: true, maxMailboxes: true, maxScheduledTasks: true, maxRedisInstances: true },
       })
     : [];
 

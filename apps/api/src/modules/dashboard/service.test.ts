@@ -57,6 +57,7 @@ interface PrismaMock {
   database: { count: ReturnType<typeof vi.fn> };
   mailbox: { count: ReturnType<typeof vi.fn> };
   scheduledTask: { count: ReturnType<typeof vi.fn> };
+  redisInstance: { count: ReturnType<typeof vi.fn> };
   deployment: { findMany: ReturnType<typeof vi.fn> };
   backupSnapshot: { findMany: ReturnType<typeof vi.fn> };
 }
@@ -72,6 +73,7 @@ function createPrismaMock(overrides: { role?: "ADMIN" | "USER" | "RESELLER" } = 
         maxMailboxes: null,
         maxSubAccounts: null,
         maxScheduledTasks: null,
+        maxRedisInstances: null,
       }),
       findMany: vi.fn().mockResolvedValue([]),
       count: vi.fn().mockResolvedValue(0),
@@ -81,6 +83,7 @@ function createPrismaMock(overrides: { role?: "ADMIN" | "USER" | "RESELLER" } = 
     database: { count: vi.fn().mockResolvedValue(1) },
     mailbox: { count: vi.fn().mockResolvedValue(4) },
     scheduledTask: { count: vi.fn().mockResolvedValue(0) },
+    redisInstance: { count: vi.fn().mockResolvedValue(0) },
     deployment: { findMany: vi.fn().mockResolvedValue([]) },
     backupSnapshot: { findMany: vi.fn().mockResolvedValue([]) },
   };

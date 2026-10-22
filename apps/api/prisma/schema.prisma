@@ -89,6 +89,22 @@ enum DatabaseType {
   MYSQL
 }
 
+/// Lifecycle status of a user-provisioned Redis instance (F5.30).
+enum RedisInstanceStatus {
+  CREATING
+  RUNNING
+  STOPPED
+  ERROR
+}
+
+/// Durability mode of a Redis instance (F5.30): no persistence, RDB
+/// snapshots, or append-only file.
+enum RedisPersistence {
+  NONE
+  RDB
+  AOF
+}
+
 /// Status of a user-provisioned mailbox.
 enum MailboxStatus {
   ACTIVE
@@ -196,6 +212,7 @@ model User {
   maxMailboxes        Int?         @map("max_mailboxes")
   maxSubAccounts      Int?         @map("max_sub_accounts")
   maxScheduledTasks   Int?         @map("max_scheduled_tasks")
+  maxRedisInstances   Int?         @map("max_redis_instances")
   /// Named capabilities granted on top of the role (F5.19). Additive only —
   /// never removes what the role itself already grants.
   permissions         Permission[] @default([])
@@ -218,6 +235,7 @@ model User {
   projects            Project[]
   domains             Domain[]
   databases           Database[]
+  redisInstances      RedisInstance[]
   mailboxes           Mailbox[]
   virtualAliases      VirtualAlias[]
   dkimKeys            DkimKey[]
@@ -337,6 +355,7 @@ model Project {
   envVars            EnvVar[]
   domains            Domain[]
   databases          Database[]
+  redisInstances     RedisInstance[]
   scheduledTasks     ScheduledTask[]
   githubInstallation GitHubInstallation? @relation(fields: [githubInstallationId], references: [id], onDelete: SetNull)
 
@@ -523,6 +542,37 @@ model Database {
   @@unique([userId, name])
   @@index([userId])
   @@map("databases")
+}
+
+/// A user-provisioned Redis instance (F5.30): one dedicated container per
+/// instance on the internal network, with a password, a memory cap and its
+/// own volume. The panel's own Redis (sessions/queues) is never modeled here.
+model RedisInstance {
+  id                String              @id @default(cuid())
+  name              String
+  /// Compose-independent unique container name (vexlyx-redis-<slug>-<rand>).
+  containerName     String              @map("container_name")
+  /// Pinned image reference (e.g. valkey/valkey:8.0) — never `latest`.
+  imageTag          String              @map("image_tag")
+  memoryLimitMb     Int                 @map("memory_limit_mb")
+  /// Redis maxmemory-policy (e.g. noeviction, allkeys-lru).
+  evictionPolicy    String              @map("eviction_policy")
+  persistence       RedisPersistence    @default(RDB)
+  /// AES-256-GCM ciphertext (utils/encryption.ts); never returned by list
+  /// endpoints and never written to logs or the audit log.
+  passwordEncrypted String              @map("password_encrypted")
+  status            RedisInstanceStatus @default(CREATING)
+  userId            String              @map("user_id")
+  projectId         String?             @map("project_id")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, name])
+  @@index([userId])
+  @@map("redis_instances")
 }
 
 /// An email mailbox associated with a domain.

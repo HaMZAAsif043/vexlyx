@@ -33,6 +33,7 @@ const PUBLIC_USER_SELECT = {
   maxMailboxes: true,
   maxSubAccounts: true,
   maxScheduledTasks: true,
+  maxRedisInstances: true,
   permissions: true,
   oversellingEnabled: true,
   createdAt: true,
@@ -167,6 +168,7 @@ export class UserService {
         database: data.maxDatabases !== undefined ? data.maxDatabases : target.maxDatabases,
         mailbox: data.maxMailboxes !== undefined ? data.maxMailboxes : target.maxMailboxes,
         scheduledTask: data.maxScheduledTasks !== undefined ? data.maxScheduledTasks : target.maxScheduledTasks,
+        redisInstance: data.maxRedisInstances !== undefined ? data.maxRedisInstances : target.maxRedisInstances,
       };
       await assertNominalPoolWithinCap(
         this.prisma,
@@ -195,6 +197,7 @@ export class UserService {
           maxMailboxes: target.maxMailboxes,
           maxSubAccounts: target.maxSubAccounts,
           maxScheduledTasks: target.maxScheduledTasks,
+          maxRedisInstances: target.maxRedisInstances,
           ...(data.oversellingEnabled !== undefined ? { oversellingEnabled: target.oversellingEnabled } : {}),
         },
         after: data,
@@ -301,6 +304,7 @@ export class UserService {
         maxMailboxes: true,
         maxSubAccounts: true,
         maxScheduledTasks: true,
+        maxRedisInstances: true,
         permissions: true,
         oversellingEnabled: true,
       },

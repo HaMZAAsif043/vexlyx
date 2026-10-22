@@ -86,6 +86,15 @@ const envSchema = z
     MYSQL_PORT: z.coerce.number().int().default(3306),
     MYSQL_ROOT_USER: z.string().min(1).default("root"),
     MYSQL_ROOT_PASSWORD: z.string().min(1).default("vexlyx_mysql_root"),
+    // Redis Instances (F5.30) — per-instance tenant containers. REDIS_CONTAINER_NAME
+    // below (F5.6) is the PANEL's own Redis and is never used for tenant data.
+    // Host directory where redis_manager.py writes each instance's redis.conf
+    // (mounted read-only into the container; holds requirepass, so chmod 600).
+    // Defaults to <repo>/workspaces/redis-instances when unset.
+    REDIS_INSTANCE_CONFIG_DIR: z.string().min(1).optional(),
+    // Admin-configurable cap on a single instance's maxmemory; the Docker
+    // memory limit is set slightly above this.
+    REDIS_INSTANCE_MAX_MEMORY_MB: z.coerce.number().int().min(16).default(1024),
     // Browser-facing Adminer URL. Local development gets a localhost default
     // below; production is disabled unless an administrator explicitly supplies
     // a secure public URL.

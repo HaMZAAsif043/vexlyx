@@ -35,6 +35,8 @@ export const PYTHON_SCRIPT_TIMEOUT_MS = {
   git: 960_000,
   /** Database create / drop / test. */
   database: 180_000,
+  /** Redis instance create / update / stats — first create may pull an image. */
+  redis: 300_000,
   /** SFTP user provisioning. */
   sftp: 300_000,
   /** WordPress install / import / export (may stream a database dump). */

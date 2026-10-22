@@ -85,6 +85,32 @@ export type {
 } from "./schemas/databases.js";
 
 export {
+  RedisInstanceStatusEnum,
+  RedisImageEnum,
+  RedisPresetEnum,
+  RedisEvictionPolicyEnum,
+  RedisPersistenceEnum,
+  REDIS_NAME_PATTERN,
+  CreateRedisInstanceSchema,
+  UpdateRedisInstanceSchema,
+  RedisInstanceListQuerySchema,
+} from "./schemas/redisInstances.js";
+export type {
+  RedisInstanceStatus,
+  RedisImage,
+  RedisPreset,
+  RedisEvictionPolicy,
+  RedisPersistence,
+  CreateRedisInstanceInput,
+  UpdateRedisInstanceInput,
+  RedisInstanceListQuery,
+  RedisInstanceSummary,
+  RedisInstanceDetail,
+  RedisInstanceStats,
+  RedisInstanceListResponse,
+} from "./schemas/redisInstances.js";
+
+export {
   GitHubCommitAuthorSchema,
   GitHubCommitSchema,
   GitHubRepositorySchema,
