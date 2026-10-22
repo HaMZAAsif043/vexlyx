@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 import { pipeline } from "node:stream/promises";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -60,6 +61,14 @@ export interface CompressResult {
 // ---------------------------------------------------------------------------
 
 const MAX_READ_BYTES = 2 * 1024 * 1024;
+
+// In-progress uploads are written under this name and hidden from listings.
+const UPLOAD_TEMP_PREFIX = ".vexlyx-upload-";
+const UPLOAD_TEMP_SUFFIX = ".part";
+
+function isUploadTempName(name: string): boolean {
+  return name.startsWith(UPLOAD_TEMP_PREFIX) && name.endsWith(UPLOAD_TEMP_SUFFIX);
+}
 
 // Upper bound on entries touched by one recursive chmod.
 const MAX_CHMOD_ENTRIES = 100_000;
@@ -235,6 +244,7 @@ export class FileService {
     const nodes: FileNode[] = [];
 
     for (const entry of entries) {
+      if (isUploadTempName(entry.name)) continue;
       const abs = path.join(absDir, entry.name);
       const rel = path.relative(rootDir, abs).replace(/\\/g, "/");
       const isDir = entry.isDirectory();
@@ -711,8 +721,28 @@ export class FileService {
     }
 
     await fs.mkdir(path.dirname(target), { recursive: true });
-    const ws = createWriteStream(target);
-    await pipeline(readableStream, ws);
+
+    // Written beside the target and renamed on success: an upload that dies
+    // halfway (client abort, proxy timeout) must not leave a truncated file
+    // that blocks the retry with a 409, or destroy a file being overwritten.
+    const tempPath = path.join(
+      path.dirname(target),
+      `${UPLOAD_TEMP_PREFIX}${randomBytes(6).toString("hex")}${UPLOAD_TEMP_SUFFIX}`,
+    );
+    try {
+      await pipeline(readableStream, createWriteStream(tempPath));
+      if ((readableStream as { truncated?: boolean }).truncated) {
+        throw new FileError(
+          "The file exceeds the maximum upload size",
+          "FILE_TOO_LARGE",
+          413,
+        );
+      }
+      await fs.rename(tempPath, target);
+    } catch (err) {
+      await fs.rm(tempPath, { force: true });
+      throw err;
+    }
   }
 
   // ── Ownership guard ────────────────────────────────────────────────────

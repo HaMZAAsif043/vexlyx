@@ -1,5 +1,5 @@
 # Traefik v3 — Production Static Configuration (F5.1)
-# Rendered from this template by system/scripts/install/steps/06-render-config.sh,
+# Rendered from this template by system/scripts/install/steps/07-render-config.sh,
 # which substitutes __ACME_EMAIL__ with the real admin email collected during
 # install. The rendered file (traefik.prod.yml) is gitignored — see
 # docker/traefik/traefik.yml for the dev equivalent this is based on.
@@ -21,8 +21,20 @@ entryPoints:
         entryPoint:
           to: websecure
           scheme: https
+    transport:
+      respondingTimeouts:
+        readTimeout: 0s
+        idleTimeout: 180s
   websecure:
     address: ":443"
+    # Traefik's default 60s readTimeout cuts any request that takes longer
+    # than a minute to arrive, which kills file uploads on slow connections.
+    # 0s disables it; the API still bounds upload size, and idleTimeout still
+    # closes connections that go quiet.
+    transport:
+      respondingTimeouts:
+        readTimeout: 0s
+        idleTimeout: 180s
 
 certificatesResolvers:
   letsencrypt:

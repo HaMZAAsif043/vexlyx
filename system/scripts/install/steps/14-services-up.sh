@@ -16,6 +16,8 @@ COMPOSE=(docker compose --env-file "${VEXLYX_SECRETS_FILE}" -f docker-compose.ym
 
 "${COMPOSE[@]}" up -d --wait --wait-timeout 120
 
+restart_traefik_if_config_changed
+
 log_info "Waiting for the panel API to respond..."
 tries=30
 until "${COMPOSE[@]}" exec -T api curl -fsS http://localhost:5000/api/health >/dev/null 2>&1 || (( tries == 0 )); do

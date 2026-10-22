@@ -117,6 +117,8 @@ curl -fsSL https://vexlyx.atlantiqs.org/install.sh | sudo VEXLYX_REPO_REF=main b
 
 An install that already follows a branch keeps following it until you set `VEXLYX_REPO_REF=latest`.
 
+When a release changes Traefik's static configuration (for example the upload timeouts added in v0.4.1), the installer restarts the proxy once, and only then. Every site on the server is unreachable for a few seconds during that restart; an upgrade that does not change the configuration never restarts it.
+
 ::: warning Servers installed before v0.3.0
 Older versions committed a mailbox file (`docker/dovecot/config/users`) containing accounts with a
 publicly known password, and the panel keeps rewriting that file on your server. Git therefore

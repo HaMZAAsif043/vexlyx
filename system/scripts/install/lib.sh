@@ -153,3 +153,31 @@ load_secrets_file() {
     fi
   done < "${VEXLYX_SECRETS_FILE}"
 }
+
+# render_traefik_config TEMPLATE DEST ACME_EMAIL — renders Traefik's static
+# config and sets VEXLYX_TRAEFIK_RESTART_NEEDED=1 when DEST already existed
+# with different content. Static config is only read at start-up, and DEST is
+# a single-file bind mount that `docker compose up -d` does not notice
+# changing, so restart_traefik_if_config_changed has to apply it. DEST is
+# rewritten in place (cat >, never mv): the container is bound to the file's
+# inode, and a replacement file would never reach it.
+render_traefik_config() {
+  local template="$1" dest="$2" email="$3" rendered
+  rendered="$(mktemp)"
+  sed "s/__ACME_EMAIL__/${email}/" "${template}" > "${rendered}"
+  if [[ -f "${dest}" ]] && ! cmp -s "${rendered}" "${dest}"; then
+    VEXLYX_TRAEFIK_RESTART_NEEDED=1
+  fi
+  cat "${rendered}" > "${dest}"
+  rm -f "${rendered}"
+}
+
+# Restarts the shared proxy once, and only if render_traefik_config changed
+# its static config. Every site on the server drops for a few seconds.
+restart_traefik_if_config_changed() {
+  [[ "${VEXLYX_TRAEFIK_RESTART_NEEDED:-}" == "1" ]] || return 0
+  log_info "Traefik's static configuration changed; restarting it once to apply it (sites reconnect within seconds)..."
+  docker restart vexlyx-traefik >/dev/null
+  VEXLYX_TRAEFIK_RESTART_NEEDED=0
+  log_ok "Traefik restarted with the new configuration."
+}
