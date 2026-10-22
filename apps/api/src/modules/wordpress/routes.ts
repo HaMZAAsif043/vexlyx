@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { basename } from "node:path";
 import { WordPressService, WordPressError } from "./service.js";
 import {
   ProjectIdParamSchema,
@@ -52,7 +53,9 @@ export async function wordpressRoutes(app: FastifyInstance) {
 
   // -------------------------------------------------------------------------
   // POST /api/projects/:id/wordpress/upload
-  // Upload and unpack plugin or theme zip
+  // Upload and unpack plugin or theme zip (multipart — real theme/plugin
+  // archives are routinely multiple MB, which exceeded Fastify's default
+  // 1 MiB JSON body limit when this endpoint expected base64 JSON, #154).
   // -------------------------------------------------------------------------
   app.post(
     "/:id/wordpress/upload",
@@ -60,7 +63,35 @@ export async function wordpressRoutes(app: FastifyInstance) {
     async (request, reply) => {
       try {
         const { id } = ProjectIdParamSchema.parse(request.params);
-        const body = WordPressUploadSchema.parse(request.body);
+
+        let assetType: string | undefined;
+        let zipPath: string | undefined;
+
+        // File-size ceiling comes from the global multipart registration
+        // (FILE_UPLOAD_MAX_MB) — same policy as the files module.
+        const parts = request.parts();
+
+        for await (const part of parts) {
+          if (part.type === "field" && part.fieldname === "assetType") {
+            assetType = String(part.value);
+          } else if (part.type === "file") {
+            if (
+              part.fieldname === "file" &&
+              part.filename.toLowerCase().endsWith(".zip")
+            ) {
+              // Never trust the client filename for disk paths: strip any
+              // directory components and non-name characters, then prefix a
+              // timestamp so concurrent uploads cannot collide.
+              const safeName = `${Date.now()}-${basename(part.filename).replace(/[^\w.-]/g, "_")}`;
+              zipPath = await service.saveTempUpload(id, part.file, safeName);
+            } else {
+              // Drain rejected files so the request can complete cleanly.
+              await part.toBuffer();
+            }
+          }
+        }
+
+        const body = WordPressUploadSchema.parse({ assetType, zipPath });
         const result = await service.uploadAsset(request.userId!, id, body);
         reply.status(200);
         return result;

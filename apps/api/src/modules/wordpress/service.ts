@@ -208,22 +208,27 @@ export class WordPressService {
     await this.findOwnedProject(userId, projectId);
     const projectDir = resolve(env.PROJECTS_DIR, projectId);
 
-    const result = await runPythonCommand<{
-      success: boolean;
-      assetType: string;
-      extractedFiles: number;
-      targetDir: string;
-    }>({
-      command: "wordpress-upload",
-      projectDir,
-      assetType: input.assetType,
-      zipBase64: input.zipBase64,
-    });
+    try {
+      const result = await runPythonCommand<{
+        success: boolean;
+        assetType: string;
+        extractedFiles: number;
+        targetDir: string;
+      }>({
+        command: "wordpress-upload",
+        projectDir,
+        assetType: input.assetType,
+        zipPath: input.zipPath,
+      });
 
-    return {
-      message: `WordPress ${input.assetType} uploaded and extracted successfully`,
-      ...result,
-    };
+      return {
+        message: `WordPress ${input.assetType} uploaded and extracted successfully`,
+        ...result,
+      };
+    } finally {
+      // Best-effort cleanup of the temp multipart upload, success or failure.
+      await fs.rm(input.zipPath, { force: true }).catch(() => undefined);
+    }
   }
 
   async getStatus(userId: string, projectId: string) {
