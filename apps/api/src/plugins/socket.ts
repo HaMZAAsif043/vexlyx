@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import fp from "fastify-plugin";
-import { Server as SocketIOServer } from "socket.io";
+import { Server as SocketIOServer, Socket } from "socket.io";
 import type { Redis } from "ioredis";
 import { env } from "../config/env.js";
 import {
@@ -54,7 +54,7 @@ function sessionKey(id: string) {
   return `session:${id}`;
 }
 
-function extractSessionId(socket: any): string | null {
+function extractSessionId(socket: Socket): string | null {
   const cookieHeader = socket.handshake?.headers?.cookie;
   if (cookieHeader) {
     for (const part of cookieHeader.split(";")) {

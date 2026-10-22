@@ -7,7 +7,7 @@
     "dev": "next dev --port 3000 --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint . --ext .ts,.tsx,.js,.jsx",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "clean": "rimraf .next .turbo node_modules/.cache"
@@ -41,6 +41,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@next/eslint-plugin-next": "^16.4.0",
     "@tailwindcss/postcss": "^4.1.8",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.8",
