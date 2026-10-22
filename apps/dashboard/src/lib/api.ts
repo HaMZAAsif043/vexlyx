@@ -30,7 +30,11 @@ export async function fetchAPI<T>(
     headers: {
       // Only set Content-Type when there is a body — Fastify rejects
       // an 'application/json' content-type on bodyless requests (DELETE, GET).
-      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      // FormData bodies must stay untouched so the browser can attach its
+      // own multipart boundary.
+      ...(options.body && !(options.body instanceof FormData)
+        ? { "Content-Type": "application/json" }
+        : {}),
       ...options.headers,
     },
     ...options,

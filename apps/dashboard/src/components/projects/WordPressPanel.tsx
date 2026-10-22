@@ -159,22 +159,17 @@ export function WordPressPanel({ project, onProjectUpdate }: WordPressPanelProps
     try {
       // Multipart upload — real theme/plugin archives are routinely several
       // MB, far past the API's 1 MiB JSON body limit that base64-in-JSON
-      // requests used to hit with a 413 (#154).
+      // requests used to hit with a 413 (#154). fetchAPI supplies the
+      // configured API base URL; it leaves FormData bodies alone so the
+      // browser sets the multipart boundary.
       const form = new FormData();
       form.append("assetType", uploadType);
       form.append("file", file, file.name);
-      const url = `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000"}/api/projects/${project.id}/wordpress/upload`;
-      const res = await fetch(url, {
-        method: "POST",
-        credentials: "include",
-        body: form,
-      });
-      if (!res.ok) {
-        const d = (await res.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(d?.error ?? "Upload failed");
-      }
-      const data = (await res.json()) as { message: string };
-      toast.success(data.message);
+      const res = await fetchAPI<{ message: string }>(
+        `/api/projects/${project.id}/wordpress/upload`,
+        { method: "POST", body: form },
+      );
+      toast.success(res.message);
       await fetchStatus();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to upload asset");

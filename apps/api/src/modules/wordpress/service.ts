@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, createReadStream } from "node:fs";
 import fs from "node:fs/promises";
-import { resolve, dirname, join } from "node:path";
+import { resolve, dirname, join, basename } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createWriteStream } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -318,11 +319,18 @@ export class WordPressService {
     projectId: string,
     readableStream: NodeJS.ReadableStream,
     originalFilename: string,
-    log?: { error: (obj: object, msg: string) => void },
+    log: { error: (obj: object, msg: string) => void },
   ): Promise<string> {
     const uploadDir = join("/tmp", "vexlyx-imports", projectId);
     await fs.mkdir(uploadDir, { recursive: true });
-    const tarPath = join(uploadDir, originalFilename);
+    // The on-disk name is always generated here, never taken from the client:
+    // a raw filename could traverse directories, and two concurrent uploads
+    // of the same archive would share one path — so with the partial-write
+    // cleanup below, one request's failure could delete another request's
+    // completed file before it is consumed. Only a sanitized tail of the
+    // original name survives, for debuggability.
+    const safeName = `${randomUUID()}-${basename(originalFilename).replace(/[^\w.-]/g, "_")}`;
+    const tarPath = join(uploadDir, safeName);
     const ws = createWriteStream(tarPath);
     try {
       await pipeline(readableStream, ws);
@@ -330,7 +338,7 @@ export class WordPressService {
       // A failed write must not leave a partial archive on disk; the caller
       // only ever sees the path of a fully written upload.
       await fs.rm(tarPath, { force: true }).catch((rmErr: unknown) => {
-        log?.error(
+        log.error(
           { err: rmErr, path: tarPath },
           "failed to remove partial upload after stream error",
         );

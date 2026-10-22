@@ -276,10 +276,12 @@ describe("POST /api/projects/:id/wordpress/upload (multipart, #154)", () => {
 });
 
 describe("WordPressService.saveTempUpload", () => {
+  const silentLog = { error: () => undefined };
+
   it("removes the partial archive when the stream fails mid-write", async () => {
     const service = new WordPressService({} as PrismaClient);
     const projectId = `ptest-partial-${Date.now()}`;
-    const dest = join("/tmp", "vexlyx-imports", projectId, "x.zip");
+    const uploadDir = join("/tmp", "vexlyx-imports", projectId);
 
     const failing = new Readable({
       read() {
@@ -289,8 +291,31 @@ describe("WordPressService.saveTempUpload", () => {
     });
 
     await expect(
-      service.saveTempUpload(projectId, failing, "x.zip"),
+      service.saveTempUpload(projectId, failing, "x.zip", silentLog),
     ).rejects.toThrow("stream exploded");
-    expect(existsSync(dest)).toBe(false);
+    // The on-disk name is generated (uuid-prefixed), so assert the whole
+    // directory is empty rather than a specific path.
+    expect(await fs.readdir(uploadDir)).toEqual([]);
+  });
+
+  it("gives concurrent uploads of the same filename distinct paths", async () => {
+    // Regression: shared paths let one request's failed-write cleanup
+    // delete another request's completed archive (#154 review, P1).
+    const service = new WordPressService({} as PrismaClient);
+    const projectId = `ptest-unique-${Date.now()}`;
+    const uploadDir = join("/tmp", "vexlyx-imports", projectId);
+
+    const stream = () => Readable.from([Buffer.from("PK\x03\x04payload")]);
+    const [a, b] = await Promise.all([
+      service.saveTempUpload(projectId, stream(), "site.tar.gz", silentLog),
+      service.saveTempUpload(projectId, stream(), "site.tar.gz", silentLog),
+    ]);
+
+    expect(a).not.toBe(b);
+    expect(a).toMatch(/\.tar\.gz$/);
+    expect(b).toMatch(/\.tar\.gz$/);
+    expect(await fs.readdir(uploadDir)).toHaveLength(2);
+
+    await fs.rm(uploadDir, { recursive: true, force: true });
   });
 });

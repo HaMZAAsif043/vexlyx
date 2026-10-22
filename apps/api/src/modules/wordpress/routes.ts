@@ -1,6 +1,4 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { randomUUID } from "node:crypto";
-import { basename } from "node:path";
 import fs from "node:fs/promises";
 import { WordPressService, WordPressError } from "./service.js";
 import {
@@ -93,14 +91,12 @@ export async function wordpressRoutes(app: FastifyInstance) {
               part.fieldname === "file" &&
               part.filename.toLowerCase().endsWith(".zip")
             ) {
-              // Never trust the client filename for disk paths: strip any
-              // directory components and non-name characters, and use a
-              // random prefix so concurrent uploads can never share a path.
-              const safeName = `${randomUUID()}-${basename(part.filename).replace(/[^\w.-]/g, "_")}`;
+              // saveTempUpload generates the unique, sanitized on-disk name;
+              // the client filename is only carried through for readability.
               zipPath = await service.saveTempUpload(
                 id,
                 part.file,
-                safeName,
+                part.filename,
                 request.log,
               );
               tempPaths.push(zipPath);
@@ -198,7 +194,12 @@ export async function wordpressRoutes(app: FastifyInstance) {
           if (part.type === "field") {
             if (part.fieldname === "databaseId") databaseId = part.value as string;
           } else if (part.type === "file" && part.filename.endsWith(".tar.gz")) {
-            tarPath = await service.saveTempUpload(id, part.file, part.filename);
+            tarPath = await service.saveTempUpload(
+              id,
+              part.file,
+              part.filename,
+              request.log,
+            );
           }
         }
 
