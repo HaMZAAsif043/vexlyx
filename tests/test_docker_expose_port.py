@@ -25,16 +25,6 @@ docker_manager = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(docker_manager)
 
 
-def project_dir_with(dockerfile: str | None) -> str:
-    temp = tempfile.TemporaryDirectory()
-    # Caller owns cleanup via the test's own TemporaryDirectory when needed;
-    # these helpers are used inside tests that clean up at process exit or
-    # deliberately keep the dir for the duration of the test.
-    if dockerfile is not None:
-        (Path(temp.name) / "Dockerfile").write_text(dockerfile, encoding="utf-8")
-    return temp.name
-
-
 class FirstExposedPortTests(unittest.TestCase):
     def make_dir(self, dockerfile: str | None) -> str:
         temp = tempfile.TemporaryDirectory()
@@ -69,6 +59,56 @@ class FirstExposedPortTests(unittest.TestCase):
     def test_dockerfile_without_expose_returns_none(self):
         d = self.make_dir("FROM x\nCMD [\"true\"]\n")
         self.assertIsNone(docker_manager.first_exposed_port(d))
+
+    def test_alternate_dockerfile_names_are_recognized(self):
+        # The build accepts dockerfile / Dockerfile.prod / Dockerfile.app
+        # (build_manager.find_dockerfile), so the port reader must too.
+        for name in ("dockerfile", "Dockerfile.prod", "Dockerfile.app"):
+            with self.subTest(name=name):
+                temp = tempfile.TemporaryDirectory()
+                self.addCleanup(temp.cleanup)
+                (Path(temp.name) / name).write_text(
+                    "FROM x\nEXPOSE 9000\n", encoding="utf-8"
+                )
+                self.assertEqual(docker_manager.first_exposed_port(temp.name), 9000)
+
+    def test_standard_name_wins_over_alternates(self):
+        # Same candidate order as the build: Dockerfile first.
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        (Path(temp.name) / "Dockerfile").write_text("FROM x\nEXPOSE 80\n", encoding="utf-8")
+        (Path(temp.name) / "Dockerfile.prod").write_text("FROM x\nEXPOSE 9000\n", encoding="utf-8")
+        self.assertEqual(docker_manager.first_exposed_port(temp.name), 80)
+
+    def test_multistage_uses_final_stage_port(self):
+        # A builder stage's EXPOSE must not leak into the deployed port.
+        d = self.make_dir(
+            "FROM golang AS builder\nEXPOSE 8080\n"
+            "FROM wordpress:php8.3-apache\nEXPOSE 80\nCMD [\"apache2-foreground\"]\n"
+        )
+        self.assertEqual(docker_manager.first_exposed_port(d), 80)
+
+    def test_multistage_final_stage_without_expose_returns_none(self):
+        d = self.make_dir(
+            "FROM node AS builder\nEXPOSE 8080\n"
+            "FROM x\nCMD [\"node\", \"server.js\"]\n"
+        )
+        self.assertIsNone(docker_manager.first_exposed_port(d))
+
+    def test_read_failure_is_logged_and_returns_none(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        (Path(temp.name) / "Dockerfile").write_text("FROM x\nEXPOSE 80\n", encoding="utf-8")
+
+        with (
+            patch.object(Path, "read_text", side_effect=OSError("permission denied")),
+            patch.object(docker_manager, "log_line") as log_line,
+        ):
+            self.assertIsNone(docker_manager.first_exposed_port(temp.name))
+
+        log_line.assert_called_once()
+        self.assertIn("WARNING", log_line.call_args.args[0])
+        self.assertIn("permission denied", log_line.call_args.args[0])
 
 
 class ResolveContainerPortTests(unittest.TestCase):
