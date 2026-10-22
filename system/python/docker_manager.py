@@ -386,6 +386,64 @@ def default_container_port(project_type: str) -> int:
     return mapping.get(project_type.upper(), 3000)
 
 
+def first_exposed_port(project_dir: str) -> int | None:
+    """
+    Return the first EXPOSEd port from the project's Dockerfile, if present.
+
+    A Dockerfile that ships in the git repository was never parsed — only
+    Dockerfiles saved through the dashboard's editor persisted their EXPOSE
+    port (via syncPort) — so repo-sourced Docker projects deployed with the
+    DOCKER default of 3000 even when the image clearly served elsewhere,
+    and Traefik returned 502 (#152). Mirrors the EXPOSE parsing in
+    build_manager.parse_dockerfile_info (kept local because each system
+    script is deliberately standalone).
+    """
+    dockerfile = Path(project_dir) / "Dockerfile"
+    if not dockerfile.is_file():
+        return None
+
+    try:
+        content = dockerfile.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+    for line in content.splitlines():
+        line_clean = line.strip()
+        if not line_clean or line_clean.startswith("#"):
+            continue
+        # EXPOSE <port>[/<proto>] [<port> ...]
+        if line_clean.upper().startswith("EXPOSE "):
+            for token in line_clean[7:].split():
+                token_clean = token.split("/")[0].strip()
+                if token_clean.isdigit():
+                    port_num = int(token_clean)
+                    if 0 < port_num < 65536:
+                        return port_num
+    return None
+
+
+def resolve_container_port(payload: dict, project_type: str, project_dir: str) -> int:
+    """
+    Decide the container port for a deploy (#152):
+
+    1. An explicit containerPort (project.port set in the panel) always wins.
+    2. DOCKER projects with no override honor the first EXPOSEd port of the
+       repo's Dockerfile — that image is what actually gets deployed, and
+       docs/guide/deploying.md already promises "first EXPOSEd port unless
+       overridden". Only DOCKER is wired because other types deploy
+       panel-managed runtime images (nixpacks output, nginx:alpine, …)
+       whose repo Dockerfile, if any, is not what runs.
+    3. Otherwise the per-runtime default (3000 for DOCKER).
+    """
+    if payload.get("containerPort"):
+        return int(payload["containerPort"])
+    if project_type.upper() == "DOCKER":
+        exposed = first_exposed_port(project_dir)
+        if exposed:
+            return exposed
+    return default_container_port(project_type)
+
+
 def build_env_block(env_vars: dict[str, str], indent: int = 6) -> str:
     """Format env vars as indented YAML key-value pairs for the compose template."""
     if not env_vars:
@@ -524,7 +582,9 @@ def cmd_deploy(payload: dict) -> None:
 
     Optional payload fields:
       hostPort     -- override dynamic port assignment
-      containerPort -- override default container port
+      containerPort -- override default container port; when omitted, DOCKER
+                      projects honor the repo Dockerfile's first EXPOSEd port
+                      before falling back to the per-type default (#152)
       domain       -- fully custom hostname override
       envVars      -- dict of env var key->value to inject
       staticRoot   -- (STATIC/REACT, F5.7) host dir to bind-mount as the nginx webroot;
@@ -549,7 +609,7 @@ def cmd_deploy(payload: dict) -> None:
 
     # Resolve ports
     host_port = int(payload["hostPort"]) if payload.get("hostPort") else derive_host_port(project_id, port_start, port_end)
-    container_port = int(payload["containerPort"]) if payload.get("containerPort") else default_container_port(project_type)
+    container_port = resolve_container_port(payload, project_type, project_dir)
 
     # Resolve hostname
     slug = slugify(project_name)
