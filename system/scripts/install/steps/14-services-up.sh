@@ -40,6 +40,13 @@ log_info "Reconciling mail state from PostgreSQL and verifying live lookups..."
 "${COMPOSE[@]}" exec -T api python "${VEXLYX_HOME}/system/python/postfix_manager.py" verify_state
 log_ok "Postfix maps and Dovecot users are synchronized and ready."
 
+# One-time repair: refresh the generated nginx config of already-deployed
+# static and no-build PHP sites so they stop serving deploy/ and dot files.
+# Guarded by a marker file; a failure never stops the install.
+log_info "Refreshing site nginx configuration..."
+"${COMPOSE[@]}" exec -T api node dist/scripts/refresh-nginx-confs.js \
+  || log_warn "Site nginx configuration refresh did not complete; redeploying a site also applies it."
+
 install -m 0755 system/scripts/install/sync-mail-tls.sh /usr/local/sbin/vexlyx-sync-mail-tls
 cat > /etc/systemd/system/vexlyx-mail-tls.service <<EOF
 [Unit]

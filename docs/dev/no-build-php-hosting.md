@@ -55,6 +55,35 @@ directory instead of a named volume:
 
 ## Nginx config
 
+### Which paths are served
+
+A no-build site serves the whole project directory, which also holds the
+panel's generated `deploy/` files and whatever dot files the repository has.
+Both `php.conf.template` and `spa.conf.template` (no-build static/React, which
+serve the project directory the same way) therefore answer `404` for the exact
+`deploy/` directory and for any path segment that starts with a dot, except
+`/.well-known/` (ACME challenges, `security.txt`, app links). `deployment.txt`
+or `mydeploy/` are ordinary names and stay public. The rules sit before the PHP
+handler and use `^~` for `deploy`, so nothing can reach them through a regex
+location, and nginx decodes and normalises the URI first, so `%64eploy`,
+`//deploy`, `/./deploy` and `/x/../deploy` are covered as well.
+`tests/test_nginx_served_paths.py` renders both templates, runs them in a
+disposable `nginx:alpine` over a docroot holding `deploy/docker-compose.yml`,
+`deploy/nginx.conf`, `.git/config`, `.env` and friends, and requests 20 spellings
+that must be `404` and 8 public paths that must stay `200`.
+
+`nginx.conf` is generated into `deploy/` at deploy time, so existing sites keep
+the old one until redeployed. `docker_manager.py refresh_nginx_conf` (run once
+per upgrade by installer step 14 through `apps/api/src/scripts/refresh-nginx-confs.ts`,
+guarded by `workspaces/.migrations/nginx-served-paths-v1`) re-renders it for
+every no-build static, React and PHP site, in place (the container bind-mounts
+that single file, so the inode must stay) and only when the content changed,
+then reloads nginx. nginx keeps serving the old config if the new one fails its
+own test, a symlinked `deploy/` or `nginx.conf` is skipped, and one failing site
+never blocks the others.
+
+### Front controller
+
 `system/templates/nginx/php.conf.template` falls back unmatched URIs to
 `index.php`, the standard front-controller pattern most real PHP apps need:
 

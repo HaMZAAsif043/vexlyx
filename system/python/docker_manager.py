@@ -435,13 +435,49 @@ def generate_nginx_conf(
     project's nginx addresses its own container by its unique name rather
     than the ambiguous, Compose-auto-aliased bare service name; see
     app_upstream in cmd_deploy)."""
-    content = template_path.read_text(encoding="utf-8")
-    for key, value in (placeholders or {}).items():
-        content = content.replace(f"{{{{{key}}}}}", value)
+    content = render_nginx_conf(template_path, placeholders)
     compose_dir.mkdir(parents=True, exist_ok=True)
     dest = compose_dir / "nginx.conf"
     dest.write_text(content, encoding="utf-8")
     return dest
+
+
+def render_nginx_conf(template_path: Path, placeholders: dict[str, str] | None = None) -> str:
+    content = template_path.read_text(encoding="utf-8")
+    for key, value in (placeholders or {}).items():
+        content = content.replace(f"{{{{{key}}}}}", value)
+    return content
+
+
+def refresh_nginx_conf_for(project_dir: Path, project_type: str, project_id: str, php_no_build: bool) -> str:
+    """Re-render the nginx.conf of an already-deployed site that serves its
+    project directory (no-build static/React and no-build PHP), so a template
+    change reaches it without a redeploy.
+
+    Rewritten in place -- the container bind-mounts that single file, so it
+    must keep its inode -- and only when the content differs. Returns
+    "updated", "unchanged" or "skipped" (never deployed, another type, or a
+    symlink where a regular file or the deploy directory should be).
+    """
+    compose_dir = Path(project_dir) / "deploy"
+    conf = compose_dir / "nginx.conf"
+    if compose_dir.is_symlink() or conf.is_symlink() or not conf.is_file():
+        return "skipped"
+
+    project_type = project_type.upper()
+    if project_type in ("STATIC", "REACT"):
+        template, placeholders = "spa.conf.template", {}
+    elif project_type == "PHP" and php_no_build:
+        upstream = f"vexlyx-{slugify(project_id[:12])}-app-1"
+        template, placeholders = "php.conf.template", {"app_upstream": upstream}
+    else:
+        return "skipped"
+
+    rendered = render_nginx_conf(get_nginx_templates_dir() / template, placeholders)
+    if conf.read_text(encoding="utf-8") == rendered:
+        return "unchanged"
+    conf.write_text(rendered, encoding="utf-8")
+    return "updated"
 
 
 def compose_has_service(compose_dir: str | Path, service: str) -> bool:
@@ -1185,6 +1221,41 @@ def cmd_exec(payload: dict) -> None:
     })
 
 
+def cmd_refresh_nginx_conf(payload: dict) -> None:
+    """Re-render a deployed site's nginx.conf from the current template and,
+    if it changed and the site is running, reload nginx (which keeps serving
+    the old config if the new one fails its own test).
+
+    Payload: projectDir, projectType, projectId, phpNoBuild.
+    """
+    project_dir = require_field(payload, "projectDir")
+    project_type = require_field(payload, "projectType")
+    project_id = require_field(payload, "projectId")
+    php_no_build = bool(payload.get("phpNoBuild"))
+
+    outcome = refresh_nginx_conf_for(Path(project_dir), project_type, project_id, php_no_build)
+    reloaded = False
+    if outcome == "updated":
+        docker_bin = get_docker_binary()
+        compose_dir = str(Path(project_dir) / "deploy")
+        service = "web" if project_type.upper() == "PHP" else "app"
+        container_id = service_container_id(compose_dir, docker_bin, service)
+        if container_id:
+            result = run_bounded(
+                QUICK_TIMEOUT,
+                [docker_bin, "exec", container_id, "nginx", "-s", "reload"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            reloaded = result.returncode == 0
+            if not reloaded:
+                log_line(f"[vexlyx] nginx reload failed: {(result.stderr or '').strip()[:200]}")
+    log_line(f"[vexlyx] nginx.conf {outcome}" + (", nginx reloaded" if reloaded else ""))
+    respond({"done": True, "outcome": outcome, "reloaded": reloaded})
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -1204,6 +1275,7 @@ COMMANDS = {
     "image_id": cmd_image_id,
     "remove_image": cmd_remove_image,
     "exec": cmd_exec,
+    "refresh_nginx_conf": cmd_refresh_nginx_conf,
 }
 
 
