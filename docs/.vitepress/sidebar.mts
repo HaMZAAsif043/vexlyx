@@ -125,6 +125,7 @@ const groups: Group[] = [
       "reference/service-status",
       "reference/docker-cleanup",
       "reference/ci-cd",
+      "reference/versioning-release-plan",
       "reference/settings-page",
       "reference/dashboard-home",
       "reference/scheduled-tasks",

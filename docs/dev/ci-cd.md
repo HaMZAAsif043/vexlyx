@@ -12,10 +12,10 @@ Each CI job installs with `pnpm install --frozen-lockfile` (Node 22, pnpm versio
 
 Release images, published to `ghcr.io/atlantiqshq/`:
 
-| Image | Dockerfile | Notes |
-| --- | --- | --- |
-| `vexlyx-dashboard` | `apps/dashboard/Dockerfile` | Self-contained Next.js standalone image. `NEXT_PUBLIC_*` values are baked in at build time, so the published image uses the defaults. |
-| `vexlyx-api` | `apps/api/Dockerfile` | Runtime toolchain only (Node, Python, Docker CLI, Nixpacks). By design it ships no app code; the installer bind-mounts the host build. |
+| Image              | Dockerfile                  | Notes                                                                                                                                  |
+| ------------------ | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `vexlyx-dashboard` | `apps/dashboard/Dockerfile` | Self-contained Next.js standalone image. `NEXT_PUBLIC_*` values are baked in at build time, so the published image uses the defaults.  |
+| `vexlyx-api`       | `apps/api/Dockerfile`       | Runtime toolchain only (Node, Python, Docker CLI, Nixpacks). By design it ships no app code; the installer bind-mounts the host build. |
 
 Tags: `X.Y.Z`, plus `X.Y` and `latest` for stable tags. A tag containing `-` (for example `v1.0.0-rc.1`) is a prerelease: it gets a prerelease GitHub release and no `latest` tag.
 
@@ -56,5 +56,6 @@ Open a pull request and check that all four jobs pass. To test a release, push a
 
 ## How to extend
 
+- The [Versioning and release plan](versioning-release-plan.md) proposes coordinated product versions, release publication gates, exact-version installation, and tested upgrades. It describes planned work; the sections above describe current behavior.
 - Dashboard tests use Vitest (`apps/dashboard/vitest.config.ts`, `src/**/*.test.ts`).
 - Staging auto-deploy on merge is not implemented; add a job to `release.yml` or a new workflow when a staging server exists.
