@@ -402,10 +402,94 @@ def find_project_dockerfile(project_dir: str) -> Path | None:
     return None
 
 
+_HEREDOC_START_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+
+
+def _parse_build_stages(content: str) -> list[dict]:
+    """Parse a Dockerfile into its build stages.
+
+    Returns one dict per stage in declaration order:
+        {"alias": str | None, "parent": str | None, "exposes": [str, ...]}
+
+    Heredoc bodies (COPY/ADD/RUN <<EOF ... EOF) are treated as content, so
+    instruction-looking text inside them never starts a new stage (#172
+    review: `COPY <<EOF /tmp/Dockerfile` containing a `FROM` line must not
+    hide the real final stage).
+    """
+    stages: list[dict] = []
+    current: dict | None = None
+    heredoc_delims: list[str] = []
+
+    for raw_line in content.splitlines():
+        # Inside a heredoc only the (possibly indented, for <<-) terminator
+        # line matters; everything else is file content, not instructions.
+        if heredoc_delims:
+            stripped = raw_line.strip()
+            if stripped in heredoc_delims:
+                heredoc_delims.remove(stripped)
+            continue
+
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        upper = line.upper()
+        if upper.startswith("FROM "):
+            parts = line.split()
+            parent = parts[1] if len(parts) > 1 else None
+            alias = None
+            for i, part in enumerate(parts):
+                if part.upper() == "AS" and len(parts) > i + 1:
+                    alias = parts[i + 1]
+                    break
+            current = {"alias": alias, "parent": parent, "exposes": []}
+            stages.append(current)
+            continue
+
+        if current is None:
+            # Legal content before the first FROM (parser directives, ARG).
+            continue
+
+        if upper.startswith("EXPOSE "):
+            current["exposes"].append(line[7:].strip())
+
+        # A heredoc opener makes the following lines content until its
+        # terminator; only COPY/ADD/RUN may carry one.
+        if upper.startswith(("COPY ", "ADD ", "RUN ")):
+            match = _HEREDOC_START_RE.search(line)
+            if match:
+                heredoc_delims.append(match.group(2))
+
+    return stages
+
+
+def _stage_effective_exposes(stages: list[dict], index: int) -> list[str]:
+    """EXPOSE values visible to a stage: its own declarations, then those
+    inherited by following the named-parent chain (Docker carries
+    ExposedPorts over from the parent image — #172 review)."""
+    by_alias = {
+        s["alias"].lower(): i for i, s in enumerate(stages) if s["alias"]
+    }
+    effective: list[str] = []
+    seen: set[str] = set()
+    current: int | None = index
+    while current is not None:
+        stage = stages[current]
+        effective.extend(stage["exposes"])
+        parent = (stage["parent"] or "").lower()
+        if parent and parent in by_alias and parent not in seen:
+            seen.add(parent)
+            current = by_alias[parent]
+        else:
+            current = None
+    return effective
+
+
 def first_exposed_port(project_dir: str) -> int | None:
     """
     Return the first port EXPOSEd by the FINAL stage of the project's
-    Dockerfile, if present.
+    Dockerfile (including ports inherited from named parent stages), if
+    present.
 
     A Dockerfile that ships in the git repository was never parsed — only
     Dockerfiles saved through the dashboard's editor persisted their EXPOSE
@@ -429,28 +513,20 @@ def first_exposed_port(project_dir: str) -> int | None:
         )
         return None
 
-    lines = content.splitlines()
+    stages = _parse_build_stages(content)
+    if not stages:
+        return None
 
-    # Multi-stage builds: only the FINAL stage's EXPOSE describes the image
-    # that actually runs, so scan from the last top-level FROM onward.
-    last_from_index = -1
-    for index, line in enumerate(lines):
-        if line.strip().upper().startswith("FROM "):
-            last_from_index = index
-    scan_from = last_from_index + 1 if last_from_index >= 0 else 0
-
-    for line in lines[scan_from:]:
-        line_clean = line.strip()
-        if not line_clean or line_clean.startswith("#"):
-            continue
+    # Only the FINAL stage describes the image that actually runs (#152);
+    # a builder stage's EXPOSE must not leak in.
+    for expose_value in _stage_effective_exposes(stages, len(stages) - 1):
         # EXPOSE <port>[/<proto>] [<port> ...]
-        if line_clean.upper().startswith("EXPOSE "):
-            for token in line_clean[7:].split():
-                token_clean = token.split("/")[0].strip()
-                if token_clean.isdigit():
-                    port_num = int(token_clean)
-                    if 0 < port_num < 65536:
-                        return port_num
+        for token in expose_value.split():
+            token_clean = token.split("/")[0].strip()
+            if token_clean.isdigit():
+                port_num = int(token_clean)
+                if 0 < port_num < 65536:
+                    return port_num
     return None
 
 

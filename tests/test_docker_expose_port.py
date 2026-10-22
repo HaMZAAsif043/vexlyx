@@ -95,6 +95,44 @@ class FirstExposedPortTests(unittest.TestCase):
         )
         self.assertIsNone(docker_manager.first_exposed_port(d))
 
+    def test_final_stage_inherits_port_from_named_stage(self):
+        # FROM <alias> carries ExposedPorts over from that stage, so the
+        # final image still serves on 80 even without its own EXPOSE (#172).
+        d = self.make_dir(
+            "FROM nginx:alpine AS base\nEXPOSE 80\n"
+            "FROM base\n"
+        )
+        self.assertEqual(docker_manager.first_exposed_port(d), 80)
+
+    def test_named_stage_inheritance_is_recursive_and_case_insensitive(self):
+        d = self.make_dir(
+            "FROM alpine AS Builder\nEXPOSE 7000\n"
+            "FROM builder AS Runtime\nEXPOSE 7100\n"
+            "FROM runtime\n"
+        )
+        # Own ports come before inherited ones; aliases match case-insensitively.
+        self.assertEqual(docker_manager.first_exposed_port(d), 7100)
+
+    def test_heredoc_content_is_not_treated_as_instructions(self):
+        # A heredoc may legitimately contain FROM/EXPOSE lines as *file
+        # content*; they must not hide the real port (#172).
+        d = self.make_dir(
+            "FROM alpine\nEXPOSE 80\n"
+            "COPY <<EOF /tmp/Dockerfile\n"
+            "FROM scratch\nEXPOSE 9999\n"
+            "EOF\n"
+        )
+        self.assertEqual(docker_manager.first_exposed_port(d), 80)
+
+    def test_quoted_heredoc_delimiter_is_supported(self):
+        d = self.make_dir(
+            "FROM alpine\nEXPOSE 8081\n"
+            "COPY <<'EOF' /tmp/notes.txt\n"
+            "FROM x\n"
+            "EOF\n"
+        )
+        self.assertEqual(docker_manager.first_exposed_port(d), 8081)
+
     def test_read_failure_is_logged_and_returns_none(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
