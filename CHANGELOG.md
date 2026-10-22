@@ -6,6 +6,7 @@ All notable changes to Vexlyx are documented here. The format follows [Keep a Ch
 
 ### Fixed
 
+- Switching a project to a branch that was created after the first clone no longer fails with `pathspec ... did not match`: the sync now fetches the branch into its remote-tracking ref before checking it out, and a failed update reports one clear error instead of a stale document the API cannot parse (#153).
 - Large or slow file uploads are no longer cut off after 60 seconds, and an interrupted upload leaves no partial file behind, so a retry works. Upgrading restarts Traefik once to apply the new timeouts (#155).
 - Adding, verifying, securing or removing a domain no longer restarts the shared Traefik proxy, so other sites on the server stay online (#156).
 - Static and no-build PHP sites now only serve site content: the panel's `deploy` folder and dot files such as `.git` and `.env` answer 404, while `/.well-known/` stays reachable. Existing sites are updated on upgrade without a redeploy.

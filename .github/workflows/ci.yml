@@ -74,6 +74,7 @@ jobs:
       - run: pnpm test
       - run: python3 -m unittest discover -s tests -p test_restore_stop_safety.py
       - run: python3 -m unittest discover -s tests -p test_git_url_policy.py
+      - run: python3 -m unittest discover -s tests -p test_git_branch_switch.py
       - run: python3 -m unittest discover -s tests -p test_installer_release_channel.py
       - run: python3 -m unittest discover -s tests -p test_installer_nixpacks.py
       - run: python3 -m unittest discover -s tests -p test_nginx_conf_refresh.py
