@@ -11,18 +11,15 @@ explicit override > repo Dockerfile's first EXPOSEd port (DOCKER only) >
 per-type default.
 """
 
-import importlib.util
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-SPEC = importlib.util.spec_from_file_location(
-    "docker_manager", Path(__file__).parents[1] / "system/python/docker_manager.py"
-)
-docker_manager = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(docker_manager)
+sys.path.insert(0, str(Path(__file__).parent))
+import docker_manager  # noqa: E402  (same-directory import, repo convention)
 
 
 class FirstExposedPortTests(unittest.TestCase):
@@ -132,6 +129,34 @@ class FirstExposedPortTests(unittest.TestCase):
             "EOF\n"
         )
         self.assertEqual(docker_manager.first_exposed_port(d), 8081)
+
+    def test_quoted_double_chevron_is_not_a_heredoc(self):
+        # A literal '<<EOF' inside quotes is shell text, not an opener; it
+        # must not swallow the following EXPOSE (#172).
+        d = self.make_dir(
+            "FROM alpine\n"
+            "RUN echo '<<EOF'\n"
+            "RUN echo \"<<NOTEOF\"\n"
+            "EXPOSE 80\n"
+        )
+        self.assertEqual(docker_manager.first_exposed_port(d), 80)
+
+    def test_real_heredoc_after_quoted_literal_still_parses(self):
+        # The boundary rule must not disable genuine openers: '<<' at the
+        # start of the arguments or after whitespace still counts.
+        d = self.make_dir(
+            "FROM alpine\n"
+            "RUN echo '<<LITERAL' && cat <<EOF\n"
+            "FROM scratch\nEXPOSE 9999\n"
+            "EOF\n"
+            "EXPOSE 8082\n"
+        )
+        self.assertEqual(docker_manager.first_exposed_port(d), 8082)
+
+    def test_tab_separated_instruction_and_arguments(self):
+        # FROM/EXPOSE may be separated from their arguments by tabs (#172).
+        d = self.make_dir("FROM\talpine\nEXPOSE\t80\n")
+        self.assertEqual(docker_manager.first_exposed_port(d), 80)
 
     def test_read_failure_is_logged_and_returns_none(self):
         temp = tempfile.TemporaryDirectory()

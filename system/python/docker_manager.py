@@ -402,7 +402,12 @@ def find_project_dockerfile(project_dir: str) -> Path | None:
     return None
 
 
-_HEREDOC_START_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+_HEREDOC_START_RE = re.compile(
+    # A heredoc opener is a shell word: '<<' at the start of the arguments or
+    # after whitespace. Requiring that boundary keeps quoted literals like
+    # RUN echo '<<EOF' from being mistaken for an opener (#172 review).
+    r"(?:^|\s)<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1"
+)
 
 
 def _parse_build_stages(content: str) -> list[dict]:
@@ -433,14 +438,20 @@ def _parse_build_stages(content: str) -> list[dict]:
         if not line or line.startswith("#"):
             continue
 
-        upper = line.upper()
-        if upper.startswith("FROM "):
-            parts = line.split()
-            parent = parts[1] if len(parts) > 1 else None
+        # The keyword is separated from its arguments by any whitespace run
+        # (spaces or tabs), not just a single space (#172 review: a valid
+        # "FROM<TAB>alpine" must still create a stage).
+        parts = line.split(None, 1)
+        instruction = parts[0].upper()
+        args = parts[1] if len(parts) > 1 else ""
+
+        if instruction == "FROM":
+            from_parts = args.split()
+            parent = from_parts[0] if from_parts else None
             alias = None
-            for i, part in enumerate(parts):
-                if part.upper() == "AS" and len(parts) > i + 1:
-                    alias = parts[i + 1]
+            for i, part in enumerate(from_parts):
+                if part.upper() == "AS" and len(from_parts) > i + 1:
+                    alias = from_parts[i + 1]
                     break
             current = {"alias": alias, "parent": parent, "exposes": []}
             stages.append(current)
@@ -450,13 +461,14 @@ def _parse_build_stages(content: str) -> list[dict]:
             # Legal content before the first FROM (parser directives, ARG).
             continue
 
-        if upper.startswith("EXPOSE "):
-            current["exposes"].append(line[7:].strip())
+        if instruction == "EXPOSE" and args:
+            current["exposes"].append(args)
 
         # A heredoc opener makes the following lines content until its
-        # terminator; only COPY/ADD/RUN may carry one.
-        if upper.startswith(("COPY ", "ADD ", "RUN ")):
-            match = _HEREDOC_START_RE.search(line)
+        # terminator; only COPY/ADD/RUN may carry one. Only the ARGUMENTS are
+        # scanned - the keyword itself can never contain an opener.
+        if instruction in ("COPY", "ADD", "RUN"):
+            match = _HEREDOC_START_RE.search(args)
             if match:
                 heredoc_delims.append(match.group(2))
 
