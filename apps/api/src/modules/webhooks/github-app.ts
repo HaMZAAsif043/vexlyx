@@ -5,6 +5,7 @@ import { decrypt } from "../../utils/encryption.js";
 import { env } from "../../config/env.js";
 import { WebhookError, WebhookService } from "./service.js";
 import { claimDelivery, readDeliveryId, releaseDelivery } from "./delivery.js";
+import { createAndEnqueueDeployment, hasRecentDeploymentForCommit } from "./enqueue.js";
 
 interface GitHubAppPayload {
   action?: string;
@@ -62,25 +63,27 @@ export function registerGitHubAppWebhook(
           select: { id: true, userId: true, branch: true, buildCmd: true },
         });
         const matching = projects.filter((project) => project.branch === branch);
+        const commitHash = payload.head_commit?.id ?? payload.after ?? null;
+        let queued = 0;
         for (const project of matching) {
-          const deployment = await app.prisma.deployment.create({
-            data: {
+          // A failed attempt at this same delivery may already have queued earlier
+          // projects before it threw; GitHub's retry must not queue those twice.
+          if (await hasRecentDeploymentForCommit(app.prisma, project.id, commitHash)) continue;
+          await createAndEnqueueDeployment(app.prisma, enqueueJob, {
+            projectId: project.id,
+            commitHash,
+            commitMsg: payload.head_commit?.message ?? null,
+            job: {
               projectId: project.id,
-              status: "QUEUED",
-              commitHash: payload.head_commit?.id ?? payload.after ?? null,
-              commitMsg: payload.head_commit?.message ?? null,
+              userId: project.userId,
+              projectDir: resolve(env.PROJECTS_DIR, project.id),
+              imageName: `${env.NIXPACKS_IMAGE_PREFIX}-${project.id}`,
+              buildCmd: project.buildCmd,
             },
           });
-          await enqueueJob({
-            deploymentId: deployment.id,
-            projectId: project.id,
-            userId: project.userId,
-            projectDir: resolve(env.PROJECTS_DIR, project.id),
-            imageName: `${env.NIXPACKS_IMAGE_PREFIX}-${project.id}`,
-            buildCmd: project.buildCmd,
-          });
+          queued += 1;
         }
-        return reply.status(matching.length ? 202 : 200).send({ success: true, deploymentsQueued: matching.length });
+        return reply.status(queued ? 202 : 200).send({ success: true, deploymentsQueued: queued });
       }
 
       if (event === "installation") {

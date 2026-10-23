@@ -62,7 +62,10 @@ function createRedis() {
 function createService(project: ProjectRow | null) {
   const prisma = {
     project: { findUnique: vi.fn(async () => project) },
-    deployment: { create: vi.fn(async () => ({ id: "deployment-1" })) },
+    deployment: {
+      create: vi.fn(async () => ({ id: "deployment-1" })),
+      update: vi.fn(async () => ({ id: "deployment-1" })),
+    },
   };
   const redis = createRedis();
   const service = new WebhookService(prisma as never, undefined, redis as never);

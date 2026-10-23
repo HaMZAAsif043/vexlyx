@@ -10,6 +10,7 @@ import type {
 import { env } from "../../config/env.js";
 import type { BuildJobData } from "../build/schema.js";
 import { claimDelivery, releaseDelivery } from "./delivery.js";
+import { createAndEnqueueDeployment } from "./enqueue.js";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -199,28 +200,22 @@ export class WebhookService {
       const commitHash = headCommit?.id ?? pushPayload.after ?? null;
       const commitMsg = headCommit?.message ?? null;
 
-      // Create new deployment record in QUEUED status
-      const deployment = await this.prisma.deployment.create({
-        data: {
+      const deployment = await createAndEnqueueDeployment(
+        this.prisma,
+        enqueueJob,
+        {
           projectId: project.id,
-          status: "QUEUED",
           commitHash,
           commitMsg,
+          job: {
+            projectId: project.id,
+            userId: project.userId,
+            projectDir: resolve(env.PROJECTS_DIR, project.id),
+            imageName: `${env.NIXPACKS_IMAGE_PREFIX}-${project.id}`,
+            buildCmd: project.buildCmd ?? null,
+          },
         },
-      });
-
-      const projectDir = resolve(env.PROJECTS_DIR, project.id);
-      const imageName = `${env.NIXPACKS_IMAGE_PREFIX}-${project.id}`;
-      const effectiveBuildCmd = project.buildCmd ?? null;
-
-      await enqueueJob({
-        deploymentId: deployment.id,
-        projectId: project.id,
-        userId: project.userId,
-        projectDir,
-        imageName,
-        buildCmd: effectiveBuildCmd,
-      });
+      );
 
       this.logger?.info(
         {

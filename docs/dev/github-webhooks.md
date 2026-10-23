@@ -58,11 +58,16 @@ Build Worker (apps/api/src/modules/build/service.ts)
    - A signed request **without** `x-github-delivery` returns `400 MISSING_DELIVERY_ID` (GitHub always sends it). This check runs after the signature check, and unsigned requests never claim an ID.
    - If processing fails after the claim, the claim is released so GitHub's retry is handled instead of ignored.
 
-3. **Branch Isolation**:
+3. **Enqueue failures do not strand deployments**:
+   - The Deployment row is created `QUEUED` first (the job carries its ID), then the build job is enqueued (`enqueue.ts`, `createAndEnqueueDeployment`). If enqueueing throws, the row is marked `FAILED` with an explanatory `buildLogs` message, the delivery claim is released and the request fails, so GitHub's redelivery is processed and creates exactly one new active deployment.
+   - The GitHub App endpoint handles several projects per push. A retried delivery skips any project that already has a non-`FAILED` deployment for the same commit from the last 24 hours (`hasRecentDeploymentForCommit`), so projects queued before the failure are not queued twice.
+   - Rows left `QUEUED` by older versions are not touched automatically.
+
+4. **Branch Isolation**:
    - The webhook parses the `ref` field (e.g. `refs/heads/main`).
    - If the pushed branch differs from the project's configured deployment branch (e.g. `main`), the request is acknowledged with `200 OK` and `{ ignored: true, reason: "Branch mismatch" }` without queuing unwanted builds.
 
-4. **Secret Rotation**:
+5. **Secret Rotation**:
    - Project owners can rotate/regenerate their HMAC secret at any time via `POST /api/projects/:id/git/webhook-secret/rotate` or the Dashboard UI.
 
 ---
