@@ -76,6 +76,11 @@ jobs:
       - run: python3 -m unittest discover -s tests -p test_restore_stop_safety.py
       - run: python3 -m unittest discover -s tests -p test_git_url_policy.py
       - run: python3 -m unittest discover -s tests -p test_installer_release_channel.py
+      # cryptography is what postfix_manager.py generates DKIM keys with (the
+      # API image and the installer install it the same way); without it the
+      # test would skip itself.
+      - run: pip3 install cryptography
+      - run: python3 -m unittest discover -s tests -p test_dkim_first_check.py
       - run: python3 -m unittest discover -s tests -p test_installer_nixpacks.py
       - run: python3 -m unittest discover -s tests -p test_nginx_conf_refresh.py
       - run: python3 -m unittest discover -s tests -p test_nginx_served_paths.py
