@@ -91,9 +91,9 @@ prepare_mail_upgrade() {
       docker/postfix/config/virtual_domains|docker/postfix/config/virtual_mailbox_maps|docker/postfix/config/virtual_alias_maps|docker/dovecot/config/users|docker/postfix/opendkim/KeyTable|docker/postfix/opendkim/SigningTable|docker/postfix/opendkim/TrustedHosts) ;;
       *) echo "[ERROR] Source changes detected; upgrade stopped without discarding them: ${status_line:3}" >&2; exit 1;;
     esac
-  done < <(git status --porcelain)
+  done < <(source_changes)
   if ! git cat-file -e FETCH_HEAD:system/python/mail_state_migrate.py 2>/dev/null; then
-    [[ -z "$(git status --porcelain)" ]] || { echo "[ERROR] Target revision has no mail-state migration. Preserve generated maps before upgrading." >&2; exit 1; }
+    [[ -z "$(source_changes)" ]] || { echo "[ERROR] Target revision has no mail-state migration. Preserve generated maps before upgrading." >&2; exit 1; }
     return
   fi
   if [[ -z "$(git ls-files -- "${runtime_files[@]}")" ]]; then return; fi
@@ -117,6 +117,17 @@ prepare_mail_upgrade() {
   done
 }
 
+
+# Edits to tracked files: the only local changes an upgrade has to protect.
+# Untracked files (a pnpm store, build output) and mode-only changes never get
+# in the way of a checkout. v0.3.x servers have the latter on tracked
+# OpenDKIM key files, because the Postfix entrypoint ran chmod -R on them.
+# Defined after prepare_mail_upgrade, which calls it, so that
+# system/python/test_mail_upgrade.py (it runs that function's text on its own)
+# still receives it.
+source_changes() {
+  git -c core.fileMode=false status --porcelain --untracked-files=no 2>/dev/null
+}
 
 ensure_git() {
   if ! command -v git >/dev/null 2>&1; then
@@ -142,7 +153,7 @@ update_checkout() {
     log "${VEXLYX_HOME} is not a git checkout — leaving it untouched, not updating."
     return 0
   fi
-  if [[ -n "$(git status --porcelain 2>/dev/null)" ]] &&
+  if [[ -n "$(source_changes)" ]] &&
      [[ -z "$(git ls-files -- docker/postfix/config/virtual_domains docker/postfix/config/virtual_mailbox_maps docker/postfix/config/virtual_alias_maps docker/dovecot/config/users docker/postfix/opendkim/KeyTable docker/postfix/opendkim/SigningTable docker/postfix/opendkim/TrustedHosts)" ]]; then
     log "Local changes detected in ${VEXLYX_HOME} — leaving them as-is, not pulling."
     if git status --porcelain -- docker/dovecot/config/users 2>/dev/null | grep -q .; then
@@ -169,7 +180,7 @@ update_checkout() {
     local current_tag
     current_tag="$(git describe --tags --exact-match 2>/dev/null || true)"
     if [[ "${current_tag}" == "${TARGET_NAME}" ]]; then
-      if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+      if [[ -n "$(source_changes)" ]]; then
         log "Local changes detected in ${VEXLYX_HOME} — leaving them as-is, not pulling."
         log "For exposed legacy mailbox credentials, follow docs/dev/email/mail-credential-remediation.md."
       else
@@ -180,13 +191,13 @@ update_checkout() {
     log "Updating to release ${TARGET_NAME}..."
     git fetch --quiet --depth 1 origin "refs/tags/${TARGET_NAME}:refs/tags/${TARGET_NAME}"
     prepare_mail_upgrade
-    git -c advice.detachedHead=false checkout --quiet "refs/tags/${TARGET_NAME}"
+    git -c core.fileMode=false -c advice.detachedHead=false checkout --quiet "refs/tags/${TARGET_NAME}"
   else
     log "Updating to the latest ${TARGET_NAME} (development branch)..."
     git fetch origin "${TARGET_NAME}"
     prepare_mail_upgrade
-    git checkout "${TARGET_NAME}"
-    git pull --ff-only origin "${TARGET_NAME}"
+    git -c core.fileMode=false checkout "${TARGET_NAME}"
+    git -c core.fileMode=false pull --ff-only origin "${TARGET_NAME}"
   fi
 }
 
