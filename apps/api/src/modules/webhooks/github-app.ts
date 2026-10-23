@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { decrypt } from "../../utils/encryption.js";
 import { env } from "../../config/env.js";
 import { WebhookError, WebhookService } from "./service.js";
+import { claimDelivery, readDeliveryId, releaseDelivery } from "./delivery.js";
 
 interface GitHubAppPayload {
   action?: string;
@@ -34,12 +35,11 @@ export function registerGitHubAppWebhook(
       throw new WebhookError("Invalid GitHub webhook signature", "INVALID_WEBHOOK_SIGNATURE", 401);
     }
 
-    const deliveryHeader = request.headers["x-github-delivery"];
-    const deliveryId = Array.isArray(deliveryHeader) ? deliveryHeader[0] : deliveryHeader;
+    const deliveryId = readDeliveryId(request.headers["x-github-delivery"]);
     if (!deliveryId) throw new WebhookError("Missing GitHub delivery ID", "MISSING_DELIVERY_ID", 400);
-    const deliveryKey = `github:webhook-delivery:${deliveryId}`;
-    const claimed = await app.redis.set(deliveryKey, "processing", "EX", 86_400, "NX");
-    if (!claimed) return reply.status(200).send({ success: true, ignored: true, reason: "duplicate_delivery" });
+    if (!(await claimDelivery(app.redis, deliveryId))) {
+      return reply.status(200).send({ success: true, ignored: true, reason: "duplicate_delivery" });
+    }
 
     try {
       const eventHeader = request.headers["x-github-event"];
@@ -132,7 +132,7 @@ export function registerGitHubAppWebhook(
 
       return reply.send({ success: true, ignored: true });
     } catch (error) {
-      await app.redis.del(deliveryKey);
+      await releaseDelivery(app.redis, deliveryId);
       throw error;
     }
   });

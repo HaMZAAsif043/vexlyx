@@ -2,12 +2,14 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { resolve } from "node:path";
 import type { PrismaClient } from "@prisma/client";
 import type { FastifyBaseLogger } from "fastify";
+import type { Redis } from "ioredis";
 import type {
   GitHubPushPayload,
   GitHubWebhookResponse,
 } from "@vexlyx/shared";
 import { env } from "../../config/env.js";
 import type { BuildJobData } from "../build/schema.js";
+import { claimDelivery, releaseDelivery } from "./delivery.js";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -28,10 +30,15 @@ export class WebhookError extends Error {
 // Service Layer
 // ---------------------------------------------------------------------------
 
+// Compared against when a project or its secret does not exist, so a request
+// for an unknown project spends the same HMAC work as one for a real project.
+const DUMMY_WEBHOOK_SECRET = "vexlyx-webhook-unknown-project-placeholder";
+
 export class WebhookService {
   constructor(
     private prisma: PrismaClient,
     private logger?: FastifyBaseLogger,
+    private redis?: Pick<Redis, "set" | "del">,
   ) {}
 
   /**
@@ -80,6 +87,7 @@ export class WebhookService {
     signatureHeader: string | string[] | undefined,
     payload: unknown,
     enqueueJob: (data: BuildJobData) => Promise<void>,
+    deliveryId?: string,
   ): Promise<GitHubWebhookResponse> {
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
@@ -95,32 +103,66 @@ export class WebhookService {
       },
     });
 
-    if (!project || project.deletedAt !== null) {
-      throw new WebhookError("Project not found", "PROJECT_NOT_FOUND", 404);
-    }
-
-    if (!project.webhookSecret) {
-      throw new WebhookError(
-        "Webhook secret not configured for this project",
-        "WEBHOOK_SECRET_NOT_CONFIGURED",
-        400,
-      );
-    }
-
-    // Verify cryptographic signature
-    const isValid = this.verifySignature(
-      project.webhookSecret,
+    // An unknown project, a deleted one, one without a secret and a bad
+    // signature must be indistinguishable to an unauthenticated caller, in the
+    // response and in timing, so the HMAC is always computed.
+    const secret =
+      project && project.deletedAt === null ? project.webhookSecret : null;
+    const signatureMatches = this.verifySignature(
+      secret ?? DUMMY_WEBHOOK_SECRET,
       rawBody,
       signatureHeader,
     );
 
-    if (!isValid) {
+    if (!project || !secret || !signatureMatches) {
       throw new WebhookError(
         "Invalid GitHub webhook signature (x-hub-signature-256)",
         "INVALID_WEBHOOK_SIGNATURE",
         401,
       );
     }
+
+    if (!deliveryId) {
+      throw new WebhookError(
+        "Missing GitHub delivery ID (x-github-delivery)",
+        "MISSING_DELIVERY_ID",
+        400,
+      );
+    }
+
+    if (this.redis && !(await claimDelivery(this.redis, deliveryId))) {
+      this.logger?.info(
+        { projectId, deliveryId },
+        "Ignoring duplicate GitHub webhook delivery",
+      );
+      return {
+        success: true,
+        ignored: true,
+        reason: "duplicate_delivery",
+        message: "Duplicate delivery ignored",
+      };
+    }
+
+    try {
+      return await this.processEvent(project, event, payload, enqueueJob);
+    } catch (error) {
+      if (this.redis) await releaseDelivery(this.redis, deliveryId);
+      throw error;
+    }
+  }
+
+  private async processEvent(
+    project: {
+      id: string;
+      userId: string;
+      branch: string;
+      buildCmd: string | null;
+    },
+    event: string,
+    payload: unknown,
+    enqueueJob: (data: BuildJobData) => Promise<void>,
+  ): Promise<GitHubWebhookResponse> {
+    const projectId = project.id;
 
     // Handle Ping event
     if (event === "ping") {
