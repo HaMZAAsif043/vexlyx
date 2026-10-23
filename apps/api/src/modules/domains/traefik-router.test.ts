@@ -75,7 +75,7 @@ describe("Traefik route files", () => {
   });
 
   it("logs a write failure through the injected logger", () => {
-    const logger = { error: vi.fn(), warn: vi.fn() };
+    const logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
     const service = new DomainService({} as PrismaClient, undefined, logger);
     vi.spyOn(fs, "renameSync").mockImplementation(() => {
       throw new Error("disk full");

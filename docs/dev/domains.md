@@ -101,9 +101,11 @@ The API never restarts or signals the shared `vexlyx-traefik` container: restart
          service-{domainId}:
            loadBalancer:
              servers:
-               - url: "http://vexlyx-{serviceName}-app-1:{containerPort}"
+               - url: "http://vexlyx-{serviceName}-{service}-1:{port}"
      ```
    - Seamlessly proxies HTTP traffic to the target container with zero downtime.
+   - `{service}` and `{port}` come from `resolveHttpUpstream()` (`domains/upstream.ts`): WordPress and no-build PHP projects run PHP-FPM (`app`, FastCGI on 9000) behind an nginx (`web`, port 80), so their route targets `web`; every other type targets its single `app` container. The function is checked against the Traefik labels in `system/templates/docker-compose/*.yml` by `upstream.test.ts`, so a new template or type that exposes a different service fails the test instead of producing a 502.
+   - On every API start, `DomainService.syncAllRoutes()` rewrites the route file of each active, attached domain and leaves files that are already correct alone. This repaired servers whose routes were generated before #150 (WordPress and no-build PHP domains answering 502) on upgrade, with no proxy restart. A hand-edited route file is overwritten at the next start; the files are generated, not configuration.
 
 4. **Domain Deletion (`DELETE /api/domains/:id`)**:
    - Unlinks `docker/traefik/dynamic/domain-{domainId}.yml`.
