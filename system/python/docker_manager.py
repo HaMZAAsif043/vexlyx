@@ -84,6 +84,91 @@ def require_field(payload: dict, field: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# PHP-FPM docroot ownership (#151)
+#
+# This script runs as root, so a project directory it (or the API) creates is
+# root:root 0755 -- but PHP-FPM in the vexlyx-php-fpm and wordpress images runs
+# as www-data, so a self-installing app (a Duplicator migration) cannot create
+# files in its own docroot. Deploys hand the directory PHP serves to uid 82.
+# apps/api/src/utils/phpRuntimeOwnership.ts defines the same identity for the
+# File Manager; a test keeps the two in step.
+# ---------------------------------------------------------------------------
+
+PHP_FPM_UID = 82
+PHP_FPM_GID = 82
+
+# WordPress keeps only wp-content on the host; these are the folders it writes.
+WORDPRESS_WRITABLE_DIRS = ("plugins", "themes", "uploads")
+
+
+def assert_deploy_dir_is_not_a_symlink(compose_dir: Path) -> None:
+    """The deploy/ directory is panel-owned and written to as root. PHP owns
+    the project directory around it, so refuse to write through a link that
+    application code could have swapped in for it."""
+    if compose_dir.is_symlink():
+        fail(
+            f"{compose_dir} is a symbolic link; refusing to deploy through it",
+            "UNSAFE_DEPLOY_DIR",
+        )
+
+
+def _chown_directory_no_follow(path: Path, uid: int, gid: int) -> None:
+    # Opening the directory with O_NOFOLLOW and changing the open descriptor
+    # means a symlink planted by the application cannot redirect the chown to
+    # another path, even between the check and the change.
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fchown(fd, uid, gid)
+    finally:
+        os.close(fd)
+
+
+def hand_docroot_to_php(project_dir: Path, project_type: str, php_no_build: bool, chown=None) -> list:
+    """Make the directories PHP-FPM writes to owned by its user.
+
+    Non-recursive on purpose: it changes the docroot directory itself (so PHP
+    can create, rename and delete entries in it), not the tens of thousands of
+    files a migrated site may hold, and never the panel-owned deploy/.
+    Idempotent; returns the directories changed. Without root (development) it
+    does nothing.
+    """
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        if chown is None:
+            return []
+    apply = chown or _chown_directory_no_follow
+
+    targets = []
+    if php_no_build:
+        if os.path.lexists(Path(project_dir) / ".git"):
+            # A git checkout keeps a root-owned root. The panel runs git as
+            # root, and git refuses a repository whose directory another user
+            # owns ("dubious ownership"), which would break every pull and
+            # auto-deploy. safe.directory is no answer either: with PHP owning
+            # the root it could replace .git, whose hooks and config run as
+            # root on the next pull. So PHP cannot write to the root of such a
+            # site; see docs/dev/no-build-php-hosting.md.
+            log_line("[vexlyx] Git-connected project: leaving its root owned by root (PHP cannot write to the site root)")
+            return []
+        targets.append(Path(project_dir))
+    elif project_type.upper() == "WORDPRESS":
+        wp_content = Path(project_dir) / "wp-content"
+        targets.append(wp_content)
+        targets.extend(wp_content / name for name in WORDPRESS_WRITABLE_DIRS)
+
+    changed = []
+    for target in targets:
+        if target.is_symlink() or not target.is_dir():
+            continue
+        try:
+            apply(target, PHP_FPM_UID, PHP_FPM_GID)
+        except OSError as exc:
+            log_line(f"[vexlyx] Could not make {target.name} writable for PHP: {exc}")
+            continue
+        changed.append(target)
+    return changed
+
+
+# ---------------------------------------------------------------------------
 # Bounded subprocess execution (#52)
 #
 # Every external command is time-limited so a hung docker/nixpacks/mysqldump
@@ -612,8 +697,10 @@ def cmd_deploy(payload: dict) -> None:
         fail(f"Template not found: {template_file}", "TEMPLATE_NOT_FOUND")
 
     compose_dir = Path(project_dir) / "deploy"
+    assert_deploy_dir_is_not_a_symlink(compose_dir)
     extra_placeholders: dict[str, str] = {}
     project_type_upper = project_type.upper()
+    extra_placeholders["deploy_dir"] = compose_dir.resolve().as_posix()
 
     # F5.7 — STATIC/REACT: bind-mount content + generate SPA-fallback nginx config
     if project_type_upper in ("STATIC", "REACT"):
@@ -656,6 +743,9 @@ def cmd_deploy(payload: dict) -> None:
             {"app_upstream": app_upstream},
         )
         extra_placeholders["nginx_conf_path"] = nginx_conf_path.resolve().as_posix()
+
+    for handed_over in hand_docroot_to_php(Path(project_dir), project_type_upper, php_no_build):
+        log_line(f"[vexlyx] {handed_over.name} is now writable by PHP-FPM (uid {PHP_FPM_UID})")
 
     log_line(f"[vexlyx] Generating docker-compose.yml in {compose_dir}")
     generate_compose_file(

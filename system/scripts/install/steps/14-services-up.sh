@@ -47,6 +47,13 @@ log_info "Refreshing site nginx configuration..."
 "${COMPOSE[@]}" exec -T api node dist/scripts/refresh-nginx-confs.js \
   || log_warn "Site nginx configuration refresh did not complete; redeploying a site also applies it."
 
+# One-time repair (#151): make the docroot of existing no-build PHP and
+# WordPress projects writable for PHP-FPM. Guarded by a marker file, so only
+# the first run after an upgrade does anything; a failure never stops the install.
+log_info "Checking PHP project docroot ownership..."
+"${COMPOSE[@]}" exec -T api node dist/scripts/hand-docroots-to-php.js \
+  || log_warn "PHP docroot ownership repair did not complete; redeploying a project also fixes it."
+
 install -m 0755 system/scripts/install/sync-mail-tls.sh /usr/local/sbin/vexlyx-sync-mail-tls
 cat > /etc/systemd/system/vexlyx-mail-tls.service <<EOF
 [Unit]
