@@ -8,6 +8,7 @@
 # ==============================================================================
 
 ADMIN_PASSWORD_WAS_GENERATED=false
+ADMIN_USER_CREATED=false
 
 collect_config() {
   load_secrets_file
