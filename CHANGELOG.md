@@ -4,14 +4,36 @@ All notable changes to Vexlyx are documented here. The format follows [Keep a Ch
 
 ## Unreleased
 
+## [0.4.1] - 2026-10-23
+
+### Security
+
+- Static and no-build PHP sites now only serve site content: the panel's `deploy` folder and dot files such as `.git` and `.env` answer 404, while `/.well-known/` stays reachable. Existing sites are updated on upgrade without a redeploy.
+- The legacy per-project GitHub webhook returns one identical `401` for unknown projects, projects without a secret and bad signatures (no more project-ID enumeration) and ignores replayed `x-github-delivery` IDs; requests without that header get `400` (#67).
+- The installer installs Node.js from the NodeSource apt repository with a fingerprint-pinned signing key (exactly one key accepted) instead of piping a remote script into root bash, and a generated admin password is shown on a real terminal only, never written to `/etc/vexlyx/install.log` or to redirected output (#72). Delete `/etc/vexlyx/install.log` on servers installed earlier.
+
 ### Fixed
 
-- Large or slow file uploads are no longer cut off after 60 seconds, and an interrupted upload leaves no partial file behind, so a retry works. Upgrading restarts Traefik once to apply the new timeouts (#155).
+- Large or slow file uploads are no longer cut off after 60 seconds, and an interrupted upload leaves no partial file behind, so a retry works (#155).
 - Adding, verifying, securing or removing a domain no longer restarts the shared Traefik proxy, so other sites on the server stay online (#156).
-- Static and no-build PHP sites now only serve site content: the panel's `deploy` folder and dot files such as `.git` and `.env` answer 404, while `/.well-known/` stays reachable. Existing sites are updated on upgrade without a redeploy.
+- Custom domains on WordPress and no-build PHP projects route to the nginx container instead of PHP-FPM, ending the 502; existing route files are repaired automatically when the API starts (#150).
+- PHP-FPM can create, modify and delete files in the docroot of no-build PHP projects (and in WordPress's `wp-content`), so self-installing apps such as a Duplicator migration work; files saved or uploaded in the File Manager stay modifiable by the application, existing projects are fixed on upgrade, and the panel's `deploy/` directory stays out of PHP's reach. The root of a git-connected project stays root-owned (PHP can write in its subfolders only), so pulls and auto-deploys keep working (#151).
+- Mail clients such as Thunderbird can add and test an account again: the authenticated submission port (587) accepts a pipelined `EHLO`/`QUIT` probe, while port 25 stays strict (#158).
+- A domain whose DNS is managed elsewhere now lists its DKIM record, together with MX, SPF and DMARC, the first time its mail authentication is checked, instead of only after "regenerate". The key is created once and never rotated by checking (#159).
+- A GitHub webhook whose build cannot be queued now marks its deployment FAILED and lets GitHub's retry succeed with one active deployment, instead of leaving a deployment QUEUED forever and duplicating it on redelivery (#68).
+- Upgrading a v0.3.x server no longer stops over untracked files (such as `.pnpm-store/`) or file-mode-only changes on the tracked OpenDKIM key files; edits to tracked files are still protected.
 - Keep the dashboard's jsdom dependency compatible with the declared Node 22 minimum, and remove tracked development DKIM private keys from the checkout.
 - Dashboard tests now collect React component tests in jsdom while keeping utility tests in Node, with initial login and project-list smoke coverage (#54).
 - Switching to two-factor verification starts with an empty code field instead of retaining the sign-in email address, caught by the new login smoke test.
+
+### Upgrade notes
+
+- Re-run the installer; it applies everything below. From a v0.3.x server, upgrade to v0.4.0 mail state first as described in the 0.4.0 notes; the installer no longer stops for untracked files or mode-only changes.
+- Traefik restarts once (new upload timeouts), so every site is offline for a few seconds.
+- Postfix is recreated (submission-port change): mail delivery pauses for a few seconds and senders retry.
+- Site nginx configuration is refreshed for existing static and PHP sites, and the docroot ownership of existing no-build PHP and WordPress projects is repaired once (a marker file keeps it from repeating). Neither needs a redeploy.
+- Custom-domain route files are regenerated the first time the new API starts.
+- Delete `/etc/vexlyx/install.log` if the server was installed before this version, since it may hold the generated admin password.
 
 ## [0.4.0] - 2026-10-21
 
