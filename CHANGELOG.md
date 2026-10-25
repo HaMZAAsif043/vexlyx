@@ -4,7 +4,7 @@ All notable changes to Vexlyx are documented here. The format follows [Keep a Ch
 
 ## Unreleased
 
-## [0.4.1] - 2026-10-23
+## [0.4.1] - 2026-10-25
 
 ### Security
 
