@@ -659,7 +659,7 @@ def cmd_deploy(payload: dict) -> None:
     image_name = require_field(payload, "imageName")
     project_type = payload.get("projectType", "NODEJS")
     base_domain = payload.get("baseDomain", "vexlyx.localhost")
-    memory_limit = payload.get("memoryLimit", "128m")
+    memory_limit = payload.get("memoryLimit", "512m")
     port_start = int(payload.get("portRangeStart", 8100))
     port_end = int(payload.get("portRangeEnd", 8999))
     env_vars: dict[str, str] = payload.get("envVars", {})

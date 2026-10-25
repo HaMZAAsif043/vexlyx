@@ -21,6 +21,7 @@ All notable changes to Vexlyx are documented here. The format follows [Keep a Ch
 - Mail clients such as Thunderbird can add and test an account again: the authenticated submission port (587) accepts a pipelined `EHLO`/`QUIT` probe, while port 25 stays strict (#158).
 - A domain whose DNS is managed elsewhere now lists its DKIM record, together with MX, SPF and DMARC, the first time its mail authentication is checked, instead of only after "regenerate". The key is created once and never rotated by checking (#159).
 - A GitHub webhook whose build cannot be queued now marks its deployment FAILED and lets GitHub's retry succeed with one active deployment, instead of leaving a deployment QUEUED forever and duplicating it on redelivery (#68).
+- Deployed projects now get 512 MB of memory by default instead of 128 MB (`DEPLOY_MEMORY_LIMIT`). WordPress on Apache sat at its 128 MB limit and stopped answering requests.
 - Upgrading a v0.3.x server no longer stops over untracked files (such as `.pnpm-store/`) or file-mode-only changes on the tracked OpenDKIM key files; edits to tracked files are still protected.
 - Keep the dashboard's jsdom dependency compatible with the declared Node 22 minimum, and remove tracked development DKIM private keys from the checkout.
 - Dashboard tests now collect React component tests in jsdom while keeping utility tests in Node, with initial login and project-list smoke coverage (#54).
@@ -33,6 +34,7 @@ All notable changes to Vexlyx are documented here. The format follows [Keep a Ch
 - Postfix is recreated (submission-port change): mail delivery pauses for a few seconds and senders retry.
 - Site nginx configuration is refreshed for existing static and PHP sites, and the docroot ownership of existing no-build PHP and WordPress projects is repaired once (a marker file keeps it from repeating). Neither needs a redeploy.
 - Custom-domain route files are regenerated the first time the new API starts.
+- Existing projects keep their old 128 MB limit until they are redeployed. Set `DEPLOY_MEMORY_LIMIT` in `/etc/vexlyx/vexlyx.env` to choose another value, then redeploy the project.
 - Delete `/etc/vexlyx/install.log` if the server was installed before this version, since it may hold the generated admin password.
 
 ## [0.4.0] - 2026-10-21

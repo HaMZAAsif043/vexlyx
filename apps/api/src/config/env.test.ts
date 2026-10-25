@@ -184,3 +184,17 @@ describe("ENCRYPTION_KEY requirements (#69)", () => {
     expect(env.ENCRYPTION_KEY).toBeUndefined();
   });
 });
+
+describe("Deployed project memory limit", () => {
+  it("defaults to 512m so a WordPress or PHP site is not starved", async () => {
+    const env = await loadEnv({ DEPLOY_MEMORY_LIMIT: undefined });
+
+    expect(env.DEPLOY_MEMORY_LIMIT).toBe("512m");
+  });
+
+  it("honors an operator override", async () => {
+    const env = await loadEnv({ DEPLOY_MEMORY_LIMIT: "1g" });
+
+    expect(env.DEPLOY_MEMORY_LIMIT).toBe("1g");
+  });
+});

@@ -71,7 +71,7 @@ const envSchema = z
     // Base domain used to generate per-project Traefik hostnames: {name}.{BASE_DOMAIN}
     BASE_DOMAIN: z.string().min(1).default("vexlyx.localhost"),
     // Default memory limit passed to Docker (e.g. 128m, 256m, 512m)
-    DEPLOY_MEMORY_LIMIT: z.string().min(1).default("128m"),
+    DEPLOY_MEMORY_LIMIT: z.string().min(1).default("512m"),
     // Dynamic host-port range used when no project.port is set
     DEPLOY_PORT_RANGE_START: z.coerce.number().int().min(1024).default(8100),
     DEPLOY_PORT_RANGE_END: z.coerce.number().int().max(65535).default(8999),
