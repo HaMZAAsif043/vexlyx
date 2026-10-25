@@ -87,6 +87,7 @@ jobs:
       - run: python3 -m unittest discover -s tests -p test_installer_traefik_config.py
       - run: python3 -m unittest discover -s tests -p test_installer_runtime.py
       - run: python3 -m unittest discover -s tests -p test_php_docroot_ownership.py
+      - run: python3 -m unittest discover -s tests -p test_installer_panel_recreate.py
 
   build:
     runs-on: ubuntu-latest

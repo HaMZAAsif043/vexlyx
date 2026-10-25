@@ -16,6 +16,13 @@ COMPOSE=(docker compose --env-file "${VEXLYX_SECRETS_FILE}" -f docker-compose.ym
 
 "${COMPOSE[@]}" up -d --wait --wait-timeout 120
 
+# The API and dashboard run the build that step 09 wrote to the host and
+# bind-mounted into the container. Compose only recreates a container whose
+# configuration changed, so after an upgrade that changes only code (or the
+# env file) the old process would keep running. Recreate both so the new build
+# and the current environment are what serves requests.
+"${COMPOSE[@]}" up -d --force-recreate --no-deps --wait --wait-timeout 120 api dashboard
+
 restart_traefik_if_config_changed
 
 log_info "Waiting for the panel API to respond..."
