@@ -282,6 +282,17 @@ still 404s cleanly when there's no `index.php` to fall back to either).
   that case at all. The stopgap only still matters if a user explicitly
   forces a `buildCmd` override on a composer-less PHP project.
 
+## Securing a migrated WordPress site
+
+Vexlyx serves the site exactly as you hand it over, so the usual WordPress hygiene is yours to do, and a migration leaves a few things behind that need attention:
+
+- **Delete the migration files.** After a Duplicator migration, remove `installer.php`, the `*_archive.*` file and the installer log from the docroot, and uninstall the Duplicator plugin if you do not need it on the server. They are a ready-made way back into the site.
+- **Replace default credentials.** A site built in a local development tool often has an `admin` user with an easy password. Give the live site a long unique password and a username that is not `admin`.
+- **Close XML-RPC if nothing uses it.** `xmlrpc.php` lets a client try many passwords in one request. Disable it, and limit failed logins.
+- **Consider locking file changes.** `define('DISALLOW_FILE_MODS', true);` in `wp-config.php` stops plugin and theme installs and edits from inside wp-admin, so a stolen admin login cannot add code. The cost is that you update plugins yourself.
+- **Keep core, plugins and themes updated, and remove the unused ones.**
+- **Give it enough memory.** Projects get 512 MB by default (`DEPLOY_MEMORY_LIMIT`); a busy WordPress site may need more.
+
 ## Known caveat
 
 A project that already had the stopgap `composer.json` auto-written to its
