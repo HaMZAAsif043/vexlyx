@@ -402,12 +402,104 @@ def find_project_dockerfile(project_dir: str) -> Path | None:
     return None
 
 
-_HEREDOC_START_RE = re.compile(
-    # A heredoc opener is a shell word: '<<' at the start of the arguments or
-    # after whitespace. Requiring that boundary keeps quoted literals like
-    # RUN echo '<<EOF' from being mistaken for an opener (#172 review).
-    r"(?:^|\s)<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1"
-)
+# Unquoted operators that end a delimiter word (<<EOF>/out must yield EOF).
+_HEREDOC_DELIM_STOP = "<>&|;()"
+
+
+def _read_heredoc_delim(args: str, start: int) -> tuple[str, int]:
+    """Read a heredoc delimiter word at `start`, stripping shell quotes the
+    way the shell does: <<'EOF', <<"EOF" and <<E"OF" all mean EOF. Stops at
+    unquoted whitespace or a redirection/control operator. Returns
+    (delimiter, index just past it); ("", start) when no word follows."""
+    out: list[str] = []
+    i = start
+    n = len(args)
+    while i < n:
+        ch = args[i]
+        if ch == "'":
+            end = args.find("'", i + 1)
+            if end == -1:
+                return "", start  # unterminated quote: not a valid opener
+            out.append(args[i + 1 : end])
+            i = end + 1
+            continue
+        if ch == '"':
+            buf: list[str] = []
+            i += 1
+            while i < n and args[i] != '"':
+                if args[i] == "\\" and i + 1 < n:
+                    buf.append(args[i + 1])
+                    i += 2
+                    continue
+                buf.append(args[i])
+                i += 1
+            if i >= n:
+                return "", start
+            out.append("".join(buf))
+            i += 1
+            continue
+        if ch.isspace() or ch in _HEREDOC_DELIM_STOP:
+            break
+        if ch == "\\" and i + 1 < n:
+            out.append(args[i + 1])
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    delim = "".join(out)
+    return (delim, i) if delim else ("", start)
+
+
+def _scan_heredoc_delims(args: str) -> list[str]:
+    """Delimiters of the heredocs an instruction's arguments open.
+
+    A quote-aware scan: '<<' only opens a heredoc when it appears outside
+    single quotes, double quotes, and '#' comments, so quoted text such as
+    RUN echo "usage: cat <<FILE" (or a '#' comment) can never start a
+    phantom body that swallows the following EXPOSE (#172 review). Only
+    COPY/ADD/RUN should be passed here - the keyword itself is never
+    scanned. Returns every delimiter in order, quotes stripped.
+    """
+    delims: list[str] = []
+    i = 0
+    n = len(args)
+    while i < n:
+        ch = args[i]
+        if ch == "'":
+            end = args.find("'", i + 1)
+            i = n if end == -1 else end + 1
+            continue
+        if ch == '"':
+            i += 1
+            while i < n and args[i] != '"':
+                if args[i] == "\\" and i + 1 < n:
+                    i += 2
+                    continue
+                i += 1
+            i += 1 if i < n else 0
+            continue
+        if ch == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if ch == "#" and (i == 0 or args[i - 1].isspace()):
+            break  # rest of the line is a shell comment
+        if ch == "<":
+            if args.startswith("<<<", i):
+                i += 3  # here-string: its value stays on this line, no body
+                continue
+            if args.startswith("<<", i):
+                j = i + 2
+                if j < n and args[j] == "-":
+                    j += 1
+                while j < n and args[j].isspace():
+                    j += 1
+                delim, j = _read_heredoc_delim(args, j)
+                if delim:
+                    delims.append(delim)
+                i = j if j > i else i + 1
+                continue
+        i += 1
+    return delims
 
 
 def _parse_build_stages(content: str) -> list[dict]:
@@ -465,12 +557,10 @@ def _parse_build_stages(content: str) -> list[dict]:
             current["exposes"].append(args)
 
         # A heredoc opener makes the following lines content until its
-        # terminator; only COPY/ADD/RUN may carry one. Only the ARGUMENTS are
-        # scanned - the keyword itself can never contain an opener.
+        # terminator; only COPY/ADD/RUN may carry one, and only unquoted
+        # openers count (quoted '<<' text is shell data, not an opener).
         if instruction in ("COPY", "ADD", "RUN"):
-            match = _HEREDOC_START_RE.search(args)
-            if match:
-                heredoc_delims.append(match.group(2))
+            heredoc_delims.extend(_scan_heredoc_delims(args))
 
     return stages
 

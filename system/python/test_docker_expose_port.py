@@ -141,6 +141,68 @@ class FirstExposedPortTests(unittest.TestCase):
         )
         self.assertEqual(docker_manager.first_exposed_port(d), 80)
 
+    def test_quoted_text_before_chevron_does_not_open_heredoc(self):
+        # Whitespace INSIDE the quotes must not make '<<' look like a shell
+        # word: 'RUN echo "usage: cat <<FILE"' previously started a phantom
+        # heredoc that hid the real EXPOSE (#172 round-4 finding).
+        d = self.make_dir(
+            "FROM alpine\n"
+            "RUN echo \"usage: cat <<FILE\"\n"
+            "RUN echo 'see <<EOF docs'\n"
+            "EXPOSE 80\n"
+        )
+        self.assertEqual(docker_manager.first_exposed_port(d), 80)
+
+    def test_commented_chevron_does_not_open_heredoc(self):
+        d = self.make_dir(
+            "FROM alpine\n"
+            "RUN true # <<NOTAHEREDOC\n"
+            "EXPOSE 80\n"
+        )
+        self.assertEqual(docker_manager.first_exposed_port(d), 80)
+
+    def test_herestring_marker_does_not_open_heredoc(self):
+        # '<<<' is a here-string: its value stays on the line, so no body
+        # follows and nothing should be skipped.
+        d = self.make_dir(
+            "FROM alpine\n"
+            "RUN cat <<<literal\n"
+            "EXPOSE 80\n"
+        )
+        self.assertEqual(docker_manager.first_exposed_port(d), 80)
+
+    def test_exec_form_run_with_quoted_chevron_is_not_a_heredoc(self):
+        # JSON exec form has no shell heredocs; the quoted '<<' inside the
+        # string must not swallow the following EXPOSE (#172).
+        d = self.make_dir(
+            'FROM alpine\n'
+            'RUN ["sh", "-c", "echo <<EOF"]\n'
+            "EXPOSE 80\n"
+        )
+        self.assertEqual(docker_manager.first_exposed_port(d), 80)
+
+    def test_unterminated_quote_is_not_a_heredoc(self):
+        d = self.make_dir(
+            "FROM alpine\n"
+            "RUN echo 'unterminated <<EOF\n"
+            "EXPOSE 80\n"
+        )
+        self.assertEqual(docker_manager.first_exposed_port(d), 80)
+
+    def test_multiple_unquoted_heredocs_open_in_order(self):
+        # Two openers on one line both need their terminator before
+        # instructions resume (#172).
+        d = self.make_dir(
+            "FROM alpine\n"
+            "COPY <<A <<B /tmp/both\n"
+            "FROM scratch\n"
+            "EXPOSE 9999\n"
+            "A\n"
+            "B\n"
+            "EXPOSE 8084\n"
+        )
+        self.assertEqual(docker_manager.first_exposed_port(d), 8084)
+
     def test_real_heredoc_after_quoted_literal_still_parses(self):
         # The boundary rule must not disable genuine openers: '<<' at the
         # start of the arguments or after whitespace still counts.
