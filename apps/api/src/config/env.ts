@@ -1,4 +1,10 @@
 import { z } from "zod";
+import {
+  DEV_REDIS_PASSWORD,
+  DEV_REDIS_URL,
+  parseRedisUrl,
+  redisUrlHasPassword,
+} from "./redisConnection.js";
 
 /**
  * Zod schema defining all required environment variables for the API server.
@@ -13,7 +19,10 @@ const envSchema = z
       .default("development"),
     CORS_ORIGIN: z.string().url().default("http://localhost:3000"),
     DATABASE_URL: z.string().url(),
-    REDIS_URL: z.string().default("redis://localhost:6379"),
+    // Must carry the Redis password (redis://:password@host:6379). Optional
+    // here only so development gets the compose dev default; production
+    // requires it, see the superRefine below.
+    REDIS_URL: z.string().min(1).optional(),
     SESSION_SECRET: z.string().min(32),
     // Key for everything encrypted at rest (#69). Required in production so a
     // SESSION_SECRET leak cannot also decrypt stored credentials, and so
@@ -221,6 +230,25 @@ const envSchema = z
       });
     }
     if (value.NODE_ENV === "production") {
+      if (!value.REDIS_URL) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["REDIS_URL"],
+          message: "REDIS_URL is required in production and must include the Redis password (redis://:password@host:6379)",
+        });
+      } else if (!redisUrlHasPassword(value.REDIS_URL)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["REDIS_URL"],
+          message: "REDIS_URL must include a password in production (redis://:password@host:6379)",
+        });
+      } else if (parseRedisUrl(value.REDIS_URL).password === DEV_REDIS_PASSWORD) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["REDIS_URL"],
+          message: "REDIS_URL uses the well-known development password; set REDIS_PASSWORD to a random value",
+        });
+      }
       if (!value.ENCRYPTION_KEY) {
         if (!value.ENCRYPTION_KEY_LEGACY_FALLBACK) {
           ctx.addIssue({
@@ -295,6 +323,7 @@ function validateEnv() {
 
   return {
     ...result.data,
+    REDIS_URL: result.data.REDIS_URL ?? DEV_REDIS_URL,
     EMAIL_TRANSPORT:
       result.data.EMAIL_TRANSPORT ??
       (result.data.NODE_ENV === "production"

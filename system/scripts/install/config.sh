@@ -55,6 +55,17 @@ collect_config() {
   export VEXLYX_REPO_URL VEXLYX_REPO_REF VEXLYX_HOME
 }
 
+# Adds REDIS_PASSWORD to a secrets file that has none (an install from before
+# Redis required a password). A password already present is never replaced, so
+# re-running the installer cannot rotate it out from under live sessions.
+ensure_redis_password() {
+  if [[ -n "$(sed -n 's/^REDIS_PASSWORD=//p' "${VEXLYX_SECRETS_FILE}" | tail -n 1)" ]]; then
+    return 0
+  fi
+  upsert_secret REDIS_PASSWORD "$(rand_hex 32)"
+  log_ok "Generated a Redis password in ${VEXLYX_SECRETS_FILE}."
+}
+
 # Generates the long-lived application secrets exactly once. Safe to call on
 # every run — skips generation entirely once the secrets file exists, so a
 # re-run never rotates a live SESSION_SECRET or database password out from
@@ -66,6 +77,7 @@ generate_secrets() {
     if ! grep -q '^VEXLYX_MAIL_STATE_DIR=' "${VEXLYX_SECRETS_FILE}"; then
       printf '\nVEXLYX_MAIL_STATE_DIR=%s\n' "${VEXLYX_MAIL_STATE_DIR:-/var/lib/vexlyx/mail}" >> "${VEXLYX_SECRETS_FILE}"
     fi
+    ensure_redis_password
     return 0
   fi
 
@@ -75,7 +87,8 @@ generate_secrets() {
   POSTGRES_PASSWORD="$(rand_hex 16)"
   MYSQL_ROOT_PASSWORD="$(rand_hex 16)"
   MYSQL_PASSWORD="$(rand_hex 16)"
-  export SESSION_SECRET ENCRYPTION_KEY POSTGRES_PASSWORD MYSQL_ROOT_PASSWORD MYSQL_PASSWORD
+  REDIS_PASSWORD="$(rand_hex 32)"
+  export SESSION_SECRET ENCRYPTION_KEY POSTGRES_PASSWORD MYSQL_ROOT_PASSWORD MYSQL_PASSWORD REDIS_PASSWORD
 
   install -d -m 0700 "${VEXLYX_SECRETS_DIR}"
   umask 077
@@ -95,6 +108,7 @@ ENCRYPTION_KEY=${ENCRYPTION_KEY}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
 MYSQL_PASSWORD=${MYSQL_PASSWORD}
+REDIS_PASSWORD=${REDIS_PASSWORD}
 EOF
   chmod 0600 "${VEXLYX_SECRETS_FILE}"
   log_ok "Secrets written to ${VEXLYX_SECRETS_FILE} (mode 0600)."

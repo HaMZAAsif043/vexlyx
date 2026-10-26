@@ -210,11 +210,11 @@ PHP actually checks. Applied to **both** `php.conf.template` and
 `wordpress.conf.template` — F5.7's WordPress path has the exact same latent
 bug, just never hit it because nothing forced an HTTPS-only redirect before.
 
-**3. Docker Compose auto-aliases `app`/`web` on the *shared* `traefik-net`
+**3. Docker Compose auto-aliases `app`/`web` on the *shared* `vexlyx-apps`
 network, so two two-container projects collide.** This is the serious one.
 Every compose template names its services `app`/`web` — a Compose-generated
-alias `app` therefore gets registered on `traefik-net` for *every* project
-that has an `app` service, but `traefik-net` is one shared external network
+alias `app` therefore gets registered on `vexlyx-apps` for *every* project
+that has an `app` service, but `vexlyx-apps` (then named `traefik-net`) is one shared external network
 across the whole install, not scoped per project. With two no-build PHP (or
 WordPress) projects deployed at once, `fastcgi_pass app:9000` resolves
 **ambiguously** — Docker's embedded DNS round-robins between both projects'

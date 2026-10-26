@@ -140,6 +140,17 @@ If `ENCRYPTION_KEY` (or `SESSION_SECRET`, when no key is set outside production)
 
 ---
 
+## Panel Secrets
+
+These belong to the panel itself, not to a project. The installer generates them once into `/etc/vexlyx/vexlyx.env` and never rotates them on a re-run.
+
+| Variable | Used by | Notes |
+|----------|---------|-------|
+| `REDIS_PASSWORD` | Redis (`--requirepass`), the API via `REDIS_URL` | Generated on first install, or added on upgrade when absent. Production refuses to start without it. Development defaults to `vexlyx_dev` |
+| `REDIS_URL` | API | `redis://:<REDIS_PASSWORD>@redis:6379`; the API rejects a production URL without a password |
+
+See [Network layout](network-layout.md).
+
 ## How to Test
 
 ### 1. Add Environment Variable

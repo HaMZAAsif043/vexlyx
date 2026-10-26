@@ -98,7 +98,9 @@ user-configurable) — see [Cross-subdomain session cookie](#cross-subdomain-ses
 
 ## Secrets
 
-`/etc/vexlyx/vexlyx.env` (mode `0600`) holds `SESSION_SECRET`, `ENCRYPTION_KEY`, `POSTGRES_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `MYSQL_PASSWORD`, plus the collected domain/admin-email/mail-hostname config. It's generated exactly once — re-running the installer never rotates it, so a re-run can't invalidate existing sessions or encrypted data. It lives outside the git checkout specifically so an upgrade (`git pull`) never touches it. The admin password is **not** persisted anywhere — it's applied to the database (Argon2id-hashed) and, if auto-generated, shown once on the operator's terminal in the final summary (never through the `tee` into `install.log`).
+`/etc/vexlyx/vexlyx.env` (mode `0600`) holds `SESSION_SECRET`, `ENCRYPTION_KEY`, `POSTGRES_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `MYSQL_PASSWORD`, `REDIS_PASSWORD`, plus the collected domain/admin-email/mail-hostname config. It's generated exactly once — re-running the installer never rotates it, so a re-run can't invalidate existing sessions or encrypted data. It lives outside the git checkout specifically so an upgrade (`git pull`) never touches it. The admin password is **not** persisted anywhere — it's applied to the database (Argon2id-hashed) and, if auto-generated, shown once on the operator's terminal in the final summary (never through the `tee` into `install.log`).
+
+A secrets file written before `REDIS_PASSWORD` existed gets one appended on the next run (an empty value counts as missing); an existing value is never replaced. The network layout, how Redis is recreated on upgrade and how deployed projects are moved onto the `vexlyx-apps` network are in [Network layout](network-layout.md).
 
 ## Pinned NodeSource key
 

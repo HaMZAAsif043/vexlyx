@@ -42,6 +42,13 @@ else
   die "The api container is not running — inspect Compose logs before retrying."
 fi
 
+# One-time repair: move projects deployed before the apps network existed off
+# the panel-internal network. Traefik joined the apps network in the
+# `up -d` above, so sites keep routing. Guarded by a marker file; a failure
+# never stops the install and the next run retries.
+log_info "Moving existing projects onto the apps network..."
+"${COMPOSE[@]}" exec -T api node dist/scripts/migrate-project-network.js   || log_warn "Project network migration did not complete; the next installer run retries it."
+
 log_info "Reconciling mail state from PostgreSQL and verifying live lookups..."
 "${COMPOSE[@]}" exec -T api node dist/scripts/sync-mail-state.js
 "${COMPOSE[@]}" exec -T api python "${VEXLYX_HOME}/system/python/postfix_manager.py" verify_state

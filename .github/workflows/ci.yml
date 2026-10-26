@@ -88,6 +88,7 @@ jobs:
       - run: python3 -m unittest discover -s tests -p test_installer_runtime.py
       - run: python3 -m unittest discover -s tests -p test_php_docroot_ownership.py
       - run: python3 -m unittest discover -s tests -p test_installer_panel_recreate.py
+      - run: python3 -m unittest discover -s tests -p test_network_isolation.py
 
   build:
     runs-on: ubuntu-latest
