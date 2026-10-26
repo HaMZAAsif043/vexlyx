@@ -62,6 +62,13 @@ export class UserService {
      * reason as onUserDeleted.
      */
     private revokeSessions?: (userId: string) => Promise<void>,
+    /**
+     * Tears down the user's Redis instance resources (containers, volumes,
+     * configs). Must run BEFORE the row is deleted: RedisInstance rows cascade
+     * away with the user, which would leave running containers with no record
+     * left to manage them. Injected for the same reason as onUserDeleted.
+     */
+    private teardownRedisInstances?: (userId: string) => Promise<void>,
   ) {}
 
   /**
@@ -219,8 +226,11 @@ export class UserService {
     const target = await this.ensureExists(id);
     this.assertCanManage(requester, target);
 
-    // If revocation fails the user is kept and the admin can retry: better than
-    // a deleted account whose login cookie still works.
+    // Redis teardown and session revocation run before the row is deleted;
+    // if either fails the user is kept and the admin can retry — better than
+    // a deleted account whose containers keep running (or whose login cookie
+    // still works).
+    await this.teardownRedisInstances?.(id);
     await this.revokeSessions?.(id);
     await this.prisma.user.delete({ where: { id } });
 

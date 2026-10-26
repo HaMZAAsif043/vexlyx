@@ -811,8 +811,10 @@ export default function RedisInstancesPage() {
                   Image (pinned)
                 </Label>
                 <div className="grid grid-cols-2 gap-3">
-                  <div
+                  <button
+                    type="button"
                     onClick={() => setCreateImage("valkey/valkey:8.0")}
+                    aria-pressed={createImage === "valkey/valkey:8.0"}
                     className={cn(
                       "cursor-pointer rounded-lg border p-3.5 transition-all text-center select-none",
                       createImage === "valkey/valkey:8.0"
@@ -826,10 +828,12 @@ export default function RedisInstancesPage() {
                     <div className="text-xs text-muted-foreground mt-0.5">
                       BSD licensed • Redis-compatible
                     </div>
-                  </div>
+                  </button>
 
-                  <div
+                  <button
+                    type="button"
                     onClick={() => setCreateImage("redis:7.2-alpine")}
+                    aria-pressed={createImage === "redis:7.2-alpine"}
                     className={cn(
                       "cursor-pointer rounded-lg border p-3.5 transition-all text-center select-none",
                       createImage === "redis:7.2-alpine"
@@ -843,7 +847,7 @@ export default function RedisInstancesPage() {
                     <div className="text-xs text-muted-foreground mt-0.5">
                       Last BSD-licensed release
                     </div>
-                  </div>
+                  </button>
                 </div>
               </div>
 
@@ -876,9 +880,11 @@ export default function RedisInstancesPage() {
                 </Label>
                 <div className="grid grid-cols-3 gap-2">
                   {PRESETS.map((preset) => (
-                    <div
+                    <button
+                      type="button"
                       key={preset.key}
                       onClick={() => applyPreset(preset.key)}
+                      aria-pressed={createPreset === preset.key}
                       className={cn(
                         "cursor-pointer rounded-lg border p-2.5 transition-all text-center select-none",
                         createPreset === preset.key
@@ -892,7 +898,7 @@ export default function RedisInstancesPage() {
                       <div className="text-[10px] text-muted-foreground mt-0.5 leading-tight">
                         {preset.hint}
                       </div>
-                    </div>
+                    </button>
                   ))}
                 </div>
               </div>

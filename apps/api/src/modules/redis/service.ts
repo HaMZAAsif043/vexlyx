@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { PrismaClient, RedisInstance } from "@prisma/client";
+import { Prisma, type PrismaClient, type RedisInstance } from "@prisma/client";
 import { env } from "../../config/env.js";
 import { encrypt, decrypt } from "../../utils/encryption.js";
 import { assertUnderQuota, notifyQuotaThreshold } from "../../utils/quota.js";
@@ -76,20 +76,58 @@ function runPythonCommand<T>(payload: Record<string, unknown>): Promise<T> {
 
     let stdout = "";
     let stderr = "";
+    let result: Record<string, unknown> | null = null;
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
+      // Parse stdout line-by-line and keep the last result object, so any
+      // stray progress line ({"log": ...}) can never corrupt the outcome
+      // (same contract as the backups/cleanup runners). redis_manager.py
+      // itself keeps stdout to a single JSON document; progress goes to
+      // stderr.
+      let newlineIndex: number;
+      while ((newlineIndex = stdout.indexOf("\n")) !== -1) {
+        const line = stdout.slice(0, newlineIndex).trim();
+        stdout = stdout.slice(newlineIndex + 1);
+        if (!line) continue;
+
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(line);
+        } catch {
+          continue;
+        }
+
+        if (parsed && typeof parsed === "object" && "log" in parsed) continue;
+        if (parsed && typeof parsed === "object") {
+          result = parsed as Record<string, unknown>;
+        }
+      }
     });
     child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString();
     });
 
     child.on("close", (code) => {
-      const raw = stdout.trim();
-      if (!raw) {
+      // Flush a trailing line that had no terminating newline.
+      const trailing = stdout.trim();
+      if (trailing) {
+        try {
+          const parsed: unknown = JSON.parse(trailing);
+          if (parsed && typeof parsed === "object" && !("log" in parsed)) {
+            result = parsed as Record<string, unknown>;
+          }
+        } catch {
+          // Ignore a trailing partial line.
+        }
+      }
+
+      if (result === null) {
         rejectPromise(
           new RedisInstanceError(
-            `redis_manager.py produced no output (stderr: ${stderr.trim()})`,
+            code === 0
+              ? `redis_manager.py produced no JSON result (stderr: ${stderr.trim()})`
+              : `redis_manager.py failed before producing a result (exit ${code}, stderr: ${stderr.trim()})`,
             "REDIS_SYSTEM_NO_OUTPUT",
             500,
           ),
@@ -97,32 +135,18 @@ function runPythonCommand<T>(payload: Record<string, unknown>): Promise<T> {
         return;
       }
 
-      let parsed: Record<string, unknown>;
-      try {
-        parsed = JSON.parse(raw) as Record<string, unknown>;
-      } catch {
+      if (result.error || code !== 0) {
         rejectPromise(
           new RedisInstanceError(
-            `redis_manager.py returned invalid JSON: ${raw}`,
-            "REDIS_SYSTEM_INVALID_JSON",
-            500,
-          ),
-        );
-        return;
-      }
-
-      if (parsed.error || code !== 0) {
-        rejectPromise(
-          new RedisInstanceError(
-            (parsed.error as string) || "System redis script failed",
-            (parsed.code as string) || "REDIS_SYSTEM_ERROR",
+            (result.error as string) || "System redis script failed",
+            (result.code as string) || "REDIS_SYSTEM_ERROR",
             422,
           ),
         );
         return;
       }
 
-      resolvePromise(parsed as T);
+      resolvePromise(result as T);
     });
 
     child.on("error", (err) => {
@@ -170,6 +194,21 @@ function generateContainerName(name: string): string {
 }
 
 const REDIS_PORT = 6379;
+
+/**
+ * Quota-slot reservation runs as a Serializable interactive transaction and is
+ * retried on serialization conflicts (P2034) / transaction timeouts (P2028):
+ * two concurrent creates seeing the same last free slot surface as one of
+ * these errors, and the retry re-counts and then correctly fails with
+ * QUOTA_EXCEEDED. The retry budget is small — a genuine conflict resolves on
+ * the first re-count.
+ */
+const RESERVE_TX_RETRIES = 3;
+
+function prismaErrorCode(err: unknown): string | undefined {
+  if (err instanceof Prisma.PrismaClientKnownRequestError) return err.code;
+  return undefined;
+}
 
 export class RedisInstanceService {
   private envService: EnvService;
@@ -232,23 +271,14 @@ export class RedisInstanceService {
   // -------------------------------------------------------------------------
 
   async create(userId: string, input: CreateRedisInstanceInput): Promise<RedisInstanceDetail> {
+    // Fast pre-check for a friendly error; the authoritative check happens
+    // atomically inside the reservation transaction below.
     await assertUnderQuota(
       this.prisma,
       userId,
       "redisInstance",
       (message, code, statusCode) => new RedisInstanceError(message, code, statusCode),
     );
-
-    const existing = await this.prisma.redisInstance.findUnique({
-      where: { userId_name: { userId, name: input.name } },
-    });
-    if (existing) {
-      throw new RedisInstanceError(
-        `An instance named '${input.name}' already exists`,
-        "REDIS_NAME_CONFLICT",
-        409,
-      );
-    }
 
     if (input.projectId) {
       const project = await this.prisma.project.findFirst({
@@ -271,47 +301,59 @@ export class RedisInstanceService {
     const plainPassword = generateSecurePassword();
     const containerName = generateContainerName(input.name);
 
-    await runPythonCommand({
-      command: "create_instance",
-      containerName,
-      image: input.image,
-      password: plainPassword,
-      memoryLimitMb: input.memoryLimitMb,
-      evictionPolicy: input.evictionPolicy,
-      persistence: input.persistence,
-    });
+    // Reserve the quota slot (and the row) atomically BEFORE Docker runs —
+    // see reserveInstance() for why this is a Serializable transaction.
+    const record = await this.reserveInstance(userId, input, containerName, plainPassword);
 
-    let record: RedisInstance;
     try {
-      record = await this.prisma.redisInstance.create({
-        data: {
-          name: input.name,
-          containerName,
-          imageTag: input.image,
-          memoryLimitMb: input.memoryLimitMb,
-          evictionPolicy: input.evictionPolicy,
-          persistence: input.persistence,
-          passwordEncrypted: encrypt(plainPassword),
-          status: "RUNNING",
-          userId,
-          projectId: input.projectId ?? null,
-        },
+      await runPythonCommand({
+        command: "create_instance",
+        containerName,
+        image: input.image,
+        password: plainPassword,
+        memoryLimitMb: input.memoryLimitMb,
+        evictionPolicy: input.evictionPolicy,
+        persistence: input.persistence,
+      });
+    } catch (err) {
+      // Roll back the reservation and any resources the attempt may have left
+      // (the script cleans up after itself, but a timed-out kill can strand a
+      // container). delete_instance is idempotent, and rollback failures are
+      // reported — never swallowed — with the container name, the only handle
+      // left for manual cleanup.
+      try {
+        await runPythonCommand({ command: "delete_instance", containerName });
+      } catch (cleanupErr) {
+        console.error(
+          `[RedisInstanceService] Create of '${input.name}' failed and rollback of container '${containerName}' also failed; remove the container manually:`,
+          cleanupErr,
+        );
+      }
+      await this.releaseReservation(record.id, containerName);
+      throw err;
+    }
+
+    let updated: RedisInstance;
+    try {
+      updated = await this.prisma.redisInstance.update({
+        where: { id: record.id },
+        data: { status: "RUNNING" },
         include: { project: { select: { id: true, name: true } } },
       });
     } catch (err) {
-      // The container is already running; never leave it orphaned behind a
-      // failed row insert (the F5.21 teardown bug class, in reverse).
-      await runPythonCommand({
-        command: "delete_instance",
-        containerName,
-      }).catch(() => undefined);
+      // The container is up and the row exists; a failed status update only
+      // leaves a visible CREATING row the user can retry or delete.
+      console.error(
+        `[RedisInstanceService] Container '${containerName}' was created but instance '${record.id}' could not be marked RUNNING:`,
+        err,
+      );
       throw err;
     }
 
     void notifyQuotaThreshold(this.prisma, userId, "redisInstance");
 
     if (input.projectId && input.autoInjectEnv !== false) {
-      const connectionUrl = this.buildConnectionUrl(record, plainPassword);
+      const connectionUrl = this.buildConnectionUrl(updated, plainPassword);
       await this.envService.bulkUpsert(userId, input.projectId, [
         { key: "REDIS_URL", value: connectionUrl },
         { key: "REDIS_HOST", value: containerName },
@@ -322,19 +364,102 @@ export class RedisInstanceService {
     await this.auditLog?.log(
       userId,
       "redis_instance.created",
-      { type: "RedisInstance", id: record.id },
+      { type: "RedisInstance", id: updated.id },
       {
         after: {
-          name: record.name,
-          image: record.imageTag,
-          memoryLimitMb: record.memoryLimitMb,
-          evictionPolicy: record.evictionPolicy,
-          persistence: record.persistence,
+          name: updated.name,
+          image: updated.imageTag,
+          memoryLimitMb: updated.memoryLimitMb,
+          evictionPolicy: updated.evictionPolicy,
+          persistence: updated.persistence,
         },
       },
     );
 
-    return this.formatDetail(record, plainPassword);
+    return this.formatDetail(updated, plainPassword);
+  }
+
+  /**
+   * Atomically checks the quota and inserts the instance row in one
+   * Serializable transaction. The count-then-insert pair only guards against
+   * concurrent creates (two requests seeing the same last free slot) if the
+   * isolation level turns that write skew into a serialization failure, which
+   * this method retries so the re-count sees the winner's committed row. No raw
+   * SQL — Prisma enforces the isolation level. The row starts as CREATING and
+   * acts as the slot reservation until provisioning flips it to RUNNING (or
+   * deletes it again).
+   */
+  private async reserveInstance(
+    userId: string,
+    input: CreateRedisInstanceInput,
+    containerName: string,
+    plainPassword: string,
+  ): Promise<RedisInstance> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.prisma.$transaction(
+          async (tx) => {
+            await assertUnderQuota(tx as unknown as PrismaClient, userId, "redisInstance", (message, code, statusCode) =>
+              new RedisInstanceError(message, code, statusCode),
+            );
+            const existing = await tx.redisInstance.findUnique({
+              where: { userId_name: { userId, name: input.name } },
+            });
+            if (existing) {
+              throw new RedisInstanceError(
+                `An instance named '${input.name}' already exists`,
+                "REDIS_NAME_CONFLICT",
+                409,
+              );
+            }
+            return tx.redisInstance.create({
+              data: {
+                name: input.name,
+                containerName,
+                imageTag: input.image,
+                memoryLimitMb: input.memoryLimitMb,
+                evictionPolicy: input.evictionPolicy,
+                persistence: input.persistence,
+                passwordEncrypted: encrypt(plainPassword),
+                status: "CREATING",
+                userId,
+                projectId: input.projectId ?? null,
+              },
+            });
+          },
+          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 15_000 },
+        );
+      } catch (err) {
+        const code = prismaErrorCode(err);
+        if ((code === "P2034" || code === "P2028") && attempt < RESERVE_TX_RETRIES) {
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, 50 * attempt));
+          continue;
+        }
+        if (code === "P2002") {
+          // Unique (userId, name) as the database-level backstop of the check above.
+          throw new RedisInstanceError(
+            `An instance named '${input.name}' already exists`,
+            "REDIS_NAME_CONFLICT",
+            409,
+          );
+        }
+        throw err;
+      }
+    }
+  }
+
+  /** Drops a CREATING row after failed provisioning so the quota slot frees
+   * up again; a failed release is reported with the row id so an admin can
+   * clean it up (the row stays visible in the list). */
+  private async releaseReservation(recordId: string, containerName: string): Promise<void> {
+    try {
+      await this.prisma.redisInstance.delete({ where: { id: recordId } });
+    } catch (err) {
+      console.error(
+        `[RedisInstanceService] Failed to release instance reservation '${recordId}' (container '${containerName}') after a failed create; delete the row to free the quota slot:`,
+        err,
+      );
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -467,6 +592,7 @@ export class RedisInstanceService {
 
   async rotatePassword(id: string, userId: string, isAdmin = false): Promise<RedisInstanceDetail> {
     const record = await this.findOwned(id, userId, isAdmin);
+    const oldPassword = this.decryptPassword(record);
 
     const plainPassword = generateSecurePassword();
     await runPythonCommand({
@@ -479,11 +605,41 @@ export class RedisInstanceService {
       persistence: record.persistence,
     });
 
-    const updated = await this.prisma.redisInstance.update({
-      where: { id: record.id },
-      data: { passwordEncrypted: encrypt(plainPassword), status: "RUNNING" },
-      include: { project: { select: { id: true, name: true } } },
-    });
+    let updated: RedisInstance;
+    try {
+      updated = await this.prisma.redisInstance.update({
+        where: { id: record.id },
+        data: { passwordEncrypted: encrypt(plainPassword), status: "RUNNING" },
+        include: { project: { select: { id: true, name: true } } },
+      });
+    } catch (err) {
+      // The container already requires the new password while the record
+      // still holds the old one — recreate again with the OLD password so
+      // every saved connection URL keeps working, then report the
+      // persistence failure that caused this in the first place.
+      try {
+        await runPythonCommand({
+          command: "recreate_instance",
+          containerName: record.containerName,
+          image: record.imageTag,
+          password: oldPassword,
+          memoryLimitMb: record.memoryLimitMb,
+          evictionPolicy: record.evictionPolicy,
+          persistence: record.persistence,
+        });
+      } catch (restoreErr) {
+        console.error(
+          `[RedisInstanceService] Password rotation for '${record.name}' failed to persist and the old password could not be restored; the instance is running with the new (unsaved) password. Rotate again to repair.`,
+          restoreErr,
+        );
+        throw new RedisInstanceError(
+          `Password rotation failed to save, and the old password could not be restored. The instance is running with the new password, which the panel does not know — rotate the password again to repair it.`,
+          "REDIS_PASSWORD_STATE_DIVERGED",
+          502,
+        );
+      }
+      throw err;
+    }
 
     // Audit deliberately carries no secret material — only the fact it happened.
     await this.auditLog?.log(
@@ -564,5 +720,43 @@ export class RedisInstanceService {
     );
 
     return { success: true, id: record.id };
+  }
+
+  /**
+   * Tears down every instance owned by `userId` (container, volume, config)
+   * and drops its row. Called before the owner is deleted: the schema cascades
+   * the instance rows away with the user, which would leave running Docker
+   * resources with no record left to manage them. Instances that tear down
+   * successfully are removed one by one; if any fail, the surviving rows keep
+   * the resources manageable and this throws so the caller keeps the user and
+   * the delete can be retried.
+   */
+  async teardownAllForUser(userId: string): Promise<void> {
+    const instances = await this.prisma.redisInstance.findMany({ where: { userId } });
+    const failed: string[] = [];
+
+    for (const instance of instances) {
+      try {
+        await runPythonCommand({
+          command: "delete_instance",
+          containerName: instance.containerName,
+        });
+        await this.prisma.redisInstance.delete({ where: { id: instance.id } });
+      } catch (err) {
+        console.error(
+          `[RedisInstanceService] Failed to tear down instance '${instance.name}' (container '${instance.containerName}') of user '${userId}':`,
+          err,
+        );
+        failed.push(instance.name);
+      }
+    }
+
+    if (failed.length > 0) {
+      throw new RedisInstanceError(
+        `Failed to tear down Redis instances: ${failed.join(", ")}. The user was not deleted — fix the cause and retry.`,
+        "REDIS_TEARDOWN_FAILED",
+        502,
+      );
+    }
   }
 }
