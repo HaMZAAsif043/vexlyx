@@ -4,6 +4,20 @@ All notable changes to Vexlyx are documented here. The format follows [Keep a Ch
 
 ## Unreleased
 
+## [0.4.2] - 2026-10-26
+
+### Security
+
+- Redis now requires a password. The installer generates `REDIS_PASSWORD` on a new install and adds it to an existing server's secrets file on upgrade (an existing value is never replaced). The panel API and the job queues use it, and in production the API refuses to start without it.
+- Project containers now run on their own `vexlyx-apps` network, shared only with Traefik and the database servers, instead of the network that carries Redis, the API, the dashboard, mail and DNS. Existing projects are moved without a restart.
+
+### Upgrade notes
+
+- Re-run the installer. It creates the new network, generates the Redis password, and recreates Redis, Traefik, the database servers, the API and the dashboard, so every site pauses for a few seconds.
+- After a PHP or WordPress project moves, its nginx container is reloaded (restarted if the reload fails), so those sites can pause briefly once more. If a project cannot be moved the installer warns and retries on the next run.
+- Existing logins and queued jobs are kept: Redis data lives in its volume.
+- Anything of yours that connects to Redis directly now needs the password in `/etc/vexlyx/vexlyx.env` (`REDIS_PASSWORD`).
+
 ## [0.4.1] - 2026-10-25
 
 ### Security
