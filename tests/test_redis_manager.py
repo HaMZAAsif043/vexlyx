@@ -5,10 +5,14 @@ when a Docker engine is available and is skipped otherwise.
 Run: python3 -m unittest discover -s tests -p test_redis_manager.py
 """
 
+import contextlib
 import importlib.util
+import io
 import json
+import os
 import subprocess
 import sys
+import tempfile
 import unittest
 import shutil
 from pathlib import Path
@@ -180,10 +184,263 @@ db0:keys=42,expires=0,avg_ttl=0
         self.assertIn("db0", info)
 
     def test_health_snippet_reads_password_from_config_only(self):
-        # The exec snippet must never interpolate the password itself.
+        # The exec snippet must never interpolate the password itself, and it
+        # must never put it into the CLI's argv (`-a "$PW"` was visible in the
+        # host's `ps`); REDISCLI_AUTH is exported only for the exec'd process.
         self.assertNotIn("secret", manager._CLI_SNIPPET)
         self.assertIn("sed -n", manager._CLI_SNIPPET)
         self.assertIn("requirepass", manager._CLI_SNIPPET)
+        self.assertNotIn("-a ", manager._CLI_SNIPPET)
+        self.assertIn('REDISCLI_AUTH="$PW"', manager._CLI_SNIPPET)
+        self.assertIn(manager.CONFIG_RELPATH, manager._CLI_SNIPPET)
+
+
+def cp(rc=0, stdout="", stderr=""):
+    """CompletedProcess factory for the run_bounded stub (returns a fresh
+    instance per call so callers can share one rule)."""
+    return lambda cmd: subprocess.CompletedProcess(cmd, rc, stdout, stderr)
+
+
+class DockerStub:
+    """Stands in for manager.run_bounded: records every docker invocation and
+    answers from an ordered (matcher, responder) script; unmatched commands
+    succeed with no output."""
+
+    def __init__(self, rules=()):
+        self.rules = list(rules)
+        self.calls = []
+
+    def __call__(self, timeout, cmd, *, fatal=True, **kwargs):
+        self.calls.append(list(cmd))
+        for matcher, respond in self.rules:
+            if matcher(cmd):
+                return respond(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def argv(self):
+        return [" ".join(cmd[1:]) for cmd in self.calls]
+
+
+VALID_PAYLOAD = {
+    "command": "create_instance",
+    "containerName": "vexlyx-redis-unit-000000000001",
+    "image": "valkey/valkey:8.0",
+    "password": "a" * 32,
+    "memoryLimitMb": 64,
+    "evictionPolicy": "noeviction",
+    "persistence": "RDB",
+}
+
+
+class ManagerCommandTestCase(unittest.TestCase):
+    """Runs the module's command functions in-process with a stubbed docker
+    layer and an isolated config dir."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self._old_config_dir = os.environ.get("REDIS_INSTANCE_CONFIG_DIR")
+        os.environ["REDIS_INSTANCE_CONFIG_DIR"] = self.tmp.name
+        self.addCleanup(self._restore_config_dir)
+        self.patch("get_docker_binary", lambda: "docker")
+
+    def _restore_config_dir(self):
+        if self._old_config_dir is None:
+            os.environ.pop("REDIS_INSTANCE_CONFIG_DIR", None)
+        else:
+            os.environ["REDIS_INSTANCE_CONFIG_DIR"] = self._old_config_dir
+
+    def patch(self, name, value):
+        original = getattr(manager, name)
+        setattr(manager, name, value)
+        self.addCleanup(setattr, manager, name, original)
+
+    def use_stub(self, *rules) -> DockerStub:
+        stub = DockerStub(rules)
+        self.patch("run_bounded", stub)
+        return stub
+
+    def config_dir_for(self, container_name) -> Path:
+        return Path(self.tmp.name) / container_name
+
+    def run_cmd(self, payload: dict) -> tuple[int, dict]:
+        """Invoke a command in-process; returns (exit_code, last JSON on stdout)."""
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            try:
+                manager.COMMANDS[payload["command"]](payload)
+            except SystemExit as exc:
+                return int(exc.code or 1), self._last_json(buffer.getvalue())
+        return 0, self._last_json(buffer.getvalue())
+
+    @staticmethod
+    def _last_json(stdout: str) -> dict:
+        lines = [line for line in stdout.splitlines() if line.strip()]
+        try:
+            return json.loads(lines[-1])
+        except (IndexError, json.JSONDecodeError):
+            return {"raw": stdout}
+
+
+class TestDockerRunArguments(ManagerCommandTestCase):
+    def test_config_mount_is_absolute_and_matches_server_argument(self):
+        # Docker rejects relative -v targets, so every create/recreate used
+        # to fail at `docker run` — and recreation had already removed the old
+        # container by that point.
+        stub = self.use_stub()
+        container = VALID_PAYLOAD["containerName"]
+        manager.write_config(container, VALID_PAYLOAD["password"], 64, "noeviction", "RDB")
+        manager.run_container("docker", container, "valkey/valkey:8.0", 64)
+
+        run_cmd = next(cmd for cmd in stub.calls if cmd[1] == "run")
+        mounts = [run_cmd[i + 1] for i, arg in enumerate(run_cmd) if arg == "-v"]
+        config_mount = next(m for m in mounts if m.endswith("redis.conf:ro"))
+        container_path = config_mount.split(":")[-2]
+        self.assertTrue(container_path.startswith("/"), "docker requires an absolute in-container path")
+        self.assertEqual(container_path, manager.CONFIG_RELPATH)
+        self.assertEqual(run_cmd[-1], manager.CONFIG_RELPATH)
+
+
+class TestRemoveContainerConfidence(ManagerCommandTestCase):
+    """A Docker outage must never look like a successful removal."""
+
+    CONTAINER = VALID_PAYLOAD["containerName"]
+
+    def test_reports_removed_when_rm_reports_no_such_container(self):
+        stub = self.use_stub(
+            (lambda c: c[1:3] == ["rm", "-f"], cp(rc=1, stderr="Error: No such container: x")),
+        )
+        self.assertTrue(manager.remove_container("docker", self.CONTAINER))
+        self.assertEqual(len(stub.calls), 1)
+
+    def test_confirms_absence_via_inspect_when_rm_gives_another_error(self):
+        self.use_stub(
+            (lambda c: c[1] == "rm", cp(rc=1, stderr="rm exploded")),
+            (lambda c: c[1] == "inspect", cp(rc=1, stderr="Error: No such object: x")),
+        )
+        self.assertTrue(manager.remove_container("docker", self.CONTAINER))
+
+    def test_docker_outage_is_not_a_successful_removal(self):
+        outage = cp(rc=1, stderr="Cannot connect to the Docker daemon at unix:///var/run/docker.sock.")
+        self.use_stub(
+            (lambda c: c[1] in ("rm", "inspect"), lambda cmd: outage(cmd)),
+        )
+        self.assertFalse(manager.remove_container("docker", self.CONTAINER))
+
+    def test_container_that_still_exists_is_not_removed(self):
+        self.use_stub(
+            (lambda c: c[1] == "rm", cp(rc=1, stderr="rm exploded")),
+            (lambda c: c[1] == "inspect", cp(rc=0, stdout="running")),
+        )
+        self.assertFalse(manager.remove_container("docker", self.CONTAINER))
+
+
+class TestRecreateStopsGracefully(ManagerCommandTestCase):
+    CONTAINER = VALID_PAYLOAD["containerName"]
+
+    def setUp(self):
+        super().setUp()
+        self.patch("wait_healthy", lambda *args: None)
+
+    def payload(self):
+        return {**VALID_PAYLOAD, "command": "recreate_instance"}
+
+    def test_stop_precedes_force_remove_and_run(self):
+        stub = self.use_stub(
+            (lambda c: c[1] == "inspect", cp(rc=0, stdout="running")),
+        )
+        code, result = self.run_cmd(self.payload())
+        self.assertEqual(code, 0, result)
+        argv = stub.argv()
+        stop_at = next(i for i, a in enumerate(argv) if a.startswith("stop -t 15"))
+        rm_at = next(i for i, a in enumerate(argv) if a.startswith("rm -f"))
+        run_at = next(i for i, a in enumerate(argv) if a == "run -d" or a.startswith("run -d"))
+        self.assertLess(stop_at, rm_at, "redis must be stopped (flushing its snapshot) before the container is replaced")
+        self.assertLess(rm_at, run_at)
+
+    def test_refuses_to_force_remove_when_the_graceful_stop_fails(self):
+        stub = self.use_stub(
+            (lambda c: c[1] == "inspect", cp(rc=0, stdout="running")),
+            (lambda c: c[1] == "stop", cp(rc=1, stderr="cannot stop")),
+        )
+        code, result = self.run_cmd(self.payload())
+        self.assertEqual(code, 1)
+        self.assertEqual(result.get("code"), "RECREATE_FAILED")
+        self.assertFalse(
+            any(a.startswith("rm -f") for a in stub.argv()),
+            "force-removing after a failed stop would SIGKILL redis and lose unsaved writes",
+        )
+
+
+class TestDeleteOrdering(ManagerCommandTestCase):
+    """The teardown must go container -> volume -> config, failing loudly at
+    the first step that cannot be confirmed (the API keeps the row)."""
+
+    CONTAINER = VALID_PAYLOAD["containerName"]
+
+    def setUp(self):
+        super().setUp()
+        manager.write_config(self.CONTAINER, "a" * 32, 64, "noeviction", "RDB")
+        self.assertTrue(self.config_dir_for(self.CONTAINER).exists())
+
+    def payload(self):
+        return {"command": "delete_instance", "containerName": self.CONTAINER}
+
+    def test_container_removal_failure_keeps_config_and_skips_volume(self):
+        stub = self.use_stub(
+            (lambda c: c[1] == "rm", cp(rc=1, stderr="rm exploded")),
+            (lambda c: c[1] == "inspect", cp(rc=0, stdout="running")),
+        )
+        code, result = self.run_cmd(self.payload())
+        self.assertEqual(code, 1)
+        self.assertEqual(result.get("code"), "TEARDOWN_FAILED")
+        self.assertTrue(self.config_dir_for(self.CONTAINER).exists(), "config must survive so the instance can still start")
+        self.assertFalse(any(c[1] == "volume" for c in stub.calls))
+
+    def test_docker_outage_is_not_a_successful_teardown(self):
+        outage = cp(rc=1, stderr="Cannot connect to the Docker daemon at unix:///var/run/docker.sock.")
+        self.use_stub((lambda c: c[1] in ("rm", "inspect"), lambda cmd: outage(cmd)))
+        code, result = self.run_cmd(self.payload())
+        self.assertEqual(code, 1)
+        self.assertEqual(result.get("code"), "TEARDOWN_FAILED")
+        self.assertTrue(self.config_dir_for(self.CONTAINER).exists())
+
+    def test_volume_removal_failure_keeps_config(self):
+        self.use_stub(
+            (lambda c: c[1] == "rm", cp()),
+            (lambda c: c[1] == "volume", cp(rc=1, stderr="volume is in use")),
+        )
+        code, result = self.run_cmd(self.payload())
+        self.assertEqual(code, 1)
+        self.assertEqual(result.get("code"), "TEARDOWN_FAILED")
+        self.assertTrue(self.config_dir_for(self.CONTAINER).exists())
+
+    def test_config_is_removed_only_after_container_and_volume_are_gone(self):
+        self.use_stub(
+            (lambda c: c[1] == "rm", cp()),
+            (lambda c: c[1] == "volume", cp(rc=1, stderr="Error response from daemon: No such volume: x")),
+        )
+        code, result = self.run_cmd(self.payload())
+        self.assertEqual(code, 0, result)
+        self.assertTrue(result.get("success"))
+        self.assertTrue(result.get("volumeRemoved"))
+        self.assertFalse(self.config_dir_for(self.CONTAINER).exists())
+
+
+class TestCreateCleansUpAfterItself(ManagerCommandTestCase):
+    def test_failed_provisioning_removes_container_volume_and_config(self):
+        container = VALID_PAYLOAD["containerName"]
+        stub = self.use_stub(
+            (lambda c: c[1] == "inspect", cp(rc=1, stderr="Error: No such container: x")),
+            (lambda c: c[1] == "run", cp(rc=1, stderr="docker run exploded")),
+        )
+        code, result = self.run_cmd(VALID_PAYLOAD)
+        self.assertEqual(code, 1)
+        self.assertEqual(result.get("code"), "CREATE_FAILED")
+        argv = stub.argv()
+        self.assertTrue(any(a.startswith("rm -f") for a in argv), argv)
+        self.assertTrue(any(a.startswith("volume rm") for a in argv), argv)
+        self.assertFalse(self.config_dir_for(container).exists(), "a failed create must not leave an untracked config behind")
 
 
 @unittest.skipUnless(DOCKER, "Docker engine is required for the lifecycle test")

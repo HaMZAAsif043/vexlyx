@@ -9,14 +9,17 @@ a named volume at /data, and a generated redis.conf (mounted read-only)
 carrying requirepass, maxmemory, the eviction policy and persistence mode.
 
 The password lives ONLY in that config file (chmod 600 on the host, mounted
-:ro into the container) — never in a command-line argument, environment
-variable or docker inspect field. This script NEVER touches the panel's own
+:ro into the container) — never in a docker CLI argument (visible in host
+`ps`) nor in the container's environment (visible in docker inspect). In-
+container CLI calls authenticate via REDISCLI_AUTH, exported only for the
+exec'd process (see _CLI_SNIPPET). This script NEVER touches the panel's own
 Redis (vexlyx-redis): tenant isolation is one container per instance.
 
 Called by the Fastify API via child_process.spawn with a JSON payload on
-stdin. Writes JSON results to stdout and exits with code 0 on success,
-1 on error. All docker invocations are argument lists (never shell strings)
-and bounded by hard timeouts.
+stdin. Writes exactly one JSON result to stdout — progress log lines go to
+stderr so stdout stays a single JSON document — and exits with code 0 on
+success, 1 on error. All docker invocations are argument lists (never shell
+strings) and bounded by hard timeouts.
 
 Commands:
   create_instance    -- Write config, run the container, wait until healthy.
@@ -56,7 +59,10 @@ def respond(data: dict) -> None:
 
 
 def log_line(message: str) -> None:
-    print(json.dumps({"log": message}), flush=True)
+    # Progress lines go to stderr: the API parses stdout as ONE JSON document,
+    # so a log line on stdout would corrupt every result (create/recreate used
+    # to fail with REDIS_SYSTEM_INVALID_JSON because of this).
+    print(message, file=sys.stderr, flush=True)
 
 
 def fail(message: str, code: str = "REDIS_ERROR") -> None:
@@ -139,7 +145,9 @@ ALLOWED_PERSISTENCE = {"NONE", "RDB", "AOF"}
 # Redis instances publish NO host port and are reachable only from it.
 NETWORK_NAME = "traefik-net"
 
-CONFIG_RELPATH = "usr/local/etc/redis/redis.conf"
+# Absolute path INSIDE the container — Docker rejects relative -v targets, so
+# every create/recreate would fail at `docker run` without the leading slash.
+CONFIG_RELPATH = "/usr/local/etc/redis/redis.conf"
 
 # Docker's limit sits above maxmemory: a background RDB fork or AOF rewrite
 # briefly doubles the process's memory, and OOM-killing the container for
@@ -152,12 +160,17 @@ CREATE_TIMEOUT = 240      # docker run (image pull can be slow on first create)
 HEALTH_WAIT_TIMEOUT = 90  # wait for the healthcheck to report healthy
 
 # Shell snippet executed INSIDE the container: reads requirepass from the
-# mounted config so the password never appears in a docker exec argument
-# (visible in host `ps`) or environment variable (visible in docker inspect).
+# mounted config and passes it to the CLI via REDISCLI_AUTH. SECURITY: the
+# password must never appear in a command-line argument (`-a "$PW"` showed up
+# in host `ps` / `docker exec` argv) — REDISCLI_AUTH is the redis-cli/valkey-cli
+# blessed alternative and is exported only for the exec'd process, never for
+# the container itself (so it stays out of `docker inspect` too). Piping AUTH
+# over stdin was rejected: Docker healthchecks run with no stdin attached, so
+# the CLI would exit before sending its command.
 _CLI_SNIPPET = (
-    'PW=$(sed -n "s/^requirepass //p" /usr/local/etc/redis/redis.conf); '
+    f'PW=$(sed -n "s/^requirepass //p" {CONFIG_RELPATH}); '
     'CLI=$(command -v valkey-cli || command -v redis-cli) || exit 127; '
-    'exec "$CLI" --no-auth-warning -a "$PW" {}'
+    'REDISCLI_AUTH="$PW" exec "$CLI" --no-auth-warning {}'
 )
 
 
@@ -299,9 +312,27 @@ def ensure_network(docker_bin: str) -> None:
             fail(f"Failed to create Docker network '{NETWORK_NAME}': {created.stderr.strip()}", "NETWORK_CREATE_FAILED")
 
 
+def _is_no_such_container(stderr: str | None) -> bool:
+    # Both wordings exist across docker CLI versions ("Error response from
+    # daemon: No such container" vs "Error: No such object").
+    return any(marker in (stderr or "") for marker in ("No such container", "No such object"))
+
+
+def _is_no_such_volume(stderr: str | None) -> bool:
+    return "No such volume" in (stderr or "")
+
+
 def container_exists(docker_bin: str, container_name: str) -> bool:
     res = run_bounded(QUICK_TIMEOUT, [docker_bin, "inspect", "--format", "{{.State.Status}}", container_name], fatal=False)
     return res.returncode == 0
+
+
+def container_confirmed_absent(docker_bin: str, container_name: str) -> bool:
+    """True only when Docker explicitly reports the container as missing. A
+    Docker that is down or erroring answers "cannot confirm" (False), so a
+    daemon outage never counts as a successful removal."""
+    res = run_bounded(QUICK_TIMEOUT, [docker_bin, "inspect", "--format", "{{.State.Status}}", container_name], fatal=False)
+    return res.returncode != 0 and _is_no_such_container(res.stderr)
 
 
 def container_logs(docker_bin: str, container_name: str, tail: int = 20) -> str:
@@ -310,13 +341,27 @@ def container_logs(docker_bin: str, container_name: str, tail: int = 20) -> str:
 
 
 def remove_container(docker_bin: str, container_name: str) -> bool:
-    """Force-remove the container. Returns True when it is gone afterwards
-    (including when it never existed)."""
+    """Force-remove the container. True only when it is confirmed gone
+    (including when it never existed). Any other Docker error — a daemon that
+    is down, for instance — is False: callers keep their records instead of
+    reporting a successful teardown for a container that is still there."""
     res = run_bounded(QUICK_TIMEOUT, [docker_bin, "rm", "-f", container_name], fatal=False)
     if res.returncode == 0:
         return True
-    # Idempotent teardown: a container that is already gone is success.
-    return not container_exists(docker_bin, container_name)
+    if _is_no_such_container(res.stderr):
+        return True
+    return container_confirmed_absent(docker_bin, container_name)
+
+
+def stop_gracefully(docker_bin: str, container_name: str) -> bool:
+    """SIGTERM + grace period (docker stop) so redis-server flushes its
+    RDB/AOF before the container is replaced — `docker rm -f` would SIGKILL
+    it and lose every write since the last snapshot. True when the container
+    is confirmed stopped or already gone; False on any other Docker error."""
+    res = run_bounded(QUICK_TIMEOUT, [docker_bin, "stop", "-t", "15", container_name], fatal=False)
+    if res.returncode == 0:
+        return True
+    return container_confirmed_absent(docker_bin, container_name)
 
 
 def wait_healthy(docker_bin: str, container_name: str, timeout: int) -> None:
@@ -371,7 +416,7 @@ def run_container(
         image,
         # Valkey ships valkey-server, Redis ships redis-server.
         ("valkey-server" if image.startswith("valkey/") else "redis-server"),
-        f"/{CONFIG_RELPATH}",
+        CONFIG_RELPATH,
     ]
     res = run_bounded(CREATE_TIMEOUT, cmd, fatal=False)
     if res.returncode != 0:
@@ -420,6 +465,23 @@ def _validated_settings(payload: dict) -> dict:
     }
 
 
+def _cleanup_failed_create(docker_bin: str, container_name: str) -> None:
+    """Best-effort teardown of whatever a failed create attempt left behind,
+    so it never becomes an untracked container/volume/config. Every problem
+    is reported on stderr — cleanup must never mask the original failure."""
+    try:
+        if not remove_container(docker_bin, container_name):
+            log_line(f"[vexlyx] WARNING: failed-create cleanup could not remove container '{container_name}'")
+        volume_res = run_bounded(QUICK_TIMEOUT, [docker_bin, "volume", "rm", f"{container_name}-data"], fatal=False)
+        if volume_res.returncode != 0 and not _is_no_such_volume(volume_res.stderr):
+            log_line(
+                f"[vexlyx] WARNING: failed-create cleanup could not remove volume '{container_name}-data': {(volume_res.stderr or '').strip()}"
+            )
+        remove_config(container_name)
+    except Exception as exc:
+        log_line(f"[vexlyx] WARNING: failed-create cleanup error: {exc}")
+
+
 def cmd_create_instance(payload: dict) -> None:
     settings = _validated_settings(payload)
     docker_bin = get_docker_binary()
@@ -440,8 +502,14 @@ def cmd_create_instance(payload: dict) -> None:
         settings["persistence"],
     )
     log_line(f"[vexlyx] Starting Redis instance container '{container_name}' ({settings['image']}, {settings['memoryLimitMb']}MB)")
-    run_container(docker_bin, container_name, settings["image"], settings["memoryLimitMb"])
-    wait_healthy(docker_bin, container_name, HEALTH_WAIT_TIMEOUT)
+    try:
+        run_container(docker_bin, container_name, settings["image"], settings["memoryLimitMb"])
+        wait_healthy(docker_bin, container_name, HEALTH_WAIT_TIMEOUT)
+    except SystemExit:
+        # `fail()` exits the process; undo whatever this attempt created first
+        # so a failed create never leaves resources the panel cannot manage.
+        _cleanup_failed_create(docker_bin, container_name)
+        raise
 
     respond({
         "success": True,
@@ -461,6 +529,14 @@ def cmd_recreate_instance(payload: dict) -> None:
     container_name = settings["containerName"]
 
     ensure_network(docker_bin)
+    # Graceful stop first: recreating is how limits/passwords change, and a
+    # `docker rm -f` straight away would SIGKILL redis-server and lose every
+    # write since the last RDB/AOF snapshot.
+    if container_exists(docker_bin, container_name) and not stop_gracefully(docker_bin, container_name):
+        fail(
+            f"Failed to stop existing container '{container_name}' for recreation; refusing to force-remove it (writes since the last snapshot would be lost)",
+            "RECREATE_FAILED",
+        )
     if not remove_container(docker_bin, container_name):
         fail(f"Failed to remove existing container '{container_name}' for recreation", "RECREATE_FAILED")
 
@@ -488,27 +564,30 @@ def cmd_delete_instance(payload: dict) -> None:
     container_name = validate_identifier(require_field(payload, "containerName"), "containerName")
     docker_bin = get_docker_binary()
 
-    removed_container = remove_container(docker_bin, container_name)
-
-    volume_res = run_bounded(QUICK_TIMEOUT, [docker_bin, "volume", "rm", f"{container_name}-data"], fatal=False)
-    volume_removed = volume_res.returncode == 0 or "No such volume" in (volume_res.stderr or "")
-
-    remove_config(container_name)
-
-    if not removed_container:
-        # The container is still there and could not be removed — report it
-        # rather than pretending the teardown succeeded (the API keeps the
-        # row so the instance stays visible and retryable).
+    # Order matters: the container goes first and, only once it is confirmed
+    # gone, the volume and then the config. A failure at any step leaves the
+    # config (and volume) untouched so the instance can still be restarted or
+    # the delete retried — the API keeps the row whenever this command fails.
+    if not remove_container(docker_bin, container_name):
         fail(
             f"Failed to remove container '{container_name}'. It may still be running; retry the delete.",
             "TEARDOWN_FAILED",
         )
 
+    volume_res = run_bounded(QUICK_TIMEOUT, [docker_bin, "volume", "rm", f"{container_name}-data"], fatal=False)
+    if volume_res.returncode != 0 and not _is_no_such_volume(volume_res.stderr):
+        fail(
+            f"Container '{container_name}' was removed but its volume could not be: {(volume_res.stderr or '').strip()}. Retry the delete to remove the volume.",
+            "TEARDOWN_FAILED",
+        )
+
+    remove_config(container_name)
+
     respond({
         "success": True,
         "container": container_name,
-        "containerRemoved": removed_container,
-        "volumeRemoved": volume_removed,
+        "containerRemoved": True,
+        "volumeRemoved": True,
         "configRemoved": True,
     })
 
