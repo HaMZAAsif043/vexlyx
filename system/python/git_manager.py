@@ -78,12 +78,21 @@ _UNSAFE_BRANCH = re.compile(r"[\x00-\x20\x7f~^:?*\[\\]|@{")
 
 def _validate_branch(branch: str) -> None:
     """Reject branch names git could not use or that could be reinterpreted as
-    options or refspec syntax downstream; the API schema only bounds length."""
+    options or refspec syntax downstream; the API schema only bounds length.
+
+    git's rules apply to every slash-separated component, not just the whole
+    name: no component may be empty, start with `.` or end with `.lock`, so
+    `.hidden`, `feature/.hidden` and `feature.lock/topic` are all rejected the
+    same way `feature.lock` would be — git refuses them, and letting them
+    through would wipe an existing workspace before the clone also failed.
+    """
     if (
         not isinstance(branch, str)
         or not branch
         or branch.startswith(("-", "/"))
-        or branch == "@"
+        # '@' expands to HEAD in revision syntax downstream, and
+        # `git check-ref-format --branch HEAD` refuses the reserved name.
+        or branch in ("@", "HEAD")
         or ".." in branch
         or "@{" in branch
         or "//" in branch
@@ -91,6 +100,9 @@ def _validate_branch(branch: str) -> None:
         or _UNSAFE_BRANCH.search(branch)
     ):
         fail("Unsupported branch name", "INVALID_BRANCH")
+    for component in branch.split("/"):
+        if not component or component.startswith(".") or component.endswith(".lock"):
+            fail("Unsupported branch name", "INVALID_BRANCH")
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +282,13 @@ def _run(args: list[str], env: dict | None = None) -> None:
 
 
 def _ref_exists(dest: Path, ref: str, env: dict | None = None) -> bool:
-    """Check whether a ref resolves in the repository without raising."""
+    """Check whether a ref resolves in the repository.
+
+    Raises GitCommandError on a timeout rather than reporting False: a check
+    that never finished is not a missing ref, and treating it as one would
+    send the caller down the fetch-and-create path for a branch that may well
+    exist (#153).
+    """
     try:
         result = subprocess.run(
             ["git", "-C", str(dest), "rev-parse", "--verify", "--quiet", ref],
@@ -280,7 +298,11 @@ def _ref_exists(dest: Path, ref: str, env: dict | None = None) -> bool:
             timeout=GIT_COMMAND_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
-        return False
+        raise GitCommandError(
+            f"Command timed out after {GIT_COMMAND_TIMEOUT}s: "
+            f"git -C {dest} rev-parse --verify --quiet {ref}",
+            "COMMAND_TIMEOUT",
+        ) from None
     return result.returncode == 0
 
 

@@ -113,6 +113,37 @@ class CheckoutFetchedBranchTests(unittest.TestCase):
             git_manager._checkout_fetched_branch(self.dest, "nope", None)
         printed.assert_not_called()
 
+    def test_ref_check_timeout_raises_command_timeout(self):
+        """An unfinished ref check is an error, not a missing ref (#153)."""
+
+        def side_effect(args, **kwargs):
+            if "rev-parse" in args:
+                raise subprocess.TimeoutExpired(args, git_manager.GIT_COMMAND_TIMEOUT)
+            return completed(args, 0)
+
+        self.run.side_effect = side_effect
+        printed = self.enterContext(patch("builtins.print"))
+        with self.assertRaises(git_manager.GitCommandError) as ctx:
+            git_manager._ref_exists(self.dest, "refs/heads/feature-x", None)
+        self.assertEqual(ctx.exception.code, "COMMAND_TIMEOUT")
+        self.assertIn("rev-parse", ctx.exception.message)
+        printed.assert_not_called()
+
+    def test_ref_check_timeout_does_not_trigger_fetch_and_create(self):
+        def side_effect(args, **kwargs):
+            if "rev-parse" in args:
+                raise subprocess.TimeoutExpired(args, git_manager.GIT_COMMAND_TIMEOUT)
+            return completed(args, 0)
+
+        self.run.side_effect = side_effect
+        printed = self.enterContext(patch("builtins.print"))
+        with self.assertRaises(git_manager.GitCommandError) as ctx:
+            git_manager._checkout_fetched_branch(self.dest, "feature-x", None)
+        self.assertEqual(ctx.exception.code, "COMMAND_TIMEOUT")
+        # Only the rev-parse probe ran: no fetch, no checkout -b.
+        self.assertEqual(run_commands(self.run.call_args_list), [])
+        printed.assert_not_called()
+
 
 class BranchValidationTests(unittest.TestCase):
     """The API schema only bounds branch length; unsafe names must be rejected."""
@@ -129,6 +160,7 @@ class BranchValidationTests(unittest.TestCase):
             "-b", "--upload-pack=touch", "feature x", "feature\nx", "a..b",
             "a//b", "a.lock", "a\\b", "a^b", "a~b", "a:b", "a?b", "a*b",
             "a[b", "a@{b", "/leading", "trailing/", "trailing.", "",
+            ".hidden", "feature/.hidden", "feature.lock/topic", "HEAD",
         ):
             with self.subTest(branch=branch):
                 self.print.reset_mock()
@@ -147,9 +179,44 @@ class BranchValidationTests(unittest.TestCase):
         self.run.assert_not_called()
 
     def test_accepts_ordinary_branch_names(self):
-        for branch in ("main", "develop", "feature/x-1.0", "release_2024"):
+        for branch in (
+            "main", "develop", "feature/x-1.0", "release_2024",
+            # Only a component ending in `.lock` is forbidden: names that
+            # merely contain "lock" or a dot-prefixed lookalike stay valid.
+            "feature.locked", "x.locks/y", "release/2.0",
+            # Only the reserved whole name HEAD is rejected, not a component.
+            "feature/HEAD",
+        ):
             with self.subTest(branch=branch):
                 git_manager._validate_branch(branch)
+
+    def test_rejects_component_violations_before_touching_existing_workspace(self):
+        """A bad component must return INVALID_BRANCH while the workspace,
+        its .git and its files are still intact (#153)."""
+        workspace = Path(self.temp.name) / "test"
+        (workspace / ".git").mkdir(parents=True)
+        sentinel = workspace / "keep.txt"
+        sentinel.write_text("unchanged")
+        for branch in (".hidden", "feature/.hidden", "feature.lock/topic"):
+            with self.subTest(branch=branch):
+                self.print.reset_mock()
+                with self.assertRaises(SystemExit) as ctx:
+                    git_manager.cmd_clone(
+                        {
+                            "command": "clone",
+                            "projectId": "test",
+                            "projectsDir": self.temp.name,
+                            "gitUrl": "https://github.com/team/repo",
+                            "branch": branch,
+                        }
+                    )
+                self.assertEqual(ctx.exception.code, 1)
+                emitted = json.loads(self.print.call_args.args[0])
+                self.assertEqual(emitted["code"], "INVALID_BRANCH")
+                self.assertIn("error", emitted)
+        self.run.assert_not_called()
+        self.assertEqual(sentinel.read_text(), "unchanged")
+        self.assertTrue((workspace / ".git").is_dir())
 
 
 class SingleDocumentContractTests(unittest.TestCase):
@@ -222,6 +289,28 @@ class SingleDocumentContractTests(unittest.TestCase):
         emitted = json.loads(self.print.call_args.args[0])
         self.assertIn("error", emitted)
         self.assertEqual(emitted["code"], "COMMAND_FAILED")
+
+    def test_ref_check_timeout_reports_one_timeout_document(self):
+        """A stalled ref check surfaces as one COMMAND_TIMEOUT result, not as
+        a missing ref followed by a fetch-and-create attempt (#153)."""
+        (Path(self.temp.name) / "test" / ".git").mkdir(parents=True)
+
+        def side_effect(args, **kwargs):
+            if "rev-parse" in args or "clone" in args:
+                raise subprocess.TimeoutExpired(args, git_manager.GIT_COMMAND_TIMEOUT)
+            return completed(args, 0)
+
+        self.run.side_effect = side_effect
+        self.enterContext(
+            patch.object(git_manager.sys, "stdin", io.StringIO(json.dumps(self.payload)))
+        )
+        with self.assertRaises(SystemExit) as ctx:
+            git_manager.main()
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertEqual(self.print.call_count, 1)
+        emitted = json.loads(self.print.call_args.args[0])
+        self.assertIn("error", emitted)
+        self.assertEqual(emitted["code"], "COMMAND_TIMEOUT")
 
     def test_successful_update_still_reports_single_pull_document(self):
         (Path(self.temp.name) / "test" / ".git").mkdir(parents=True)
