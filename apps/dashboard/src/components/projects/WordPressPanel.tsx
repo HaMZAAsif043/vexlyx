@@ -150,46 +150,33 @@ export function WordPressPanel({ project, onProjectUpdate }: WordPressPanelProps
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.name.endsWith(".zip")) {
+    if (!file.name.toLowerCase().endsWith(".zip")) {
       toast.error("Please upload a valid .zip archive");
       return;
     }
 
     setIsUploading(true);
-    const reader = new FileReader();
-
-    reader.onload = async () => {
-      try {
-        const base64Data = (reader.result as string).split(",")[1];
-        if (!base64Data) throw new Error("Could not read file");
-
-        const res = await fetchAPI<{ message: string }>(
-          `/api/projects/${project.id}/wordpress/upload`,
-          {
-            method: "POST",
-            body: JSON.stringify({
-              assetType: uploadType,
-              zipBase64: base64Data,
-            }),
-          },
-        );
-
-        toast.success(res.message);
-        await fetchStatus();
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Failed to upload asset");
-      } finally {
-        setIsUploading(false);
-        if (fileInputRef.current) fileInputRef.current.value = "";
-      }
-    };
-
-    reader.onerror = () => {
-      toast.error("Error reading file");
+    try {
+      // Multipart upload — real theme/plugin archives are routinely several
+      // MB, far past the API's 1 MiB JSON body limit that base64-in-JSON
+      // requests used to hit with a 413 (#154). fetchAPI supplies the
+      // configured API base URL; it leaves FormData bodies alone so the
+      // browser sets the multipart boundary.
+      const form = new FormData();
+      form.append("assetType", uploadType);
+      form.append("file", file, file.name);
+      const res = await fetchAPI<{ message: string }>(
+        `/api/projects/${project.id}/wordpress/upload`,
+        { method: "POST", body: form },
+      );
+      toast.success(res.message);
+      await fetchStatus();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to upload asset");
+    } finally {
       setIsUploading(false);
-    };
-
-    reader.readAsDataURL(file);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
   };
 
   const triggerUploadDialog = (type: "plugin" | "theme") => {
