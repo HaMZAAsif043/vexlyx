@@ -312,6 +312,27 @@ class SingleDocumentContractTests(unittest.TestCase):
         self.assertIn("error", emitted)
         self.assertEqual(emitted["code"], "COMMAND_TIMEOUT")
 
+    def test_ref_check_timeout_preserves_existing_workspace(self):
+        """A stalled read-only check must not wipe the workspace or re-clone:
+        the timeout escapes instead of entering the destructive fallback."""
+        workspace = Path(self.temp.name) / "test"
+        (workspace / ".git").mkdir(parents=True)
+        sentinel = workspace / "untracked.txt"
+        sentinel.write_text("keep me")
+
+        def side_effect(args, **kwargs):
+            if "rev-parse" in args:
+                raise subprocess.TimeoutExpired(args, git_manager.GIT_COMMAND_TIMEOUT)
+            return completed(args, 0)
+
+        self.run.side_effect = side_effect
+        with self.assertRaises(git_manager.GitCommandError) as ctx:
+            git_manager.cmd_clone(self.payload)
+        self.assertEqual(ctx.exception.code, "COMMAND_TIMEOUT")
+        self.assertEqual(sentinel.read_text(), "keep me")
+        self.assertTrue((workspace / ".git").is_dir())
+        self.assertFalse(any("clone" in c for c in self._commands()))
+
     def test_successful_update_still_reports_single_pull_document(self):
         (Path(self.temp.name) / "test" / ".git").mkdir(parents=True)
 

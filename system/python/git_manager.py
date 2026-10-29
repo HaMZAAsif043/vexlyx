@@ -146,7 +146,14 @@ def cmd_clone(payload: dict) -> None:
             _run(["git", "-C", str(dest), "pull", "origin", branch], env=env)
             respond({"success": True, "path": str(dest), "action": "pulled"})
             return
-        except GitCommandError:
+        except GitCommandError as exc:
+            # A timeout is not evidence the repository is broken: the stalled
+            # command may have been a read-only ref probe, and the workspace
+            # can still be perfectly valid. Wiping it would destroy the
+            # project's untracked files for nothing, so let the timeout
+            # surface instead of entering the destructive retry path (#153).
+            if exc.code == "COMMAND_TIMEOUT":
+                raise
             # If pull/fetch failed (e.g. broken repo or URL changed), clean it up and re-clone.
             # Nothing was written to stdout yet, so the re-clone result below is the
             # single JSON document this call emits (#153).
