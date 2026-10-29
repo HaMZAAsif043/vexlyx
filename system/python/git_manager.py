@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -76,8 +77,8 @@ def cmd_clone(payload: dict) -> None:
     dest = Path(projects_dir) / project_id
     env = _build_env(ssh_key_path, access_token)
 
-    # If the workspace already exists and has a valid .git repo, try fetch + checkout
     if (dest / ".git").exists():
+        previous_url = _origin_url(dest)
         try:
             # The URL never contains credentials; setting it before fetch also makes
             # switching a project between repositories deterministic.
@@ -88,12 +89,17 @@ def cmd_clone(payload: dict) -> None:
             respond({"success": True, "path": str(dest), "action": "pulled"})
             return
         except SystemExit:
-            # If pull/fetch failed (e.g. broken repo or URL changed), clean it up and re-clone
-            shutil.rmtree(dest, ignore_errors=True)
+            # Security-critical: a failed pull (network, auth, local changes) must never
+            # trigger a re-clone, because that replaces the workspace and loses every
+            # file git does not track. Only an explicit switch to another repository
+            # re-clones, and even then the old workspace is kept aside.
+            if previous_url == git_url:
+                raise
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists():
-        shutil.rmtree(dest, ignore_errors=True)
+    kept_aside = _move_aside(dest) if dest.exists() and any(dest.iterdir()) else None
+    if dest.exists() and kept_aside is None:
+        dest.rmdir()
 
     try:
         _run(
@@ -101,11 +107,15 @@ def cmd_clone(payload: dict) -> None:
             env=env,
         )
     except SystemExit:
-        # Clean up partial failed directory
         shutil.rmtree(dest, ignore_errors=True)
+        if kept_aside is not None:
+            kept_aside.rename(dest)
         raise
 
-    respond({"success": True, "path": str(dest), "action": "cloned"})
+    result = {"success": True, "path": str(dest), "action": "cloned"}
+    if kept_aside is not None:
+        result["previousWorkspace"] = str(kept_aside)
+    respond(result)
 
 
 def cmd_generate_ssh_key(payload: dict) -> None:
@@ -181,6 +191,22 @@ def _build_env(ssh_key_path: str | None, access_token: str | None = None) -> dic
         env["GIT_CONFIG_KEY_0"] = "http.https://github.com/.extraheader"
         env["GIT_CONFIG_VALUE_0"] = f"Authorization: Basic {credential}"
     return env
+
+
+def _origin_url(repo: Path) -> str | None:
+    """Return the repository's configured origin URL, or None when it cannot be read."""
+    result = subprocess.run(
+        ["git", "-C", str(repo), "config", "--get", "remote.origin.url"],
+        capture_output=True, text=True, timeout=30,
+    )
+    return result.stdout.strip() or None if result.returncode == 0 else None
+
+
+def _move_aside(workspace: Path) -> Path:
+    """Rename a workspace next to itself instead of deleting it, and return the new path."""
+    kept = workspace.with_name(f"{workspace.name}.replaced-{time.strftime('%Y%m%d-%H%M%S')}")
+    workspace.rename(kept)
+    return kept
 
 
 # Seconds. Generous because large repositories legitimately take a while to

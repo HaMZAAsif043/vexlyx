@@ -150,7 +150,7 @@ services:
 networks:
   default:
     external: true
-    name: traefik-net
+    name: vexlyx-apps
 ```
 
 ---

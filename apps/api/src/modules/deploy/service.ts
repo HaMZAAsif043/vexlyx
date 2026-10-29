@@ -221,6 +221,14 @@ export function runDockerStopByProject(projectId: string): Promise<void> {
   return runDockerManagerCommand({ command: "stop_by_project", projectId });
 }
 
+/** Sends one command to docker_manager.py (used by the one-time upgrade scripts). */
+export function runDockerManager(
+  request: Record<string, unknown>,
+  onLog?: (line: string) => Promise<void> | void,
+): Promise<void> {
+  return runDockerManagerCommand(request, onLog);
+}
+
 function runDockerManagerCommand(
   request: Record<string, unknown>,
   onLog?: (line: string) => Promise<void> | void,

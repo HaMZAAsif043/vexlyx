@@ -15,7 +15,7 @@ export type WordPressInstallInput = z.infer<typeof WordPressInstallSchema>;
 
 export const WordPressUploadSchema = z.object({
   assetType: z.enum(["plugin", "theme"]),
-  zipBase64: z.string().min(1, "ZIP file content as Base64 is required"),
+  zipPath: z.string().min(1, "Uploaded ZIP path is required"),
 });
 
 export type WordPressUploadInput = z.infer<typeof WordPressUploadSchema>;

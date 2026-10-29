@@ -25,7 +25,9 @@ Regression coverage: `apps/api/src/modules/domains/service.test.ts`.
 
 Custom Domain Management allows users to attach custom fully-qualified domain names (FQDNs) to their deployed projects, verify domain ownership through DNS TXT record challenges, and automatically configure Traefik v3 HTTP routing using zero-downtime dynamic file provider definitions.
 
-When a domain is verified, Vexlyx generates a dynamic router configuration in `docker/traefik/dynamic/domain-{domainId}.yml` routing all incoming web traffic matching `Host(...)` to the project's container on `traefik-net`. When a domain is deleted, the dynamic configuration file is removed immediately with zero downtime or container restarts.
+When a domain is verified, Vexlyx generates a dynamic router configuration in `docker/traefik/dynamic/domain-{domainId}.yml` routing all incoming web traffic matching `Host(...)` to the project's container on `vexlyx-apps`. When a domain is deleted, the dynamic configuration file is removed immediately with zero downtime or container restarts.
+
+The API never restarts or signals the shared `vexlyx-traefik` container: restarting it would drop TLS for every site on the server. Route files are written to a `.tmp` file in the same directory and renamed into place, so Traefik's file provider (`watch: true`) only ever sees a complete file, and Let's Encrypt issuance starts when the router with `tls.certResolver` appears. On Docker Desktop for Windows the bind-mount watcher can miss changes (see `docs/dev/email/webmail.md`); that is a development-only caveat, and a manual `docker restart vexlyx-traefik` there is not needed on Linux servers.
 
 ---
 
@@ -86,7 +88,7 @@ When a domain is verified, Vexlyx generates a dynamic router configuration in `d
 
 3. **Traefik Dynamic Routing (`syncTraefikRouter`)**:
    - Traefik v3 in `docker-compose.yml` mounts `./docker/traefik/dynamic/`.
-   - Writes `docker/traefik/dynamic/domain-{domainId}.yml` with direct service loadbalancer routing across `traefik-net`:
+   - Writes `docker/traefik/dynamic/domain-{domainId}.yml` with direct service loadbalancer routing across `vexlyx-apps`:
      ```yaml
      http:
        routers:
@@ -99,9 +101,11 @@ When a domain is verified, Vexlyx generates a dynamic router configuration in `d
          service-{domainId}:
            loadBalancer:
              servers:
-               - url: "http://vexlyx-{serviceName}-app-1:{containerPort}"
+               - url: "http://vexlyx-{serviceName}-{service}-1:{port}"
      ```
    - Seamlessly proxies HTTP traffic to the target container with zero downtime.
+   - `{service}` and `{port}` come from `resolveHttpUpstream()` (`domains/upstream.ts`): WordPress and no-build PHP projects run PHP-FPM (`app`, FastCGI on 9000) behind an nginx (`web`, port 80), so their route targets `web`; every other type targets its single `app` container. The function is checked against the Traefik labels in `system/templates/docker-compose/*.yml` by `upstream.test.ts`, so a new template or type that exposes a different service fails the test instead of producing a 502.
+   - On every API start, `DomainService.syncAllRoutes()` rewrites the route file of each active, attached domain and leaves files that are already correct alone. This repaired servers whose routes were generated before #150 (WordPress and no-build PHP domains answering 502) on upgrade, with no proxy restart. A hand-edited route file is overwritten at the next start; the files are generated, not configuration.
 
 4. **Domain Deletion (`DELETE /api/domains/:id`)**:
    - Unlinks `docker/traefik/dynamic/domain-{domainId}.yml`.

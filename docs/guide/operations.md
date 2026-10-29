@@ -117,6 +117,10 @@ curl -fsSL https://vexlyx.atlantiqs.org/install.sh | sudo VEXLYX_REPO_REF=main b
 
 An install that already follows a branch keeps following it until you set `VEXLYX_REPO_REF=latest`.
 
+When a release changes Traefik's static configuration (for example the upload timeouts added in v0.4.1), the installer restarts the proxy once, and only then. Every site on the server is unreachable for a few seconds during that restart; an upgrade that does not change the configuration never restarts it.
+
+Some releases recreate more of the stack. v0.4.2 gives Redis a password and moves projects onto their own network (see [Network layout](/reference/network-layout)). The installer generates `REDIS_PASSWORD` in `/etc/vexlyx/vexlyx.env`, recreates Redis, Traefik, the database servers, the API and the dashboard (every site pauses for a few seconds), and reloads the nginx container of each PHP or WordPress project once it has moved (those sites can pause briefly once more). Logins and queued jobs are kept. If you connect to Redis yourself, use the password from that file.
+
 ::: warning Servers installed before v0.3.0
 Older versions committed a mailbox file (`docker/dovecot/config/users`) containing accounts with a
 publicly known password, and the panel keeps rewriting that file on your server. Git therefore
