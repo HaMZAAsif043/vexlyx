@@ -8,13 +8,19 @@ import type { PrismaClient } from "@prisma/client";
 import type { FastifyBaseLogger } from "fastify";
 import type { AuditLogService } from "../audit-log/service.js";
 
-vi.mock("../../config/env.js", () => ({ env: {} }));
+vi.mock("../../config/env.js", () => ({
+  env: { PROJECTS_DIR: "/tmp/vexlyx-projects" },
+}));
 vi.mock("../../utils/quota.js", () => ({
   assertUnderQuota: vi.fn(),
   notifyQuotaThreshold: vi.fn(),
 }));
 vi.mock("../deploy/service.js", () => ({ runDockerAction: vi.fn() }));
+vi.mock("node:fs", () => ({ existsSync: vi.fn(() => false) }));
+vi.mock("node:fs/promises", () => ({ default: { rm: vi.fn() } }));
+vi.mock("../domains/service.js", () => ({ removeTraefikRouteFile: vi.fn() }));
 import { ProjectService } from "./service.js";
+import { removeTraefikRouteFile } from "../domains/service.js";
 
 describe("project Git URL policy", () => {
   it.each([
@@ -144,5 +150,64 @@ describe("project repository changes", () => {
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(prisma.project.updateMany).not.toHaveBeenCalled();
     expect(prisma.project.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("project deletion", () => {
+  const project = {
+    id: "p1",
+    userId: "u1",
+    name: "app",
+    type: "NODEJS",
+    deletedAt: null,
+  };
+  const prisma = {
+    project: {
+      findUnique: vi.fn(),
+      update: vi.fn(),
+    },
+    scheduledTask: {
+      findMany: vi.fn(),
+      updateMany: vi.fn(),
+    },
+    domain: {
+      findMany: vi.fn(),
+      updateMany: vi.fn(),
+    },
+  };
+  const auditLog = { log: vi.fn() };
+  const service = new ProjectService(
+    prisma as unknown as PrismaClient,
+    auditLog as unknown as AuditLogService,
+    { error: vi.fn(), warn: vi.fn(), info: vi.fn() } as unknown as FastifyBaseLogger,
+  );
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    prisma.project.findUnique.mockResolvedValue(project);
+    prisma.project.update.mockResolvedValue(project);
+    prisma.scheduledTask.findMany.mockResolvedValue([]);
+    prisma.domain.findMany.mockResolvedValue([{ id: "d1" }, { id: "d2" }]);
+    prisma.domain.updateMany.mockResolvedValue({ count: 2 });
+  });
+
+  it("removes the route files and detaches the domains before the containers go away", async () => {
+    await service.softDelete("u1", "p1");
+
+    expect(removeTraefikRouteFile).toHaveBeenCalledWith("d1", expect.anything());
+    expect(removeTraefikRouteFile).toHaveBeenCalledWith("d2", expect.anything());
+    expect(prisma.domain.updateMany).toHaveBeenCalledWith({
+      where: { projectId: "p1" },
+      data: { projectId: null },
+    });
+  });
+
+  it("keeps the domain rows when the project has no domains", async () => {
+    prisma.domain.findMany.mockResolvedValue([]);
+
+    await service.softDelete("u1", "p1");
+
+    expect(prisma.domain.updateMany).not.toHaveBeenCalled();
+    expect(removeTraefikRouteFile).not.toHaveBeenCalled();
   });
 });

@@ -7,6 +7,7 @@ import type { CreateProjectInput, UpdateProjectInput, ProjectListQuery } from ".
 import { assertUnderQuota, notifyQuotaThreshold } from "../../utils/quota.js";
 import { env } from "../../config/env.js";
 import { runDockerAction } from "../deploy/service.js";
+import { removeTraefikRouteFile } from "../domains/service.js";
 import type { AuditLogService } from "../audit-log/service.js";
 import { getScheduledTaskQueue, unscheduleTaskJob } from "../scheduled-tasks/scheduler.js";
 
@@ -169,6 +170,7 @@ export class ProjectService {
       // containers/files (in case its own soft-delete never did, e.g. a
       // pre-existing project from before this cleanup existed) before
       // removing it to allow re-creation.
+      await this.detachDomains(existing.id);
       await this.teardownWorkspace(existing.id);
       await this.prisma.project.delete({
         where: { id: existing.id },
@@ -236,6 +238,7 @@ export class ProjectService {
         }
         // If colliding record was soft-deleted, tear down its
         // containers/files (see teardownWorkspace) before removing it.
+        await this.detachDomains(collision.id);
         await this.teardownWorkspace(collision.id);
         await this.prisma.project.delete({
           where: { id: collision.id },
@@ -321,6 +324,8 @@ export class ProjectService {
     // container.
     await this.disableScheduledTasks(projectId);
 
+    await this.detachDomains(projectId);
+
     await this.teardownWorkspace(projectId);
 
     await this.auditLog.log(userId, "project.deleted", { type: "Project", id: projectId }, {
@@ -333,6 +338,29 @@ export class ProjectService {
    * The rows are disabled first: even if disarming fails (already logged), the
    * worker will not execute them and the next boot only re-arms enabled tasks.
    */
+  /**
+   * Detaches every domain from the project and removes its Traefik route file.
+   * The containers disappear with the workspace, so a router left behind would
+   * answer 502 for the domain forever; the domain rows stay with the user so
+   * they can be attached to another project.
+   */
+  private async detachDomains(projectId: string): Promise<void> {
+    const domains = await this.prisma.domain.findMany({
+      where: { projectId },
+      select: { id: true },
+    });
+    if (domains.length === 0) return;
+
+    for (const domain of domains) {
+      removeTraefikRouteFile(domain.id, this.logger);
+    }
+
+    await this.prisma.domain.updateMany({
+      where: { projectId },
+      data: { projectId: null },
+    });
+  }
+
   private async disableScheduledTasks(projectId: string) {
     const tasks = await this.prisma.scheduledTask.findMany({
       where: { projectId },

@@ -6,6 +6,7 @@ All notable changes to Vexlyx are documented here. The format follows [Keep a Ch
 
 ### Fixed
 
+- Deleting a project now detaches its custom domains and removes their Traefik routes, so they stop answering `502 Bad Gateway` and can be attached to another project; reusing a deleted project's name also cleans up routes left by older versions (#185).
 - Connecting or updating a git project no longer deletes files git does not track. A failed fetch, checkout or pull (network, authentication, local changes) now fails with its error and leaves the workspace untouched; previously it re-cloned the project and lost uploads and other untracked files. Switching a project to another repository, or connecting git to a workspace that already has files, keeps the old workspace next to the project as `<id>.replaced-<timestamp>` (reported as `previousWorkspace`) and restores it if the clone fails.
 
 ## [0.4.2] - 2026-10-26

@@ -82,6 +82,25 @@ function getTraefikConfigFile(domainId: string): string {
   return path.join(getTraefikDynamicDir(), `domain-${domainId}.yml`);
 }
 
+/**
+ * Removes a domain's Traefik dynamic router file. Shared by DomainService and
+ * ProjectService so a deleted project cannot leave a router pointing at a
+ * container that no longer exists (a permanent 502 for the domain).
+ */
+export function removeTraefikRouteFile(
+  domainId: string,
+  logger?: Pick<FastifyBaseLogger, "error">,
+): void {
+  const configPath = getTraefikConfigFile(domainId);
+  if (!fs.existsSync(configPath)) return;
+
+  try {
+    fs.unlinkSync(configPath);
+  } catch (err) {
+    logger?.error({ err, domainId }, "Failed to remove Traefik config for domain");
+  }
+}
+
 function generateVerificationToken(): string {
   return `vexlyx-verify-${crypto.randomBytes(16).toString("hex")}`;
 }
@@ -368,17 +387,7 @@ http:
    * Removes Traefik dynamic router configuration file for a domain.
    */
   public removeTraefikRouter(domainId: string, removeCertificates = true): void {
-    const configPath = getTraefikConfigFile(domainId);
-    if (fs.existsSync(configPath)) {
-      try {
-        fs.unlinkSync(configPath);
-      } catch (err) {
-        this.logger?.error(
-          { err, domainId },
-          "Failed to remove Traefik config for domain",
-        );
-      }
-    }
+    removeTraefikRouteFile(domainId, this.logger);
 
     if (!removeCertificates) return;
 
