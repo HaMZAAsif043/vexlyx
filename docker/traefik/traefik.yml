@@ -15,6 +15,10 @@ entryPoints:
     address: ":80"
   websecure:
     address: ":443"
+    transport:
+      respondingTimeouts:
+        readTimeout: 0s
+        idleTimeout: 180s
 
 certificatesResolvers:
   letsencrypt:

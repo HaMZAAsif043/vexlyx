@@ -67,7 +67,7 @@ Feature **F2.6** implements isolated, on-demand database provisioning for **Post
 
 For every provisioned database, Vexlyx generates two types of connection URIs:
 
-1. **Internal Docker URI** (for hosted project containers on `traefik-net`):
+1. **Internal Docker URI** (for hosted project containers on `vexlyx-apps`):
    - PostgreSQL: `postgresql://u_app_1234:password@vexlyx-postgres:5432/app_production`
    - MySQL: `mysql://u_app_1234:password@vexlyx-mysql:3306/app_production`
 

@@ -19,6 +19,10 @@ require_root
 
 install -d -m 0700 "${VEXLYX_SECRETS_DIR}"
 touch "${VEXLYX_STATE_FILE}"
+# fd 3 keeps the operator's real stdout, outside the tee below, so a secret
+# (the generated admin password) can be shown to the operator without ever
+# being written to the install log. See show_secret_to_operator in lib.sh.
+exec 3>&1
 exec > >(tee -a "${VEXLYX_STATE_FILE}") 2>&1
 
 trap 'on_error ${LINENO}' ERR

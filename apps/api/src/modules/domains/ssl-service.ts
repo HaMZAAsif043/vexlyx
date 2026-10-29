@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { FastifyBaseLogger } from "fastify";
 import type { PrismaClient } from "@prisma/client";
 import type {
   CertificateResponse,
@@ -218,8 +219,11 @@ function calculateDaysRemaining(validToDate: Date | null): {
 export class SslService {
   private domainService: DomainService;
 
-  constructor(private readonly prisma: PrismaClient) {
-    this.domainService = new DomainService(prisma);
+  constructor(
+    private readonly prisma: PrismaClient,
+    logger?: Pick<FastifyBaseLogger, "error" | "warn" | "info">,
+  ) {
+    this.domainService = new DomainService(prisma, undefined, logger);
   }
 
   /**

@@ -102,7 +102,7 @@ The following fields were added to the `Project` model in `apps/api/prisma/schem
 | Variable | Default (dev) | Description |
 |----------|---------------|-------------|
 | `BASE_DOMAIN` | `vexlyx.localhost` | Base domain used to generate Traefik routing hostnames: `{name}.{BASE_DOMAIN}` |
-| `DEPLOY_MEMORY_LIMIT` | `128m` | Default memory limit passed to Docker container resource limits |
+| `DEPLOY_MEMORY_LIMIT` | `512m` | Default memory limit passed to Docker container resource limits |
 | `DEPLOY_PORT_RANGE_START` | `8100` | Start of host-port range for dynamic allocation |
 | `DEPLOY_PORT_RANGE_END` | `8999` | End of host-port range for dynamic allocation |
 

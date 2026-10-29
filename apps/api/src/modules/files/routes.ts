@@ -39,7 +39,7 @@ function handleFileError(err: unknown, reply: FastifyReply): void {
 // ---------------------------------------------------------------------------
 
 export async function fileRoutes(app: FastifyInstance) {
-  const service = new FileService(app.prisma, new AuditLogService(app.prisma, app.log));
+  const service = new FileService(app.prisma, new AuditLogService(app.prisma, app.log), app.log);
 
   // ── GET /api/files/:id/list ──────────────────────────────────────────
   app.get(

@@ -19,6 +19,11 @@ services:
 {{env_block}}
     volumes:
       - "{{php_root}}:/var/www/html"
+      # PHP owns the docroot directory (#151), so it could otherwise rename
+      # deploy/ -- which the panel writes to as root -- and put its own in
+      # place. A mount point cannot be renamed or removed from inside the
+      # container, and :ro keeps its contents unwritable.
+      - "{{deploy_dir}}:/var/www/html/deploy:ro"
     deploy:
       resources:
         limits:
@@ -58,4 +63,4 @@ services:
 networks:
   default:
     external: true
-    name: traefik-net
+    name: vexlyx-apps

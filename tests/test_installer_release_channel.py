@@ -163,6 +163,76 @@ class InstallerReleaseChannelTest(unittest.TestCase):
         self.assertIn("Local changes detected", result.stdout)
         self.assertEqual(self.checkout_mark(home), "edited by the operator")
 
+    def seed_with_tracked_script(self) -> Path:
+        script = self.origin / "tool.sh"
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        git(self.origin, "add", "tool.sh")
+        self.seed_releases()
+        return self.fresh_clone(ref="v0.9.0")
+
+    def test_untracked_files_do_not_stop_an_upgrade(self) -> None:
+        home = self.seed_with_tracked_script()
+        (home / ".pnpm-store").mkdir()
+        (home / ".pnpm-store" / "index").write_text("cache", encoding="utf-8")
+        result = self.run_script("update_checkout", cwd=home, ref="v0.10.0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("Local changes detected", result.stdout)
+        self.assertEqual(self.checkout_mark(home), "release-0.10.0")
+
+    @unittest.skipIf(os.name == "nt", "file modes are not meaningful on Windows")
+    def test_mode_only_changes_do_not_stop_an_upgrade(self) -> None:
+        # v0.3.x servers: the OpenDKIM entrypoint runs chmod -R on tracked key files.
+        home = self.seed_with_tracked_script()
+        git(home, "config", "core.fileMode", "true")
+        (home / "tool.sh").chmod(0o755)
+        self.assertIn("tool.sh", git(home, "status", "--porcelain"))
+        result = self.run_script("update_checkout", cwd=home, ref="v0.10.0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("Local changes detected", result.stdout)
+        self.assertEqual(self.checkout_mark(home), "release-0.10.0")
+
+    @unittest.skipIf(os.name == "nt", "file modes are not meaningful on Windows")
+    def test_a_real_edit_still_stops_an_upgrade_even_with_a_mode_change(self) -> None:
+        home = self.seed_with_tracked_script()
+        git(home, "config", "core.fileMode", "true")
+        (home / "tool.sh").chmod(0o755)
+        (home / "tool.sh").write_text("#!/bin/sh\necho edited\n", encoding="utf-8")
+        result = self.run_script("update_checkout", cwd=home, ref="v0.10.0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Local changes detected", result.stdout)
+        self.assertEqual(self.checkout_mark(home), "release-0.9.0")
+
+    def test_mail_state_check_ignores_untracked_files(self) -> None:
+        home = self.seed_with_tracked_script()
+        (home / ".pnpm-store").mkdir()
+        (home / ".pnpm-store" / "index").write_text("cache", encoding="utf-8")
+        result = self.run_script(
+            "git fetch --quiet origin tag v0.10.0 && prepare_mail_upgrade", cwd=home
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("Source changes detected", result.stderr)
+
+    @unittest.skipIf(os.name == "nt", "file modes are not meaningful on Windows")
+    def test_mail_state_check_ignores_mode_only_changes(self) -> None:
+        home = self.seed_with_tracked_script()
+        git(home, "config", "core.fileMode", "true")
+        (home / "tool.sh").chmod(0o755)
+        result = self.run_script(
+            "git fetch --quiet origin tag v0.10.0 && prepare_mail_upgrade", cwd=home
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("Source changes detected", result.stderr)
+
+    def test_mail_state_check_still_refuses_a_real_source_edit(self) -> None:
+        home = self.seed_with_tracked_script()
+        (home / "MARK").write_text("edited by the operator", encoding="utf-8")
+        result = self.run_script(
+            "git fetch --quiet origin tag v0.10.0 && prepare_mail_upgrade", cwd=home
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Source changes detected", result.stderr)
+        self.assertEqual(self.checkout_mark(home), "edited by the operator")
+
     def test_old_install_with_the_tracked_users_file_gets_the_upgrade_pointer(self) -> None:
         (self.origin / "docker/dovecot/config").mkdir(parents=True)
         (self.origin / "docker/dovecot/config/users").write_text("old fixture\n", encoding="utf-8")

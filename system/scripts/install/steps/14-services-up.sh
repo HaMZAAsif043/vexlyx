@@ -16,6 +16,15 @@ COMPOSE=(docker compose --env-file "${VEXLYX_SECRETS_FILE}" -f docker-compose.ym
 
 "${COMPOSE[@]}" up -d --wait --wait-timeout 120
 
+# The API and dashboard run the build that step 09 wrote to the host and
+# bind-mounted into the container. Compose only recreates a container whose
+# configuration changed, so after an upgrade that changes only code (or the
+# env file) the old process would keep running. Recreate both so the new build
+# and the current environment are what serves requests.
+"${COMPOSE[@]}" up -d --force-recreate --no-deps --wait --wait-timeout 120 api dashboard
+
+restart_traefik_if_config_changed
+
 log_info "Waiting for the panel API to respond..."
 tries=30
 until "${COMPOSE[@]}" exec -T api curl -fsS http://localhost:5000/api/health >/dev/null 2>&1 || (( tries == 0 )); do
@@ -33,10 +42,31 @@ else
   die "The api container is not running — inspect Compose logs before retrying."
 fi
 
+# One-time repair: move projects deployed before the apps network existed off
+# the panel-internal network. Traefik joined the apps network in the
+# `up -d` above, so sites keep routing. Guarded by a marker file; a failure
+# never stops the install and the next run retries.
+log_info "Moving existing projects onto the apps network..."
+"${COMPOSE[@]}" exec -T api node dist/scripts/migrate-project-network.js   || log_warn "Project network migration did not complete; the next installer run retries it."
+
 log_info "Reconciling mail state from PostgreSQL and verifying live lookups..."
 "${COMPOSE[@]}" exec -T api node dist/scripts/sync-mail-state.js
 "${COMPOSE[@]}" exec -T api python "${VEXLYX_HOME}/system/python/postfix_manager.py" verify_state
 log_ok "Postfix maps and Dovecot users are synchronized and ready."
+
+# One-time repair: refresh the generated nginx config of already-deployed
+# static and no-build PHP sites so they stop serving deploy/ and dot files.
+# Guarded by a marker file; a failure never stops the install.
+log_info "Refreshing site nginx configuration..."
+"${COMPOSE[@]}" exec -T api node dist/scripts/refresh-nginx-confs.js \
+  || log_warn "Site nginx configuration refresh did not complete; redeploying a site also applies it."
+
+# One-time repair (#151): make the docroot of existing no-build PHP and
+# WordPress projects writable for PHP-FPM. Guarded by a marker file, so only
+# the first run after an upgrade does anything; a failure never stops the install.
+log_info "Checking PHP project docroot ownership..."
+"${COMPOSE[@]}" exec -T api node dist/scripts/hand-docroots-to-php.js \
+  || log_warn "PHP docroot ownership repair did not complete; redeploying a project also fixes it."
 
 install -m 0755 system/scripts/install/sync-mail-tls.sh /usr/local/sbin/vexlyx-sync-mail-tls
 cat > /etc/systemd/system/vexlyx-mail-tls.service <<EOF

@@ -33,6 +33,7 @@ jobs:
       - run: docker build -t vexlyx-postfix:credentials-test docker/postfix
       - run: python3 -m unittest tests.test_mail_credential_security tests.test_mail_credential_protocols -v
       - run: python3 -m unittest tests.test_roundcube_tls -v
+      - run: python3 -m unittest tests.test_postfix_submission_pipelining -v
 
   lint:
     runs-on: ubuntu-latest
@@ -74,9 +75,22 @@ jobs:
       - run: pnpm test
       - run: python3 -m unittest discover -s tests -p test_restore_stop_safety.py
       - run: python3 -m unittest discover -s tests -p test_git_url_policy.py
+      - run: python3 -m unittest discover -s tests -p test_git_clone_data_safety.py
       - run: python3 -m unittest discover -s tests -p test_installer_release_channel.py
+      # cryptography is what postfix_manager.py generates DKIM keys with (the
+      # API image and the installer install it the same way); without it the
+      # test would skip itself.
+      - run: pip3 install cryptography
+      - run: python3 -m unittest discover -s tests -p test_dkim_first_check.py
       - run: python3 -m unittest discover -s tests -p test_installer_nixpacks.py
       - run: python3 -m unittest discover -s system/python -p test_docker_expose_port.py
+      - run: python3 -m unittest discover -s tests -p test_nginx_conf_refresh.py
+      - run: python3 -m unittest discover -s tests -p test_nginx_served_paths.py
+      - run: python3 -m unittest discover -s tests -p test_installer_traefik_config.py
+      - run: python3 -m unittest discover -s tests -p test_installer_runtime.py
+      - run: python3 -m unittest discover -s tests -p test_php_docroot_ownership.py
+      - run: python3 -m unittest discover -s tests -p test_installer_panel_recreate.py
+      - run: python3 -m unittest discover -s tests -p test_network_isolation.py
 
   build:
     runs-on: ubuntu-latest

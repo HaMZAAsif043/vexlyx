@@ -35,6 +35,8 @@ services:
 
   redis:
     ports: !reset []
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in the secrets file}
 
   adminer:
     # Raw DB browser — never started by a plain `docker compose up -d` in
@@ -191,7 +193,7 @@ services:
       # never see the cookie and always redirect to /login even when logged in.
       COOKIE_DOMAIN: ${VEXLYX_DOMAIN}
       DATABASE_URL: postgresql://vexlyx:${POSTGRES_PASSWORD}@postgres:5432/vexlyx_dev
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set in the secrets file}@redis:6379
       SESSION_SECRET: ${SESSION_SECRET}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       ENCRYPTION_KEY_LEGACY_FALLBACK: ${ENCRYPTION_KEY_LEGACY_FALLBACK:-false}

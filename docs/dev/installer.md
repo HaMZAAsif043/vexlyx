@@ -8,7 +8,7 @@ curl -fsSL https://vexlyx.atlantiqs.org/install.sh | bash
 
 ## What it does
 
-1. Installs Docker Engine + Compose, Node.js 22 + pnpm, and Python 3 + `cryptography`. Nixpacks is not installed on the host: project builds run it inside the API container, whose image ships it, and step 10 checks it there. (Node 22, not 20 — pnpm 11, pinned in `package.json`'s `packageManager` field, uses the `node:sqlite` built-in and fails with `ERR_UNKNOWN_BUILTIN_MODULE` on Node 20.)
+1. Installs Docker Engine + Compose, Node.js 22 (from the NodeSource apt repository, with its signing key checked against a pinned fingerprint — see [Pinned NodeSource key](#pinned-nodesource-key)) + pnpm, and Python 3 + `cryptography`. Nixpacks is not installed on the host: project builds run it inside the API container, whose image ships it, and step 10 checks it there. (Node 22, not 20 — pnpm 11, pinned in `package.json`'s `packageManager` field, uses the `node:sqlite` built-in and fails with `ERR_UNKNOWN_BUILTIN_MODULE` on Node 20.)
 2. Collects the panel domain, admin credentials, and mail hostname (env vars, interactive prompt, or safe generated defaults — see [Configuration](#configuration)).
 3. Generates and persists application secrets exactly once.
 4. Builds the panel on the host (`pnpm install && pnpm build && prisma generate`) and builds the dashboard/api Docker images.
@@ -98,7 +98,22 @@ user-configurable) — see [Cross-subdomain session cookie](#cross-subdomain-ses
 
 ## Secrets
 
-`/etc/vexlyx/vexlyx.env` (mode `0600`) holds `SESSION_SECRET`, `ENCRYPTION_KEY`, `POSTGRES_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `MYSQL_PASSWORD`, plus the collected domain/admin-email/mail-hostname config. It's generated exactly once — re-running the installer never rotates it, so a re-run can't invalidate existing sessions or encrypted data. It lives outside the git checkout specifically so an upgrade (`git pull`) never touches it. The admin password is **not** persisted anywhere — it's applied to the database (Argon2id-hashed) and shown once in the final summary.
+`/etc/vexlyx/vexlyx.env` (mode `0600`) holds `SESSION_SECRET`, `ENCRYPTION_KEY`, `POSTGRES_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `MYSQL_PASSWORD`, `REDIS_PASSWORD`, plus the collected domain/admin-email/mail-hostname config. It's generated exactly once — re-running the installer never rotates it, so a re-run can't invalidate existing sessions or encrypted data. It lives outside the git checkout specifically so an upgrade (`git pull`) never touches it. The admin password is **not** persisted anywhere — it's applied to the database (Argon2id-hashed) and, if auto-generated, shown once on the operator's terminal in the final summary (never through the `tee` into `install.log`).
+
+A secrets file written before `REDIS_PASSWORD` existed gets one appended on the next run (an empty value counts as missing); an existing value is never replaced. The network layout, how Redis is recreated on upgrade and how deployed projects are moved onto the `vexlyx-apps` network are in [Network layout](network-layout.md).
+
+## Pinned NodeSource key
+
+Step 04 installs Node.js from `https://deb.nodesource.com/node_22.x` using a keyring in `/etc/apt/keyrings/nodesource.gpg` and a `signed-by` sources entry; no remote script is executed. The downloaded key is only trusted when the file holds **exactly one** public key (one `pub` record, no secret key) and that key's fingerprint equals the one in `system/scripts/install/nodesource.fingerprint`; otherwise the step aborts before touching apt. Both conditions are needed because `gpg --dearmor` converts the whole file into the keyring apt trusts: checking only the first fingerprint would let a second key appended after the genuine one be trusted as well. `tests/test_installer_runtime.py` runs the step against real key files, including the pinned key followed by (and preceded by) a second key, which must be refused.
+
+To update the pin (NodeSource rotated its key, or you are moving to a new Node major version):
+
+1. Download the key: `curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o key.asc`.
+2. Print the fingerprint: `gpg --show-keys --with-colons key.asc | awk -F: '$1 == "fpr" { print $10; exit }'`.
+3. Confirm it out-of-band (NodeSource's installation instructions at https://github.com/nodesource/distributions) before committing it.
+4. Put it in `nodesource.fingerprint`. For a new Node major, also change `NODESOURCE_MAJOR` in `steps/04-runtime.sh` and the `>= 22` check.
+
+Until the pin is updated, installs fail closed on a rotated key rather than trusting it.
 
 ## Optional: Adminer
 
@@ -116,7 +131,8 @@ To add a new step, drop a numbered file in `system/scripts/install/steps/` (it's
 
 - **The api container runs as root.** It needs `/var/run/docker.sock` for Docker-outside-of-Docker, and socket access is already root-equivalent on the host (anyone who can reach it can `docker run --privileged`) — restricting the container's internal UID would add configuration complexity (matching the host's docker.sock group GID) without a real additional security boundary. The dashboard container has no such requirement and runs as an unprivileged user.
 - **Interactive prompts only work when stdin is a real TTY.** A plain `curl -fsSL https://vexlyx.atlantiqs.org/install.sh | bash` has no TTY on stdin (bash is reading the script itself from that pipe), so `VEXLYX_ADMIN_PASSWORD` and friends fall back to generated defaults there by design — this is deliberate, not a bug. To be prompted interactively, download the script first: `curl -fsSL https://vexlyx.atlantiqs.org/install.sh -o install.sh && sudo bash install.sh`.
-- **The admin password is never persisted** — only its Argon2id hash reaches the database; it's shown once in the final summary if auto-generated.
+- **The admin password is never persisted or logged** — only its Argon2id hash reaches the database. `run.sh` keeps the real stdout on fd 3 before starting the `tee` into `install.log`, and the summary writes a generated password via `show_secret_to_operator`, so the log only gets a placeholder. fd 3 is used only when it is a real terminal (`[[ -t 3 ]]`): if the installer's output was redirected (`> file`, `| tee`, a CI log) fd 3 is that file or pipe and the password must not go there. Otherwise the helper falls back to `/dev/tty`, and with no terminal at all it refuses, nothing secret is printed, and the summary prints guidance for creating a new admin instead. The summary shows a password only when step 13 reported `Created admin user:`; on a re-run the existing account is untouched and a freshly generated password would be meaningless.
+- **`install.log` from older installs may contain the password.** Installs made before this change logged it; delete `/etc/vexlyx/install.log` (or the line) on those servers.
 - **UFW rules are added before the firewall is enabled**, and the SSH rule is verified present immediately before `ufw --force enable` — a detection failure aborts rather than risking a lockout.
 - **`adminer`** (a raw DB browser, fine for dev) is gated behind `--profile adminer` in the prod overlay (no published port; served only via Traefik over HTTPS behind basic auth) so a plain `up -d` never starts it. Opt in with `sudo bash system/scripts/enable-adminer.sh` (`--disable` to undo). The API also reports Adminer as unavailable in production unless `ADMINER_URL` (set in the secrets file, passed through `docker-compose.prod.yml`) is a non-local HTTPS URL; the install summary tells the operator this. See `docs/dev/database-provisioning.md`.
 - **Step 09 refuses to build if `apps/api/.env` exists.** Prisma Client auto-loads a `.env` from its working directory at runtime, regardless of `NODE_ENV` or how the process was actually started — a leftover dev `.env` (e.g. from a manual `pnpm dev` run predating the installer) with `VEXLYX_MOCK_DNS=true` was found in the wild to silently defeat real DNS-based domain verification (`domains/service.ts`'s `isMockTest` check reads `process.env.VEXLYX_MOCK_DNS` directly) even with Docker Compose correctly setting `NODE_ENV=production`. Nothing in the production stack is supposed to use a `.env` file at all — config comes entirely through `environment:` blocks — so the installer treats one existing as untrusted state and stops rather than building on top of it.
@@ -139,7 +155,7 @@ Every one of these is already fixed in the current scripts/Dockerfiles — liste
 
 **Installer / build pipeline:**
 
-- **Node 20 → 22.** pnpm 11 (pinned in `package.json`) uses the `node:sqlite` built-in, added in Node 22 — failed with `ERR_UNKNOWN_BUILTIN_MODULE` on Node 20. Fixed in step 04 (NodeSource `setup_22.x`), both Dockerfiles' base images, and root `engines.node`.
+- **Node 20 → 22.** pnpm 11 (pinned in `package.json`) uses the `node:sqlite` built-in, added in Node 22 — failed with `ERR_UNKNOWN_BUILTIN_MODULE` on Node 20. Fixed in step 04 (NodeSource 22.x), both Dockerfiles' base images, and root `engines.node`.
 - **`config.sh` unbound variable under `set -u`.** The admin-password prompt block referenced `${VEXLYX_ADMIN_PASSWORD}` without a `:-` default on one line; when stdin isn't a TTY (any non-interactive `ssh host 'command'` invocation), the variable is genuinely unset and `set -u` aborts. Fixed by adding the missing `:-`.
 - **`@vexlyx/shared`/`@vexlyx/api` build race.** Turbo's `dependsOn: ["^build"]` didn't reliably serialize a fresh checkout's build graph — `tsc` for `api`/`dashboard` started before `shared` had written `dist/`, failing with `Cannot find module '@vexlyx/shared'`. Fixed by building `packages/shared` explicitly before the full `pnpm build` in step 09.
 - **Stale `tsconfig.tsbuildinfo` from an interrupted prior attempt.** `tsc --build` trusts its incremental state file even when the `dist/` it refers to no longer exists, silently skipping emit. Fixed by wiping `dist`/`tsconfig.tsbuildinfo` for the TS composite projects at the start of every build (step 09) — recovery from a failed run can never depend on what debris that run left behind.

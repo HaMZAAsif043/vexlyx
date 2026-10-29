@@ -355,7 +355,7 @@ class CmdDeployWiringTests(unittest.TestCase):
 
         with (
             patch.object(docker_manager, "get_docker_binary", return_value="docker"),
-            patch.object(docker_manager, "ensure_traefik_network"),
+            patch.object(docker_manager, "ensure_apps_network"),
             patch.object(docker_manager, "derive_host_port", return_value=8100),
             patch.object(
                 docker_manager, "generate_compose_file", side_effect=fake_generate_compose_file
