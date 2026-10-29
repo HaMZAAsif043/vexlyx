@@ -490,6 +490,7 @@ export class SslService {
     // Call Python ssl_manager.py to validate pair and save files
     const saveRes = await runSslManager("save_custom", {
       domainId: domain.id,
+      hostname: domain.hostname,
       certificate: input.certificate,
       privateKey: input.privateKey,
     });
@@ -724,7 +725,10 @@ export class SslService {
 
     if (domain.certificate) {
       // Clean up files via ssl_manager.py
-      await runSslManager("delete_cert", { domainId: domain.id });
+      await runSslManager("delete_cert", {
+        domainId: domain.id,
+        hostname: domain.hostname,
+      });
 
       // Delete certificate database record
       await this.prisma.certificate.delete({

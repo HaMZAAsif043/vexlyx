@@ -65,6 +65,8 @@ Drawing from best practices in modern cloud control panels (Coolify, CloudPanel,
                                   └───────────────────────────┘
 ```
 
+**File permissions.** `ssl_manager.py` writes certificates `0644` and private keys `0600` into `docker/traefik/certs`, and keeps that directory `0700`. The API and the Traefik container both run as root, so no other host account or container needs to read the keys. Files are written to a sibling temp file and renamed into place, so a symlink placed at a certificate path is replaced rather than followed, and deleting a certificate also removes its `<hostname>.crt/.key` convenience copies.
+
 ---
 
 ## 3. Database Schema

@@ -4,6 +4,10 @@ All notable changes to Vexlyx are documented here. The format follows [Keep a Ch
 
 ## Unreleased
 
+### Security
+
+- SSL private keys created or uploaded through the panel are written `0600` and the `docker/traefik/certs` directory is `0700`, instead of relying on the process umask and a world-readable directory. Files are written to a sibling temp file and renamed into place, so the key is never visible with loose permissions and an existing symlink is replaced rather than followed. Deleting a certificate now also removes the `<hostname>.crt/.key` convenience copies, and uploading a custom pair refreshes them, so a previous self-signed private key no longer stays on disk (#195).
+
 ### Fixed
 
 - Connecting or updating a git project no longer deletes files git does not track. A failed fetch, checkout or pull (network, authentication, local changes) now fails with its error and leaves the workspace untouched; previously it re-cloned the project and lost uploads and other untracked files. Switching a project to another repository, or connecting git to a workspace that already has files, keeps the old workspace next to the project as `<id>.replaced-<timestamp>` (reported as `previousWorkspace`) and restores it if the clone fails.

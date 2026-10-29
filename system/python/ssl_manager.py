@@ -18,6 +18,7 @@ import datetime
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 # Ensure site-packages from all known local and system Python environments are in sys.path
@@ -81,6 +82,45 @@ def get_certs_dir() -> Path:
     return target
 
 
+def clean_cert_hostname(hostname: str) -> str:
+    return hostname.replace("*.", "wildcard.").replace(":", "_").replace("/", "_")
+
+
+def make_certs_dir_private(certs_dir: Path) -> None:
+    """Only root (the API and the Traefik container) may list this directory."""
+    try:
+        os.chmod(certs_dir, 0o700)
+    except OSError:
+        pass
+
+
+def write_secure_file(path: Path, content: str, mode: int) -> None:
+    """Write text with an explicit mode, e.g. 0600 for a private key.
+
+    `Path.write_text` creates the file with the process umask (usually
+    world-readable) and follows an existing symlink. The content goes to a
+    sibling temp file whose mode is set before `os.replace`, so the final file
+    is never visible with the wrong permissions and any existing symlink is
+    replaced instead of written through."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}."
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary_name, mode)
+        os.replace(temporary_name, path)
+    except Exception:
+        try:
+            os.unlink(temporary_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 def get_acme_file() -> Path:
     candidates = [
         Path.cwd() / "docker" / "traefik" / "acme.json",
@@ -103,7 +143,8 @@ def generate_self_signed(hostname: str, sans: list = None, days_valid: int = 90,
 
     sans = sans or []
     certs_dir = get_certs_dir()
-    clean_host = hostname.replace("*.", "wildcard.").replace(":", "_").replace("/", "_")
+    make_certs_dir_private(certs_dir)
+    clean_host = clean_cert_hostname(hostname)
 
     key = rsa.generate_private_key(
         public_exponent=65537,
@@ -160,14 +201,14 @@ def generate_self_signed(hostname: str, sans: list = None, days_valid: int = 90,
         cert_file = certs_dir / f"{clean_host}.crt"
         key_file = certs_dir / f"{clean_host}.key"
 
-    cert_file.write_text(cert_pem, encoding="utf-8")
-    key_file.write_text(key_pem, encoding="utf-8")
+    write_secure_file(cert_file, cert_pem, 0o644)
+    write_secure_file(key_file, key_pem, 0o600)
 
     # If domain_id was given, also write clean_host file as convenience
     if domain_id:
         try:
-            (certs_dir / f"{clean_host}.crt").write_text(cert_pem, encoding="utf-8")
-            (certs_dir / f"{clean_host}.key").write_text(key_pem, encoding="utf-8")
+            write_secure_file(certs_dir / f"{clean_host}.crt", cert_pem, 0o644)
+            write_secure_file(certs_dir / f"{clean_host}.key", key_pem, 0o600)
         except Exception:
             pass
 
@@ -326,18 +367,31 @@ def read_acme_storage() -> dict:
 # Save & Delete Custom Certificates
 # ---------------------------------------------------------------------------
 
-def save_custom_certificate(domain_id: str, cert_pem: str, key_pem: str) -> dict:
+def save_custom_certificate(
+    domain_id: str,
+    cert_pem: str,
+    key_pem: str,
+    hostname: str | None = None,
+) -> dict:
     check = validate_key_pair(cert_pem, key_pem)
     if not check.get("success"):
         return check
 
     certs_dir = get_certs_dir()
+    make_certs_dir_private(certs_dir)
     cert_file = certs_dir / f"domain-{domain_id}.crt"
     key_file = certs_dir / f"domain-{domain_id}.key"
 
     try:
-        cert_file.write_text(cert_pem.strip(), encoding="utf-8")
-        key_file.write_text(key_pem.strip(), encoding="utf-8")
+        write_secure_file(cert_file, cert_pem.strip(), 0o644)
+        write_secure_file(key_file, key_pem.strip(), 0o600)
+
+        # Keep the convenience copies in step with the uploaded pair so an
+        # earlier self-signed private key does not linger next to it.
+        if hostname:
+            clean_host = clean_cert_hostname(hostname)
+            write_secure_file(certs_dir / f"{clean_host}.crt", cert_pem.strip(), 0o644)
+            write_secure_file(certs_dir / f"{clean_host}.key", key_pem.strip(), 0o600)
 
         parsed = parse_cert_pem(cert_pem)
         return {
@@ -350,13 +404,21 @@ def save_custom_certificate(domain_id: str, cert_pem: str, key_pem: str) -> dict
         return {"success": False, "error": f"Failed to save certificate files: {str(e)}"}
 
 
-def delete_custom_certificate(domain_id: str) -> dict:
+def delete_custom_certificate(domain_id: str, hostname: str | None = None) -> dict:
     certs_dir = get_certs_dir()
-    cert_file = certs_dir / f"domain-{domain_id}.crt"
-    key_file = certs_dir / f"domain-{domain_id}.key"
+    targets = [
+        certs_dir / f"domain-{domain_id}.crt",
+        certs_dir / f"domain-{domain_id}.key",
+    ]
+    if hostname:
+        clean_host = clean_cert_hostname(hostname)
+        targets += [
+            certs_dir / f"{clean_host}.crt",
+            certs_dir / f"{clean_host}.key",
+        ]
 
     deleted = False
-    for f in [cert_file, key_file]:
+    for f in targets:
         if f.exists():
             try:
                 f.unlink()
@@ -409,10 +471,14 @@ def main():
             domain_id=payload.get("domainId", ""),
             cert_pem=payload.get("certificate", ""),
             key_pem=payload.get("privateKey", ""),
+            hostname=payload.get("hostname"),
         )
         respond(res)
     elif cmd == "delete_cert":
-        res = delete_custom_certificate(domain_id=payload.get("domainId", ""))
+        res = delete_custom_certificate(
+            domain_id=payload.get("domainId", ""),
+            hostname=payload.get("hostname"),
+        )
         respond(res)
     elif cmd == "read_acme":
         res = read_acme_storage()
