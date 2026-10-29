@@ -235,9 +235,43 @@ def find_dockerfile(project_dir: Path) -> Path | None:
     candidates = ["Dockerfile", "dockerfile", "Dockerfile.prod", "Dockerfile.app"]
     for candidate in candidates:
         p = project_dir / candidate
+        # A cloned repository can contain Dockerfile as a symlink; reading or
+        # writing through it as root would reach any file the helper can open.
+        if p.is_symlink():
+            continue
         if p.is_file():
             return p
     return None
+
+
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+
+
+def read_project_file(path: Path) -> str:
+    """Read a file inside a project directory without following symlinks."""
+    # O_NOFOLLOW is missing on some platforms, so check the path as well.
+    if path.is_symlink():
+        return ""
+    try:
+        fd = os.open(path, os.O_RDONLY | _NOFOLLOW)
+    except OSError:
+        return ""
+    try:
+        with os.fdopen(fd, "r", encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def write_project_file(path: Path, content: str) -> None:
+    """Write a file inside a project directory without following symlinks.
+
+    Raises OSError, including ELOOP when the path is already a symlink."""
+    if path.is_symlink():
+        raise OSError(f"refusing to write through a symbolic link: {path}")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | _NOFOLLOW, 0o644)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(content)
 
 
 def parse_dockerfile_info(dockerfile_path: Path | None) -> dict:
@@ -261,10 +295,7 @@ def parse_dockerfile_info(dockerfile_path: Path | None) -> dict:
             "envKeys": [],
         }
 
-    try:
-        content = dockerfile_path.read_text(encoding="utf-8", errors="replace")
-    except Exception:
-        content = ""
+    content = read_project_file(dockerfile_path)
 
     base_image = None
     exposed_ports: list[int] = []
@@ -1518,25 +1549,19 @@ def cmd_dockerfile_get(payload: dict) -> None:
     dockerignore_p = target_path / ".dockerignore"
 
     df_content = ""
-    if dockerfile_p and dockerfile_p.is_file():
-        try:
-            df_content = dockerfile_p.read_text(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
+    if dockerfile_p:
+        df_content = read_project_file(dockerfile_p)
 
     di_content = ""
-    if dockerignore_p.is_file():
-        try:
-            di_content = dockerignore_p.read_text(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
+    if dockerignore_p.is_file() and not dockerignore_p.is_symlink():
+        di_content = read_project_file(dockerignore_p)
 
     df_info = parse_dockerfile_info(dockerfile_p) if dockerfile_p else {}
 
     respond({
         "success": True,
         "hasDockerfile": bool(dockerfile_p and dockerfile_p.is_file()),
-        "hasDockerignore": dockerignore_p.is_file(),
+        "hasDockerignore": dockerignore_p.is_file() and not dockerignore_p.is_symlink(),
         "dockerfile": df_content,
         "dockerignore": di_content,
         "filename": dockerfile_p.name if dockerfile_p else "Dockerfile",
@@ -1563,11 +1588,17 @@ def cmd_dockerfile_save(payload: dict) -> None:
     dockerfile_p = target_path / "Dockerfile"
     dockerignore_p = target_path / ".dockerignore"
 
-    if dockerfile_content is not None:
-        dockerfile_p.write_text(dockerfile_content, encoding="utf-8")
+    try:
+        if dockerfile_content is not None:
+            write_project_file(dockerfile_p, dockerfile_content)
 
-    if dockerignore_content is not None:
-        dockerignore_p.write_text(dockerignore_content, encoding="utf-8")
+        if dockerignore_content is not None:
+            write_project_file(dockerignore_p, dockerignore_content)
+    except OSError as exc:
+        fail(
+            f"Refusing to write through a symbolic link or unwritable path: {exc}",
+            "UNSAFE_DOCKERFILE_PATH",
+        )
 
     df_info = parse_dockerfile_info(dockerfile_p)
 

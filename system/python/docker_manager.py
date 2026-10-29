@@ -113,6 +113,22 @@ def assert_deploy_dir_is_not_a_symlink(compose_dir: Path) -> None:
         )
 
 
+ROUTE_HOSTNAME_RE = re.compile(
+    r"^(?:\*\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+    r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])$"
+)
+
+
+def validate_route_hostname(hostname: str) -> str:
+    """The Traefik labels are built by string substitution, so a hostname that
+    contains rule syntax (backticks, parentheses, pipes) would close the
+    Host(...) matcher and append rules that match other tenants' requests."""
+    value = (hostname or "").strip().lower()
+    if len(value) > 253 or not ROUTE_HOSTNAME_RE.fullmatch(value):
+        fail(f"Invalid hostname for the Traefik route: {hostname!r}", "INVALID_HOSTNAME")
+    return value
+
+
 def _chown_directory_no_follow(path: Path, uid: int, gid: int) -> None:
     # Opening the directory with O_NOFOLLOW and changing the open descriptor
     # means a symlink planted by the application cannot redirect the chown to
@@ -492,6 +508,26 @@ def build_env_block(env_vars: dict[str, str], indent: int = 6) -> str:
     return "\n".join(lines)
 
 
+def write_deployed_file(path: Path, content: str) -> None:
+    """Write a file in deploy/ without following a symlink.
+
+    The project directory around deploy/ is writable by the deployed
+    application, which can plant `docker-compose.yml` or `nginx.conf` as a
+    link to a root-owned file."""
+    try:
+        if path.is_symlink():
+            raise OSError("path is a symbolic link")
+        fd = os.open(
+            path,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
+            0o644,
+        )
+    except OSError as exc:
+        fail(f"Refusing to write {path} (symbolic link?): {exc}", "UNSAFE_DEPLOY_FILE")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(content)
+
+
 def generate_compose_file(
     compose_dir: Path,
     template_path: Path,
@@ -519,7 +555,7 @@ def generate_compose_file(
     for key, value in (extra_placeholders or {}).items():
         content = content.replace(f"{{{{{key}}}}}", value)
     compose_dir.mkdir(parents=True, exist_ok=True)
-    (compose_dir / "docker-compose.yml").write_text(content, encoding="utf-8")
+    write_deployed_file(compose_dir / "docker-compose.yml", content)
 
 
 def generate_nginx_conf(
@@ -535,7 +571,7 @@ def generate_nginx_conf(
     content = render_nginx_conf(template_path, placeholders)
     compose_dir.mkdir(parents=True, exist_ok=True)
     dest = compose_dir / "nginx.conf"
-    dest.write_text(content, encoding="utf-8")
+    write_deployed_file(dest, content)
     return dest
 
 
@@ -573,7 +609,7 @@ def refresh_nginx_conf_for(project_dir: Path, project_type: str, project_id: str
     rendered = render_nginx_conf(get_nginx_templates_dir() / template, placeholders)
     if conf.read_text(encoding="utf-8") == rendered:
         return "unchanged"
-    conf.write_text(rendered, encoding="utf-8")
+    write_deployed_file(conf, rendered)
     return "updated"
 
 
@@ -686,7 +722,7 @@ def cmd_deploy(payload: dict) -> None:
 
     # Resolve hostname
     slug = slugify(project_name)
-    hostname = payload.get("domain") or f"{slug}.{base_domain}"
+    hostname = validate_route_hostname(payload.get("domain") or f"{slug}.{base_domain}")
 
     # Sanitize service name (Traefik router names must be alphanumeric + hyphens)
     service_name = slugify(project_id[:12])

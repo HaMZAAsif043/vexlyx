@@ -1,7 +1,10 @@
 ﻿import { z } from "zod";
+import { HostnameSchema } from "@vexlyx/shared";
 
 export const DeployBodySchema = z.object({
-  domain: z.string().max(253).optional(),
+  // Goes verbatim into a Traefik `Host(...)` rule; an unvalidated value can
+  // close the matcher and append rules that match other tenants' hosts.
+  domain: HostnameSchema.optional(),
 });
 
 export type DeployBody = z.infer<typeof DeployBodySchema>;

@@ -4,6 +4,11 @@ All notable changes to Vexlyx are documented here. The format follows [Keep a Ch
 
 ## Unreleased
 
+### Security
+
+- A project can no longer plant `Dockerfile`, `.dockerignore`, `docker-compose.yml` or `nginx.conf` as symbolic links in its cloned repository. The privileged helper read and wrote those paths as root, so a link could copy any readable file into the panel response, overwrite any file the helper could write, or make `docker compose` load a configuration the panel never generated (#193).
+- A custom deploy domain must now be a plain hostname. It is interpolated into the Traefik `Host(...)` router rule as a string, so a value containing rule syntax (backticks, parentheses, pipes) closed the matcher and appended rules that routed other sites' requests to the project's container. Both the API request body and the privileged deploy helper validate it (#192).
+
 ### Fixed
 
 - Connecting or updating a git project no longer deletes files git does not track. A failed fetch, checkout or pull (network, authentication, local changes) now fails with its error and leaves the workspace untouched; previously it re-cloned the project and lost uploads and other untracked files. Switching a project to another repository, or connecting git to a workspace that already has files, keeps the old workspace next to the project as `<id>.replaced-<timestamp>` (reported as `previousWorkspace`) and restores it if the clone fails.
