@@ -453,6 +453,16 @@ class TestDeleteOrdering(ManagerCommandTestCase):
         self.assertTrue(result.get("volumeRemoved"))
         self.assertFalse(self.config_dir_for(self.CONTAINER).exists())
 
+    def test_lowercase_no_such_volume_from_newer_daemon_is_success(self):
+        # Docker 25+ words the error "get ...: no such volume" (all lowercase).
+        self.use_stub(
+            (lambda c: c[1] == "rm", cp()),
+            (lambda c: c[1] == "volume", cp(rc=1, stderr='Error response from daemon: get "x": no such volume')),
+        )
+        code, result = self.run_cmd(self.payload())
+        self.assertEqual(code, 0, result)
+        self.assertFalse(self.config_dir_for(self.CONTAINER).exists())
+
 
 class TestCreateCleansUpAfterItself(ManagerCommandTestCase):
     def test_failed_provisioning_removes_container_volume_and_config(self):

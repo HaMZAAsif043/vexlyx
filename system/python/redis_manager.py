@@ -328,7 +328,8 @@ def _is_no_such_container(stderr: str | None) -> bool:
 
 
 def _is_no_such_volume(stderr: str | None) -> bool:
-    return "No such volume" in (stderr or "")
+    # Newer daemons answer "get ...: no such volume" in lowercase.
+    return "no such volume" in (stderr or "").lower()
 
 
 def container_exists(docker_bin: str, container_name: str) -> bool:
