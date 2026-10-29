@@ -8,6 +8,7 @@ async function loadEnv(overrides: Record<string, string | undefined>) {
     DATABASE_URL: "postgresql://vexlyx:test@localhost:5432/vexlyx_test",
     SESSION_SECRET: "test-session-secret-that-is-at-least-32-characters",
     ENCRYPTION_KEY: "test-encryption-key-that-is-at-least-32-characters",
+    REDIS_URL: "redis://:test-redis-password@localhost:6379",
   };
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) delete nextEnv[key];
@@ -182,5 +183,49 @@ describe("ENCRYPTION_KEY requirements (#69)", () => {
     const env = await loadEnv({ NODE_ENV: "development", ENCRYPTION_KEY: undefined });
 
     expect(env.ENCRYPTION_KEY).toBeUndefined();
+  });
+});
+
+describe("Deployed project memory limit", () => {
+  it("defaults to 512m so a WordPress or PHP site is not starved", async () => {
+    const env = await loadEnv({ DEPLOY_MEMORY_LIMIT: undefined });
+
+    expect(env.DEPLOY_MEMORY_LIMIT).toBe("512m");
+  });
+
+  it("honors an operator override", async () => {
+    const env = await loadEnv({ DEPLOY_MEMORY_LIMIT: "1g" });
+
+    expect(env.DEPLOY_MEMORY_LIMIT).toBe("1g");
+  });
+});
+
+describe("Redis environment configuration", () => {
+  it("falls back to the compose development password outside production", async () => {
+    const env = await loadEnv({ NODE_ENV: "development", REDIS_URL: undefined });
+
+    expect(env.REDIS_URL).toBe("redis://:vexlyx_dev@localhost:6379");
+  });
+
+  it("keeps the password carried by REDIS_URL", async () => {
+    const env = await loadEnv({
+      NODE_ENV: "production",
+      REDIS_URL: "redis://:s3cret@redis:6379",
+    });
+
+    expect(env.REDIS_URL).toBe("redis://:s3cret@redis:6379");
+  });
+
+  it.each([
+    ["is missing", undefined],
+    ["is empty", ""],
+    ["has no password", "redis://redis:6379"],
+    ["has an empty password", "redis://:@redis:6379"],
+    ["uses the development password", "redis://:vexlyx_dev@redis:6379"],
+    ["is not a Redis URL", "http://:s3cret@redis:6379"],
+  ])("rejects a production REDIS_URL that %s", async (_label, redisUrl) => {
+    await expect(loadEnv({ NODE_ENV: "production", REDIS_URL: redisUrl })).rejects.toThrow(
+      /REDIS_URL/,
+    );
   });
 });

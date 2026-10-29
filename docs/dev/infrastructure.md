@@ -57,13 +57,14 @@ The Postgres, MySQL and Redis dev ports are published on loopback only (`127.0.0
 | Property | Value |
 |----------|-------|
 | Image | `redis:7-alpine` |
-| Port | `6379` (bound to `127.0.0.1` only) |
+| Port | `6379` (bound to `127.0.0.1` only in development; not published in production) |
+| Authentication | `requirepass` from `REDIS_PASSWORD` (dev default `vexlyx_dev`; production requires a generated value) |
 | Max memory | `256mb` |
 | Eviction | `allkeys-lru` |
 | Persistence | AOF (`appendonly yes`) |
 | Volume | `vexlyx_redis_data` |
 
-**Connection string:** `redis://localhost:6379`
+**Connection string:** `redis://:vexlyx_dev@localhost:6379` (development). Production uses `redis://:<REDIS_PASSWORD>@redis:6379`, set by `docker-compose.prod.yml`.
 
 **Usage in Vexlyx:**
 - **Sessions** — the custom session plugin (`apps/api/src/plugins/auth.ts`, not a third-party auth library) stores signed session tokens here, keyed `session:<id>`, with a 24-hour TTL
@@ -72,7 +73,7 @@ The Postgres, MySQL and Redis dev ports are published on loopback only (`127.0.0
 
 **Test connectivity:**
 ```bash
-docker exec vexlyx-redis redis-cli ping
+docker exec vexlyx-redis sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli ping'
 # Returns: PONG
 ```
 

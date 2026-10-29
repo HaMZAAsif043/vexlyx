@@ -5,6 +5,7 @@ import { randomBytes } from "node:crypto";
 import { pipeline } from "node:stream/promises";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import type { FastifyBaseLogger } from "fastify";
 import type { PrismaClient } from "@prisma/client";
 import { env } from "../../config/env.js";
 import { getPythonBin } from "../../utils/pythonBin.js";
@@ -14,6 +15,13 @@ import {
 } from "../../utils/processWatchdog.js";
 import type { AuditLogService } from "../audit-log/service.js";
 import { safePath } from "./schema.js";
+import {
+  canChangeOwnership,
+  handOverToPhp,
+  missingAncestors,
+  phpOwnershipScope,
+  type PhpOwnershipScope,
+} from "../../utils/phpRuntimeOwnership.js";
 
 // ---------------------------------------------------------------------------
 // Error
@@ -172,6 +180,7 @@ export class FileService {
   constructor(
     private prisma: PrismaClient,
     private auditLog: AuditLogService,
+    private logger?: Pick<FastifyBaseLogger, "warn">,
   ) { }
 
   // ── Security: resolve + guard ──────────────────────────────────────────
@@ -343,12 +352,7 @@ export class FileService {
       );
     }
 
-    // Ensure parent directory exists
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    // Atomic write via temp file
-    const tmp = `${target}.${Date.now()}.tmp`;
-    await fs.writeFile(tmp, content, "utf-8");
-    await fs.rename(tmp, target);
+    await this.writeTextFile(projectId, target, content);
   }
 
   // ── Write file ─────────────────────────────────────────────────────────
@@ -380,12 +384,62 @@ export class FileService {
       }
     }
 
-    // Ensure parent directory exists
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    // Atomic write via temp file
+    await this.writeTextFile(projectId, target, content);
+  }
+
+  /** Atomic write via a temp file, creating missing parent folders. */
+  private async writeTextFile(
+    projectId: string,
+    target: string,
+    content: string,
+  ): Promise<void> {
+    const scope = await this.phpScope(projectId);
+    const createdDirs = await this.mkdirTracked(projectId, scope, path.dirname(target));
     const tmp = `${target}.${Date.now()}.tmp`;
     await fs.writeFile(tmp, content, "utf-8");
     await fs.rename(tmp, target);
+    await this.handOver(projectId, scope, [...createdDirs, target]);
+  }
+
+  // ── PHP-FPM ownership (#151) ───────────────────────────────────────────
+  // The API runs as root, but the PHP-FPM container of a no-build PHP or
+  // WordPress project runs as www-data. Files created here are handed to that
+  // user, so what a person uploads or saves in the File Manager can still be
+  // modified by the application (for example by a Duplicator installer).
+
+  private async phpScope(projectId: string): Promise<PhpOwnershipScope | null> {
+    if (!canChangeOwnership()) return null;
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { type: true, buildCmd: true },
+    });
+    return project ? phpOwnershipScope(project) : null;
+  }
+
+  /** mkdir -p, returning the folders it created so they can be handed over. */
+  private async mkdirTracked(
+    projectId: string,
+    scope: PhpOwnershipScope | null,
+    dir: string,
+  ): Promise<string[]> {
+    const created = scope ? await missingAncestors(this.projectRoot(projectId), dir) : [];
+    await fs.mkdir(dir, { recursive: true });
+    return created;
+  }
+
+  private async handOver(
+    projectId: string,
+    scope: PhpOwnershipScope | null,
+    targets: string[],
+    recursive = false,
+  ): Promise<void> {
+    if (!scope || targets.length === 0) return;
+    try {
+      await handOverToPhp(this.projectRoot(projectId), targets, scope, { recursive });
+    } catch (err) {
+      // The file is saved either way; failing the request would only hide that.
+      this.logger?.warn({ err, projectId }, "Could not hand files over to PHP-FPM");
+    }
   }
 
   // ── Delete ─────────────────────────────────────────────────────────────
@@ -453,7 +507,9 @@ export class FileService {
         409,
       );
     }
-    await fs.mkdir(target, { recursive: true });
+    const scope = await this.phpScope(projectId);
+    const created = await this.mkdirTracked(projectId, scope, target);
+    await this.handOver(projectId, scope, created);
   }
 
   // ── Copy ───────────────────────────────────────────────────────────────
@@ -480,13 +536,15 @@ export class FileService {
       );
     }
 
-    await fs.mkdir(path.dirname(to), { recursive: true });
+    const scope = await this.phpScope(projectId);
+    const createdDirs = await this.mkdirTracked(projectId, scope, path.dirname(to));
 
     if (stat.isDirectory()) {
       await fs.cp(from, to, { recursive: true });
     } else {
       await fs.copyFile(from, to);
     }
+    await this.handOver(projectId, scope, [...createdDirs, to], true);
   }
 
   // ── Move ───────────────────────────────────────────────────────────────
@@ -635,6 +693,8 @@ export class FileService {
       limits: archiveLimits(),
     });
 
+    await this.handOver(projectId, await this.phpScope(projectId), [dest], true);
+
     await this.auditLog.log(userId, "file.archive_extracted", { type: "Project", id: projectId }, {
       after: { archive: archiveRel, destination: destRel, extracted: result.extracted, skipped: result.skipped.length },
     });
@@ -668,6 +728,8 @@ export class FileService {
       dest,
       limits: archiveLimits(),
     });
+
+    await this.handOver(projectId, await this.phpScope(projectId), [dest]);
 
     await this.auditLog.log(userId, "file.archive_created", { type: "Project", id: projectId }, {
       after: { archive: destinationRel, items: sourcesRel.length, files: result.files },
@@ -720,7 +782,8 @@ export class FileService {
       );
     }
 
-    await fs.mkdir(path.dirname(target), { recursive: true });
+    const scope = await this.phpScope(projectId);
+    const createdDirs = await this.mkdirTracked(projectId, scope, path.dirname(target));
 
     // Written beside the target and renamed on success: an upload that dies
     // halfway (client abort, proxy timeout) must not leave a truncated file
@@ -739,9 +802,15 @@ export class FileService {
         );
       }
       await fs.rename(tempPath, target);
+      // The renamed file, not the temp name, is what PHP will open.
+      await this.handOver(projectId, scope, [target]);
     } catch (err) {
       await fs.rm(tempPath, { force: true });
       throw err;
+    } finally {
+      // The folders exist whether or not the upload finished, and a retry
+      // would no longer see them as new.
+      await this.handOver(projectId, scope, createdDirs);
     }
   }
 

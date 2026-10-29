@@ -223,14 +223,20 @@ async function prepareFiles() {
 }
 
 function ensureTraefikNetwork() {
-  step("Docker network");
-  const networks = probe("docker", ["network", "ls", "--format", "{{.Name}}"]) ?? "";
-  if (networks.split(/\r?\n/).includes("traefik-net")) {
-    ok("traefik-net already exists");
-    return;
+  step("Docker networks");
+  const existing = (probe("docker", ["network", "ls", "--format", "{{.Name}}"]) ?? "").split(/\r?\n/);
+  const wanted = [
+    ["traefik-net", "panel-internal: Redis, the API, the panel database"],
+    ["vexlyx-apps", "shared by Traefik, deployed projects and the database servers"],
+  ];
+  for (const [name, purpose] of wanted) {
+    if (existing.includes(name)) {
+      ok(`${name} already exists`);
+      continue;
+    }
+    run("docker", ["network", "create", name], { capture: true });
+    ok(`Created ${name} (${purpose})`);
   }
-  run("docker", ["network", "create", "traefik-net"], { capture: true });
-  ok("Created traefik-net (shared by the stack and deployed projects)");
 }
 
 function installDependencies() {

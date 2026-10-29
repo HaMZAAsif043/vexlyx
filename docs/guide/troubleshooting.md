@@ -26,8 +26,8 @@ Vexlyx surfaces logs in the dashboard rather than requiring SSH access for routi
   the server's IP yet, Traefik keeps retrying the Let's Encrypt request automatically once DNS
   propagates; the panel is reachable over HTTPS with a browser warning in the meantime. Double-check
   the A record.
-- **A generated admin password was lost** — it's shown exactly once at the end of install and never
-  stored anywhere recoverable. See [Recovering admin access](#recovering-admin-access) below.
+- **A generated admin password was lost** — it's shown exactly once, on the terminal, at the end of install. It is not
+  written to the install log or the secrets file, so it cannot be recovered. See [Recovering admin access](#recovering-admin-access) below.
 - See the [installer reference's testing notes](/reference/installer#bugs-found-during-the-real-install-and-their-fixes)
   for a list of real issues found during end-to-end installs and how they were fixed — useful if
   something looks like it might be an environment-specific quirk rather than something you did

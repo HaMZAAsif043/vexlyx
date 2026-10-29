@@ -23,3 +23,20 @@ wait_healthy() {
 wait_healthy vexlyx-postgres
 wait_healthy vexlyx-mysql
 wait_healthy vexlyx-redis
+
+# Redis must refuse unauthenticated clients. Compose recreates the container
+# when its command or environment changed, which is what an upgrade from a
+# passwordless install relies on; this check makes that explicit and recreates
+# it by hand if compose left the old process running (data lives in the volume).
+redis_open() {
+  docker exec vexlyx-redis redis-cli ping 2>&1 | grep -q PONG
+}
+if redis_open; then
+  log_warn "Redis still accepts unauthenticated connections; recreating it with the configured password."
+  "${COMPOSE[@]}" up -d --force-recreate --no-deps redis
+  wait_healthy vexlyx-redis
+  if redis_open; then
+    die "Redis still accepts unauthenticated connections after being recreated. Check REDIS_PASSWORD in ${VEXLYX_SECRETS_FILE}."
+  fi
+fi
+log_ok "Redis requires a password."

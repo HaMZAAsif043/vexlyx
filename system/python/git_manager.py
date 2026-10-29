@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -48,9 +49,9 @@ class GitCommandError(Exception):
 
     Carries the message and error code the entry point turns into the response.
     It is raised instead of writing an error document immediately so a caller
-    can fall back (the re-clone after a failed update) without stdout already
-    holding a first document: the script must write exactly one JSON document
-    per call (#153).
+    can fall back (a re-clone when switching to another repository) without
+    stdout already holding a first document: the script must write exactly one
+    JSON document per call (#153).
     """
 
     def __init__(self, message: str, code: str = "COMMAND_FAILED"):
@@ -84,7 +85,7 @@ def _validate_branch(branch: str) -> None:
     name: no component may be empty, start with `.` or end with `.lock`, so
     `.hidden`, `feature/.hidden` and `feature.lock/topic` are all rejected the
     same way `feature.lock` would be — git refuses them, and letting them
-    through would wipe an existing workspace before the clone also failed.
+    through would move an existing workspace aside before the clone also failed.
     """
     if (
         not isinstance(branch, str)
@@ -135,8 +136,8 @@ def cmd_clone(payload: dict) -> None:
     dest = Path(projects_dir) / project_id
     env = _build_env(ssh_key_path, access_token)
 
-    # If the workspace already exists and has a valid .git repo, try fetch + checkout
     if (dest / ".git").exists():
+        previous_url = _origin_url(dest)
         try:
             # The URL never contains credentials; setting it before fetch also makes
             # switching a project between repositories deterministic.
@@ -149,19 +150,21 @@ def cmd_clone(payload: dict) -> None:
         except GitCommandError as exc:
             # A timeout is not evidence the repository is broken: the stalled
             # command may have been a read-only ref probe, and the workspace
-            # can still be perfectly valid. Wiping it would destroy the
-            # project's untracked files for nothing, so let the timeout
-            # surface instead of entering the destructive retry path (#153).
+            # can still be perfectly valid, so let the timeout surface instead
+            # of re-cloning over it (#153).
             if exc.code == "COMMAND_TIMEOUT":
                 raise
-            # If pull/fetch failed (e.g. broken repo or URL changed), clean it up and re-clone.
-            # Nothing was written to stdout yet, so the re-clone result below is the
-            # single JSON document this call emits (#153).
-            shutil.rmtree(dest, ignore_errors=True)
+            # Security-critical: a failed pull (network, auth, local changes) must never
+            # trigger a re-clone, because that replaces the workspace and loses every
+            # file git does not track. Only an explicit switch to another repository
+            # re-clones, and even then the old workspace is kept aside.
+            if previous_url == git_url:
+                raise
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists():
-        shutil.rmtree(dest, ignore_errors=True)
+    kept_aside = _move_aside(dest) if dest.exists() and any(dest.iterdir()) else None
+    if dest.exists() and kept_aside is None:
+        dest.rmdir()
 
     try:
         _run(
@@ -171,9 +174,14 @@ def cmd_clone(payload: dict) -> None:
     except GitCommandError:
         # Clean up partial failed directory
         shutil.rmtree(dest, ignore_errors=True)
+        if kept_aside is not None:
+            kept_aside.rename(dest)
         raise
 
-    respond({"success": True, "path": str(dest), "action": "cloned"})
+    result = {"success": True, "path": str(dest), "action": "cloned"}
+    if kept_aside is not None:
+        result["previousWorkspace"] = str(kept_aside)
+    respond(result)
 
 
 def cmd_generate_ssh_key(payload: dict) -> None:
@@ -251,6 +259,22 @@ def _build_env(ssh_key_path: str | None, access_token: str | None = None) -> dic
     return env
 
 
+def _origin_url(repo: Path) -> str | None:
+    """Return the repository's configured origin URL, or None when it cannot be read."""
+    result = subprocess.run(
+        ["git", "-C", str(repo), "config", "--get", "remote.origin.url"],
+        capture_output=True, text=True, timeout=30,
+    )
+    return result.stdout.strip() or None if result.returncode == 0 else None
+
+
+def _move_aside(workspace: Path) -> Path:
+    """Rename a workspace next to itself instead of deleting it, and return the new path."""
+    kept = workspace.with_name(f"{workspace.name}.replaced-{time.strftime('%Y%m%d-%H%M%S')}")
+    workspace.rename(kept)
+    return kept
+
+
 # Seconds. Generous because large repositories legitimately take a while to
 # clone; the point is that a stalled remote cannot hang the worker forever.
 GIT_COMMAND_TIMEOUT = 900
@@ -260,9 +284,9 @@ def _run(args: list[str], env: dict | None = None) -> None:
     """Run a subprocess, capturing combined output, raising on failure.
 
     Raises GitCommandError instead of writing an error document and exiting:
-    cmd_clone recovers from a failed update by wiping the workspace and
-    re-cloning, and printing the error before that fallback would put two
-    JSON documents on stdout, which the API caller cannot parse (#153).
+    cmd_clone falls back to a re-clone only when switching repositories, and
+    printing the error before that fallback would put two JSON documents on
+    stdout, which the API caller cannot parse (#153).
     """
     if args[0] == "git":
         # Redirects must not escape the validated host boundary.

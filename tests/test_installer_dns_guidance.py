@@ -36,9 +36,10 @@ class TestInstallerDnsGuidance(unittest.TestCase):
                     "VEXLYX_MAIL_DOMAIN": mail_domain,
                     "VEXLYX_PUBLIC_IP": public_ip,
                     "ADMIN_PASSWORD_WAS_GENERATED": "false",
+                    "ADMIN_USER_CREATED": "true",
                 }
             )
-            command = f'log_step() {{ :; }}; log_warn() {{ :; }}; source "{SUMMARY.as_posix()}"'
+            command = f'log_step() {{ :; }}; log_info() {{ :; }}; log_warn() {{ :; }}; source "{SUMMARY.as_posix()}"'
             result = subprocess.run(
                 [bash, "-c", command],
                 capture_output=True,

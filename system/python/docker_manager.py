@@ -38,6 +38,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
 
@@ -81,6 +82,91 @@ def require_field(payload: dict, field: str) -> str:
     if not value or not isinstance(value, str):
         fail(f"Missing required field: {field}", "INVALID_PAYLOAD")
     return value  # type: ignore[return-value]
+
+
+# ---------------------------------------------------------------------------
+# PHP-FPM docroot ownership (#151)
+#
+# This script runs as root, so a project directory it (or the API) creates is
+# root:root 0755 -- but PHP-FPM in the vexlyx-php-fpm and wordpress images runs
+# as www-data, so a self-installing app (a Duplicator migration) cannot create
+# files in its own docroot. Deploys hand the directory PHP serves to uid 82.
+# apps/api/src/utils/phpRuntimeOwnership.ts defines the same identity for the
+# File Manager; a test keeps the two in step.
+# ---------------------------------------------------------------------------
+
+PHP_FPM_UID = 82
+PHP_FPM_GID = 82
+
+# WordPress keeps only wp-content on the host; these are the folders it writes.
+WORDPRESS_WRITABLE_DIRS = ("plugins", "themes", "uploads")
+
+
+def assert_deploy_dir_is_not_a_symlink(compose_dir: Path) -> None:
+    """The deploy/ directory is panel-owned and written to as root. PHP owns
+    the project directory around it, so refuse to write through a link that
+    application code could have swapped in for it."""
+    if compose_dir.is_symlink():
+        fail(
+            f"{compose_dir} is a symbolic link; refusing to deploy through it",
+            "UNSAFE_DEPLOY_DIR",
+        )
+
+
+def _chown_directory_no_follow(path: Path, uid: int, gid: int) -> None:
+    # Opening the directory with O_NOFOLLOW and changing the open descriptor
+    # means a symlink planted by the application cannot redirect the chown to
+    # another path, even between the check and the change.
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fchown(fd, uid, gid)
+    finally:
+        os.close(fd)
+
+
+def hand_docroot_to_php(project_dir: Path, project_type: str, php_no_build: bool, chown=None) -> list:
+    """Make the directories PHP-FPM writes to owned by its user.
+
+    Non-recursive on purpose: it changes the docroot directory itself (so PHP
+    can create, rename and delete entries in it), not the tens of thousands of
+    files a migrated site may hold, and never the panel-owned deploy/.
+    Idempotent; returns the directories changed. Without root (development) it
+    does nothing.
+    """
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        if chown is None:
+            return []
+    apply = chown or _chown_directory_no_follow
+
+    targets = []
+    if php_no_build:
+        if os.path.lexists(Path(project_dir) / ".git"):
+            # A git checkout keeps a root-owned root. The panel runs git as
+            # root, and git refuses a repository whose directory another user
+            # owns ("dubious ownership"), which would break every pull and
+            # auto-deploy. safe.directory is no answer either: with PHP owning
+            # the root it could replace .git, whose hooks and config run as
+            # root on the next pull. So PHP cannot write to the root of such a
+            # site; see docs/dev/no-build-php-hosting.md.
+            log_line("[vexlyx] Git-connected project: leaving its root owned by root (PHP cannot write to the site root)")
+            return []
+        targets.append(Path(project_dir))
+    elif project_type.upper() == "WORDPRESS":
+        wp_content = Path(project_dir) / "wp-content"
+        targets.append(wp_content)
+        targets.extend(wp_content / name for name in WORDPRESS_WRITABLE_DIRS)
+
+    changed = []
+    for target in targets:
+        if target.is_symlink() or not target.is_dir():
+            continue
+        try:
+            apply(target, PHP_FPM_UID, PHP_FPM_GID)
+        except OSError as exc:
+            log_line(f"[vexlyx] Could not make {target.name} writable for PHP: {exc}")
+            continue
+        changed.append(target)
+    return changed
 
 
 # ---------------------------------------------------------------------------
@@ -200,26 +286,37 @@ def get_docker_binary() -> str:
     return "docker"  # unreachable
 
 
-def ensure_traefik_network(docker_bin: str) -> None:
-    """Ensure the external 'traefik-net' bridge network exists in Docker."""
+# Project containers join APPS_NETWORK (with Traefik and the database servers
+# customer databases live on). PANEL_NETWORK carries Redis, the API, the panel
+# database, mail and DNS and must never appear in a project's compose file.
+APPS_NETWORK = "vexlyx-apps"
+PANEL_NETWORK = "traefik-net"
+
+
+def ensure_network(docker_bin: str, name: str) -> None:
+    """Ensure the external bridge network `name` exists in Docker."""
     res = run_bounded(
         QUICK_TIMEOUT,
-        [docker_bin, "network", "inspect", "traefik-net"],
+        [docker_bin, "network", "inspect", name],
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
     )
     if res.returncode != 0:
-        log_line("[vexlyx] Creating Docker network: traefik-net")
+        log_line(f"[vexlyx] Creating Docker network: {name}")
         run_bounded(
             QUICK_TIMEOUT,
-            [docker_bin, "network", "create", "traefik-net"],
+            [docker_bin, "network", "create", name],
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
         )
+
+
+def ensure_apps_network(docker_bin: str) -> None:
+    ensure_network(docker_bin, APPS_NETWORK)
 
 
 def run_compose(
@@ -574,14 +671,14 @@ def cmd_deploy(payload: dict) -> None:
     image_name = require_field(payload, "imageName")
     project_type = payload.get("projectType", "NODEJS")
     base_domain = payload.get("baseDomain", "vexlyx.localhost")
-    memory_limit = payload.get("memoryLimit", "128m")
+    memory_limit = payload.get("memoryLimit", "512m")
     port_start = int(payload.get("portRangeStart", 8100))
     port_end = int(payload.get("portRangeEnd", 8999))
     env_vars: dict[str, str] = payload.get("envVars", {})
     docker_bin = get_docker_binary()
 
     # Ensure network exists
-    ensure_traefik_network(docker_bin)
+    ensure_apps_network(docker_bin)
 
     # Resolve ports
     host_port = int(payload["hostPort"]) if payload.get("hostPort") else derive_host_port(project_id, port_start, port_end)
@@ -595,7 +692,7 @@ def cmd_deploy(payload: dict) -> None:
     service_name = slugify(project_id[:12])
 
     # F5.21 fix: Compose auto-aliases a service by its bare name ("app") on
-    # every network it joins, including the shared external traefik-net --
+    # every network it joins, including the shared external vexlyx-apps --
     # so with 2+ two-container (app+web) projects deployed at once, "app"
     # resolves ambiguously and nginx can randomly proxy PHP requests to a
     # DIFFERENT project's php-fpm container. Confirmed live: two no-build PHP
@@ -612,8 +709,10 @@ def cmd_deploy(payload: dict) -> None:
         fail(f"Template not found: {template_file}", "TEMPLATE_NOT_FOUND")
 
     compose_dir = Path(project_dir) / "deploy"
+    assert_deploy_dir_is_not_a_symlink(compose_dir)
     extra_placeholders: dict[str, str] = {}
     project_type_upper = project_type.upper()
+    extra_placeholders["deploy_dir"] = compose_dir.resolve().as_posix()
 
     # F5.7 — STATIC/REACT: bind-mount content + generate SPA-fallback nginx config
     if project_type_upper in ("STATIC", "REACT"):
@@ -656,6 +755,9 @@ def cmd_deploy(payload: dict) -> None:
             {"app_upstream": app_upstream},
         )
         extra_placeholders["nginx_conf_path"] = nginx_conf_path.resolve().as_posix()
+
+    for handed_over in hand_docroot_to_php(Path(project_dir), project_type_upper, php_no_build):
+        log_line(f"[vexlyx] {handed_over.name} is now writable by PHP-FPM (uid {PHP_FPM_UID})")
 
     log_line(f"[vexlyx] Generating docker-compose.yml in {compose_dir}")
     generate_compose_file(
@@ -1257,6 +1359,171 @@ def cmd_refresh_nginx_conf(payload: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Moving already-deployed projects onto the apps network
+# ---------------------------------------------------------------------------
+
+PANEL_NETWORK_NAME_LINE = re.compile(
+    r"^(\s+name:\s*[\"']?)" + re.escape(PANEL_NETWORK) + r"([\"']?\s*)$", re.MULTILINE
+)
+
+
+def rewrite_compose_network(compose_file: Path) -> bool:
+    """Point a generated compose file's external network at APPS_NETWORK.
+
+    Returns True when the file changed. Only the `name:` line of the external
+    network is touched, so everything else in the file stays as deployed.
+    """
+    # Read bytes so a CRLF file keeps its line endings.
+    original = compose_file.read_bytes().decode("utf-8")
+    updated = PANEL_NETWORK_NAME_LINE.sub(lambda m: m.group(1) + APPS_NETWORK + m.group(2), original)
+    if updated == original:
+        return False
+    # A temp file in the same directory plus os.replace keeps a crash from
+    # leaving a half-written compose file behind.
+    fd, tmp_name = tempfile.mkstemp(dir=compose_file.parent, prefix=".compose-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(updated)
+        os.replace(tmp_name, compose_file)
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
+    return True
+
+
+def container_networks(docker_bin: str, container_id: str) -> dict[str, list[str]]:
+    """Map of network name -> aliases for one container."""
+    res = run_bounded(
+        QUICK_TIMEOUT,
+        [docker_bin, "inspect", "--format", "{{json .NetworkSettings.Networks}}", container_id],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if res.returncode != 0:
+        fail(f"Could not inspect container {container_id}", "NETWORK_INSPECT_FAILED")
+    attached = json.loads(res.stdout.strip() or "{}")
+    return {name: list((info or {}).get("Aliases") or []) for name, info in attached.items()}
+
+
+def move_container_to_apps_network(docker_bin: str, container_id: str) -> str:
+    """Attach a container to APPS_NETWORK and detach it from PANEL_NETWORK.
+
+    Works on running and stopped containers alike without restarting either
+    (a stopped container keeps the move and comes back on the new network).
+    The container is connected to the new network before it leaves the old
+    one, so it is never unreachable. Returns "moved" or "unchanged".
+    """
+    networks = container_networks(docker_bin, container_id)
+    if PANEL_NETWORK not in networks:
+        return "unchanged"
+
+    if APPS_NETWORK not in networks:
+        command = [docker_bin, "network", "connect"]
+        for alias in networks[PANEL_NETWORK]:
+            # Docker adds the short container id as an alias by itself.
+            if not container_id.startswith(alias):
+                command += ["--alias", alias]
+        command += [APPS_NETWORK, container_id]
+        connected = run_bounded(
+            QUICK_TIMEOUT, command, capture_output=True, text=True, encoding="utf-8", errors="replace"
+        )
+        if connected.returncode != 0:
+            fail(
+                f"Could not connect {container_id} to {APPS_NETWORK}: {(connected.stderr or '').strip()[:200]}",
+                "NETWORK_CONNECT_FAILED",
+            )
+
+    detached = run_bounded(
+        QUICK_TIMEOUT,
+        [docker_bin, "network", "disconnect", PANEL_NETWORK, container_id],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if detached.returncode != 0:
+        fail(
+            f"Could not disconnect {container_id} from {PANEL_NETWORK}: {(detached.stderr or '').strip()[:200]}",
+            "NETWORK_DISCONNECT_FAILED",
+        )
+    return "moved"
+
+
+def reload_running_web_containers(docker_bin: str, compose_project: str) -> int:
+    """Make each running nginx "web" container of a project re-resolve its upstream.
+
+    nginx resolves `fastcgi_pass <app container>` once, at startup. After the
+    app container changes network it has a new address, and nginx keeps
+    sending PHP requests to the old one until it is reloaded. Stopped web
+    containers resolve afresh when they start, so only running ones are
+    touched. A reload that fails falls back to a restart; if that fails too
+    the project fails (the caller's marker file is then not written and the
+    next installer run retries). Returns how many containers were reloaded.
+    """
+    reloaded = 0
+    for container_id, state in list_project_containers(docker_bin, compose_project):
+        if state != "running":
+            continue
+        labelled = run_bounded(
+            QUICK_TIMEOUT,
+            [docker_bin, "inspect", "--format", '{{index .Config.Labels "com.docker.compose.service"}}', container_id],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        if labelled.returncode != 0 or labelled.stdout.strip() != "web":
+            continue
+        reload_result = run_bounded(
+            QUICK_TIMEOUT,
+            [docker_bin, "exec", container_id, "nginx", "-s", "reload"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        if reload_result.returncode != 0:
+            log_line(f"[vexlyx] nginx reload failed in {container_id}, restarting it: {(reload_result.stderr or '').strip()[:200]}")
+            restart_result = run_bounded(
+                QUICK_TIMEOUT * 2,
+                [docker_bin, "restart", container_id],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+            )
+            if restart_result.returncode != 0:
+                fail(
+                    f"Could not reload or restart the web container {container_id}: {(restart_result.stderr or '').strip()[:200]}",
+                    "WEB_RELOAD_FAILED",
+                )
+        reloaded += 1
+    return reloaded
+
+
+def cmd_migrate_network(payload: dict) -> None:
+    """Move one deployed project from the panel network to the apps network.
+
+    Rewrites the project's compose file and moves each of its containers in
+    place, so a running site keeps serving and a stopped one stays stopped.
+    Safe to repeat. Payload: projectId, projectDir.
+    """
+    project_id = require_field(payload, "projectId")
+    project_dir = require_field(payload, "projectDir")
+    docker_bin = get_docker_binary()
+    ensure_apps_network(docker_bin)
+
+    compose_project = f"vexlyx-{slugify(project_id[:12])}"
+    moved = 0
+    for container_id, _state in list_project_containers(docker_bin, compose_project):
+        if move_container_to_apps_network(docker_bin, container_id) == "moved":
+            moved += 1
+
+    # Runs on every call, not only when something moved: a reload that failed
+    # on an earlier run must still be retried once the containers have moved.
+    reloaded = reload_running_web_containers(docker_bin, compose_project)
+
+    compose_file = Path(project_dir) / "deploy" / "docker-compose.yml"
+    rewritten = compose_file.is_file() and rewrite_compose_network(compose_file)
+
+    log_line(f"[vexlyx] {compose_project}: {moved} container(s) moved to {APPS_NETWORK}, {reloaded} web container(s) reloaded, compose file {'updated' if rewritten else 'unchanged'}")
+    respond({"done": True, "containersMoved": moved, "webReloaded": reloaded, "composeRewritten": bool(rewritten)})
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -1276,6 +1543,7 @@ COMMANDS = {
     "remove_image": cmd_remove_image,
     "exec": cmd_exec,
     "refresh_nginx_conf": cmd_refresh_nginx_conf,
+    "migrate_network": cmd_migrate_network,
 }
 
 

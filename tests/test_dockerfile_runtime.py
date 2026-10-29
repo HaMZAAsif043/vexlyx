@@ -201,7 +201,8 @@ def test_docker_compose_template_generation():
         assert "server.port=8080" in content
         assert "NODE_ENV: \"production\"" in content
         assert "API_KEY: \"secret_key_123\"" in content
-        assert "traefik-net" in content
+        assert "name: vexlyx-apps" in content
+        assert "traefik-net" not in content
         assert "healthcheck:" not in content
         assert "wget" not in content
         assert "curl" not in content

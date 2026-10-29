@@ -221,7 +221,7 @@ export class SslService {
 
   constructor(
     private readonly prisma: PrismaClient,
-    logger?: Pick<FastifyBaseLogger, "error" | "warn">,
+    logger?: Pick<FastifyBaseLogger, "error" | "warn" | "info">,
   ) {
     this.domainService = new DomainService(prisma, undefined, logger);
   }

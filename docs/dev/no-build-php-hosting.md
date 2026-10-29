@@ -53,6 +53,73 @@ directory instead of a named volume:
   reads. This read-write/read-only asymmetry mirrors `wordpress.yml`'s `app`
   vs `web` volumes exactly.
 
+### Who owns the docroot (#151)
+
+A read-write mount is not enough: the API creates the project directory as
+`root:root 0755`, while PHP-FPM runs as `www-data` (uid/gid 82 in both the
+`vexlyx-php-fpm` and `wordpress` images), so PHP could not create a single file
+in its own docroot. Tested as root with `docker exec` it appears to work; always
+test with `docker exec -u www-data`.
+
+- **Deploy** (`hand_docroot_to_php` in `docker_manager.py`): `chown 82:82` of the
+  project directory itself (no-build PHP, except git checkouts, see below) or of `wp-content` and its
+  `plugins`/`themes`/`uploads` folders (WordPress). Non-recursive, so a migrated
+  site with tens of thousands of files is not walked, and nothing is made
+  world-writable. It opens the directory with `O_NOFOLLOW` and changes the open
+  descriptor, so a symlink planted by the application cannot redirect it.
+- **File Manager** (`FileService`, `utils/phpRuntimeOwnership.ts`): files and
+  folders it creates (new file, saved edit, upload, folder, copy, extract,
+  compress) are handed to uid 82 as well, otherwise an uploaded `wp-config.php`
+  could be read but never modified by the application. For an upload that is
+  the final renamed file, not the `.part` temp file. Only the API running as
+  root does this; ownership failures are logged and never fail the request.
+- **`deploy/` stays root-owned and out of reach.** PHP owns the directory
+  around it, so it could rename `deploy/` or swap it for a symlink and have the
+  root-run deploy write the compose file elsewhere. Three guards: the File
+  Manager never hands `deploy/` or `.git/` over; the `app` container mounts
+  `deploy/` over itself read-only (`{{deploy_dir}}:/var/www/html/deploy:ro`),
+  and a mount point cannot be renamed or removed from inside the container; and
+  `cmd_deploy` refuses to continue if `deploy` is a symlink.
+- **Existing projects**: `apps/api/src/scripts/hand-docroots-to-php.ts`, run by
+  installer step 14, applies the same ownership to every live no-build PHP and
+  WordPress project once. It writes a marker (`workspaces/.migrations/
+  php-docroot-ownership-v1`) only when every project succeeded, logs each
+  project it changed, and never fails the install.
+
+#### Git-connected sites: the root is not writable by PHP
+
+When the project directory contains `.git` (the site is connected to a git
+repository), **its root stays `root:root` and PHP cannot create, change or
+delete anything directly in it.** Subfolders keep working as described above
+(files and folders created inside them through the File Manager are handed to
+uid 82), but not the top level. This is deliberate, and applies to all three
+places that change ownership: `hand_docroot_to_php` at deploy,
+`handOverToPhp` in the File Manager (even when extracting into the root) and the
+one-time repair script, which logs the project as skipped.
+
+Two reasons, and neither can be traded away:
+
+1. **git would stop working.** The panel runs git as root in the API container
+   (clone, fetch, pull on every build and auto-deploy). Since git 2.35.2 it
+   refuses a repository whose directory belongs to another user: `fatal:
+   detected dubious ownership in repository`. Found on QA with git 2.39.5.
+   Worse, `git_manager.py clone` treats a failed fetch or pull as "broken
+   repository" and deletes the workspace to clone it again, so with a PHP-owned
+   root every redeploy silently wiped everything not committed to git (an
+   uploaded file was gone after the next build) while the pull "worked".
+2. **`safe.directory` is not a way out.** Marking the directory safe would make
+   git trust a root that PHP controls, and PHP could replace `.git`; its hooks
+   and config then run as root in the API container on the next pull.
+
+What this means for a site: it can read everything and write in its subfolders
+(uploads, caches), but a self-installer that writes into the top level (a
+Duplicator migration, WordPress core updates in place) needs a project that is
+not git-connected. Giving PHP selected writable subfolders of a checkout
+automatically is a possible later feature. The check is "the root contains
+`.git`" (a directory, a gitlink file or even a dangling link); a `.gitignore`
+does not count. WordPress projects are unaffected: only `wp-content` is handed
+over there, never the project root.
+
 ## Nginx config
 
 ### Which paths are served
@@ -143,11 +210,11 @@ PHP actually checks. Applied to **both** `php.conf.template` and
 `wordpress.conf.template` — F5.7's WordPress path has the exact same latent
 bug, just never hit it because nothing forced an HTTPS-only redirect before.
 
-**3. Docker Compose auto-aliases `app`/`web` on the *shared* `traefik-net`
+**3. Docker Compose auto-aliases `app`/`web` on the *shared* `vexlyx-apps`
 network, so two two-container projects collide.** This is the serious one.
 Every compose template names its services `app`/`web` — a Compose-generated
-alias `app` therefore gets registered on `traefik-net` for *every* project
-that has an `app` service, but `traefik-net` is one shared external network
+alias `app` therefore gets registered on `vexlyx-apps` for *every* project
+that has an `app` service, but `vexlyx-apps` (then named `traefik-net`) is one shared external network
 across the whole install, not scoped per project. With two no-build PHP (or
 WordPress) projects deployed at once, `fastcgi_pass app:9000` resolves
 **ambiguously** — Docker's embedded DNS round-robins between both projects'
@@ -214,6 +281,17 @@ still 404s cleanly when there's no `index.php` to fall back to either).
   there's no `composer.json`/`buildCmd`, `cmd_build` is never invoked for
   that case at all. The stopgap only still matters if a user explicitly
   forces a `buildCmd` override on a composer-less PHP project.
+
+## Securing a migrated WordPress site
+
+Vexlyx serves the site exactly as you hand it over, so the usual WordPress hygiene is yours to do, and a migration leaves a few things behind that need attention:
+
+- **Delete the migration files.** After a Duplicator migration, remove `installer.php`, the `*_archive.*` file and the installer log from the docroot, and uninstall the Duplicator plugin if you do not need it on the server. They are a ready-made way back into the site.
+- **Replace default credentials.** A site built in a local development tool often has an `admin` user with an easy password. Give the live site a long unique password and a username that is not `admin`.
+- **Close XML-RPC if nothing uses it.** `xmlrpc.php` lets a client try many passwords in one request. Disable it, and limit failed logins.
+- **Consider locking file changes.** `define('DISALLOW_FILE_MODS', true);` in `wp-config.php` stops plugin and theme installs and edits from inside wp-admin, so a stolen admin login cannot add code. The cost is that you update plugins yourself.
+- **Keep core, plugins and themes updated, and remove the unused ones.**
+- **Give it enough memory.** Projects get 512 MB by default (`DEPLOY_MEMORY_LIMIT`); a busy WordPress site may need more.
 
 ## Known caveat
 

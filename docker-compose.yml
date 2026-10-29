@@ -16,6 +16,9 @@ services:
     networks:
       - default
       - traefik-net
+      # Customer databases live on this server, so project containers need a
+      # path to it (per-database credentials only).
+      - vexlyx-apps
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U vexlyx -d vexlyx_dev"]
       interval: 10s
@@ -40,6 +43,7 @@ services:
     networks:
       - default
       - traefik-net
+      - vexlyx-apps
     healthcheck:
       # MYSQL_PWD (read from the container's own env) keeps the root password
       # out of the process argument list, which any local user can see via ps.
@@ -55,14 +59,22 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:6379:6379"
-    command: redis-server --maxmemory 256mb --maxmemory-policy noeviction --appendonly yes
+    environment:
+      # Dev default; docker-compose.prod.yml requires a generated value.
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-vexlyx_dev}
+    command:
+      - sh
+      - -c
+      - exec redis-server --maxmemory 256mb --maxmemory-policy noeviction --appendonly yes --requirepass "$$REDIS_PASSWORD"
     volumes:
       - vexlyx_redis_data:/data
     networks:
       - default
       - traefik-net
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # An unauthenticated ping answers NOAUTH, so a healthy server is the one
+      # that accepts the password. REDISCLI_AUTH keeps it out of the arguments.
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -106,6 +118,7 @@ services:
     networks:
       - default
       - traefik-net
+      - vexlyx-apps
     healthcheck:
       test: ["CMD", "traefik", "healthcheck"]
       interval: 10s
@@ -239,5 +252,11 @@ volumes:
 
 networks:
   default:
+  # Panel-internal network: Redis, the API, the panel database, mail and DNS.
+  # Project containers must never join it (see docs/dev/network-layout.md).
   traefik-net:
+    external: true
+  # Project containers, Traefik, and the database servers customer databases
+  # live on. Nothing else belongs here.
+  vexlyx-apps:
     external: true

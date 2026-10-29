@@ -4,6 +4,8 @@ import { resolve } from "node:path";
 import { decrypt } from "../../utils/encryption.js";
 import { env } from "../../config/env.js";
 import { WebhookError, WebhookService } from "./service.js";
+import { claimDelivery, readDeliveryId, releaseDelivery } from "./delivery.js";
+import { createAndEnqueueDeployment, hasRecentDeploymentForCommit } from "./enqueue.js";
 
 interface GitHubAppPayload {
   action?: string;
@@ -34,12 +36,11 @@ export function registerGitHubAppWebhook(
       throw new WebhookError("Invalid GitHub webhook signature", "INVALID_WEBHOOK_SIGNATURE", 401);
     }
 
-    const deliveryHeader = request.headers["x-github-delivery"];
-    const deliveryId = Array.isArray(deliveryHeader) ? deliveryHeader[0] : deliveryHeader;
+    const deliveryId = readDeliveryId(request.headers["x-github-delivery"]);
     if (!deliveryId) throw new WebhookError("Missing GitHub delivery ID", "MISSING_DELIVERY_ID", 400);
-    const deliveryKey = `github:webhook-delivery:${deliveryId}`;
-    const claimed = await app.redis.set(deliveryKey, "processing", "EX", 86_400, "NX");
-    if (!claimed) return reply.status(200).send({ success: true, ignored: true, reason: "duplicate_delivery" });
+    if (!(await claimDelivery(app.redis, deliveryId))) {
+      return reply.status(200).send({ success: true, ignored: true, reason: "duplicate_delivery" });
+    }
 
     try {
       const eventHeader = request.headers["x-github-event"];
@@ -62,25 +63,27 @@ export function registerGitHubAppWebhook(
           select: { id: true, userId: true, branch: true, buildCmd: true },
         });
         const matching = projects.filter((project) => project.branch === branch);
+        const commitHash = payload.head_commit?.id ?? payload.after ?? null;
+        let queued = 0;
         for (const project of matching) {
-          const deployment = await app.prisma.deployment.create({
-            data: {
+          // A failed attempt at this same delivery may already have queued earlier
+          // projects before it threw; GitHub's retry must not queue those twice.
+          if (await hasRecentDeploymentForCommit(app.prisma, project.id, commitHash)) continue;
+          await createAndEnqueueDeployment(app.prisma, enqueueJob, {
+            projectId: project.id,
+            commitHash,
+            commitMsg: payload.head_commit?.message ?? null,
+            job: {
               projectId: project.id,
-              status: "QUEUED",
-              commitHash: payload.head_commit?.id ?? payload.after ?? null,
-              commitMsg: payload.head_commit?.message ?? null,
+              userId: project.userId,
+              projectDir: resolve(env.PROJECTS_DIR, project.id),
+              imageName: `${env.NIXPACKS_IMAGE_PREFIX}-${project.id}`,
+              buildCmd: project.buildCmd,
             },
           });
-          await enqueueJob({
-            deploymentId: deployment.id,
-            projectId: project.id,
-            userId: project.userId,
-            projectDir: resolve(env.PROJECTS_DIR, project.id),
-            imageName: `${env.NIXPACKS_IMAGE_PREFIX}-${project.id}`,
-            buildCmd: project.buildCmd,
-          });
+          queued += 1;
         }
-        return reply.status(matching.length ? 202 : 200).send({ success: true, deploymentsQueued: matching.length });
+        return reply.status(queued ? 202 : 200).send({ success: true, deploymentsQueued: queued });
       }
 
       if (event === "installation") {
@@ -132,7 +135,7 @@ export function registerGitHubAppWebhook(
 
       return reply.send({ success: true, ignored: true });
     } catch (error) {
-      await app.redis.del(deliveryKey);
+      await releaseDelivery(app.redis, deliveryId);
       throw error;
     }
   });
