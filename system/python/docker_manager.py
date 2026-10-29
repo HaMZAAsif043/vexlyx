@@ -34,6 +34,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -502,6 +503,69 @@ def _scan_heredoc_delims(args: str) -> list[str]:
     return delims
 
 
+_VAR_REF_RE = re.compile(
+    r"(?<!\\)\$(?:"
+    r"\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-+])([^}]*))?\}"
+    r"|([A-Za-z_][A-Za-z0-9_]*))"
+)
+
+
+def _expand_docker_vars(text: str, values: dict[str, str]) -> str:
+    """Expand $VAR / ${VAR} the way the Docker builder does in instructions
+    such as EXPOSE, including the :-, -, :+ and + modifiers. Unset variables
+    expand to an empty string, so an unresolvable port is simply skipped and
+    the caller falls back to the type default (#172 review)."""
+    if "$" not in text:
+        return text
+
+    def replace(match: re.Match) -> str:
+        name = match.group(1) or match.group(4)
+        operator = match.group(2)
+        operand = match.group(3) or ""
+        current = values.get(name)
+        if operator == ":-":
+            return current if current else operand
+        if operator == "-":
+            return current if current is not None else operand
+        if operator == ":+":
+            return operand if current else ""
+        if operator == "+":
+            return operand if current is not None else ""
+        return current or ""
+
+    # Values may reference other variables; settle them to a fixpoint.
+    for _ in range(10):
+        expanded = _VAR_REF_RE.sub(replace, text)
+        if expanded == text:
+            return expanded
+        text = expanded
+    return text
+
+
+def _parse_docker_assignments(args: str) -> dict[str, str]:
+    """Parse ENV/ARG arguments into name/value pairs. Supports the
+    'NAME=value' form (quoted values included) and Docker's legacy
+    'NAME value with spaces' form."""
+    try:
+        tokens = shlex.split(args, posix=True)
+    except ValueError:
+        tokens = args.split()
+    if tokens and "=" not in tokens[0]:
+        return {tokens[0]: " ".join(tokens[1:])}
+    assignments: dict[str, str] = {}
+    for token in tokens:
+        if "=" in token:
+            name, value = token.split("=", 1)
+            if name:
+                assignments[name] = value
+    return assignments
+
+
+def _is_instruction_continuation(line: str) -> bool:
+    """Physical line ends with a Docker line-continuation backslash."""
+    return line.rstrip().endswith("\\")
+
+
 def _parse_build_stages(content: str) -> list[dict]:
     """Parse a Dockerfile into its build stages.
 
@@ -511,13 +575,21 @@ def _parse_build_stages(content: str) -> list[dict]:
     Heredoc bodies (COPY/ADD/RUN <<EOF ... EOF) are treated as content, so
     instruction-looking text inside them never starts a new stage (#172
     review: `COPY <<EOF /tmp/Dockerfile` containing a `FROM` line must not
-    hide the real final stage).
+    hide the real final stage). Backslash-continued physical lines are joined
+    into one logical instruction, so an argument that looks like EXPOSE is
+    never mistaken for a real one (#172 review).
     """
+    lines = content.splitlines()
     stages: list[dict] = []
+    stages_by_alias: dict[str, dict] = {}
     current: dict | None = None
     heredoc_delims: list[str] = []
+    i = 0
 
-    for raw_line in content.splitlines():
+    while i < len(lines):
+        raw_line = lines[i]
+        i += 1
+
         # Inside a heredoc only the (possibly indented, for <<-) terminator
         # line matters; everything else is file content, not instructions.
         if heredoc_delims:
@@ -530,6 +602,25 @@ def _parse_build_stages(content: str) -> list[dict]:
         if not line or line.startswith("#"):
             continue
 
+        # Docker drops the backslash/newline pair, so `RUN printf ... \`
+        # followed by an EXPOSE-looking line stays part of the RUN
+        # instruction (#172 review). Blank lines and comments inside a
+        # continued instruction are ignored, as Docker does.
+        while _is_instruction_continuation(line):
+            line = line.rstrip()[:-1]
+            while i < len(lines) and (
+                not lines[i].strip() or lines[i].strip().startswith("#")
+            ):
+                i += 1
+            if i >= len(lines):
+                break
+            line += lines[i].strip()
+            i += 1
+
+        line = line.strip()
+        if not line:
+            continue
+
         # The keyword is separated from its arguments by any whitespace run
         # (spaces or tabs), not just a single space (#172 review: a valid
         # "FROM<TAB>alpine" must still create a stage).
@@ -539,22 +630,54 @@ def _parse_build_stages(content: str) -> list[dict]:
 
         if instruction == "FROM":
             from_parts = args.split()
-            parent = from_parts[0] if from_parts else None
+            image_index = 0
+            # Options precede the image reference (FROM --platform=... image);
+            # they are not the parent stage's name (#172 review).
+            while image_index < len(from_parts) and from_parts[image_index].startswith("--"):
+                image_index += 1
+            parent = from_parts[image_index] if image_index < len(from_parts) else None
             alias = None
-            for i, part in enumerate(from_parts):
-                if part.upper() == "AS" and len(from_parts) > i + 1:
-                    alias = from_parts[i + 1]
+            for j in range(image_index + 1, len(from_parts) - 1):
+                if from_parts[j].upper() == "AS":
+                    alias = from_parts[j + 1]
                     break
-            current = {"alias": alias, "parent": parent, "exposes": []}
+            inherited_env: dict[str, str] = {}
+            parent_stage = stages_by_alias.get((parent or "").lower())
+            if parent_stage is not None:
+                # ENV carries over from a named parent stage into the image.
+                inherited_env = dict(parent_stage["env"])
+            current = {
+                "alias": alias,
+                "parent": parent,
+                "exposes": [],
+                "env": inherited_env,
+                "args": {},
+            }
             stages.append(current)
+            if alias:
+                stages_by_alias[alias.lower()] = current
             continue
 
         if current is None:
             # Legal content before the first FROM (parser directives, ARG).
             continue
 
+        if instruction in ("ENV", "ARG"):
+            values = _parse_docker_assignments(args)
+            target = current["env"] if instruction == "ENV" else current["args"]
+            for name, value in values.items():
+                target[name] = _expand_docker_vars(
+                    value, {**current["args"], **current["env"]}
+                )
+            continue
+
         if instruction == "EXPOSE" and args:
-            current["exposes"].append(args)
+            # Docker expands ENV/ARG references in EXPOSE (e.g. ENV PORT=80,
+            # EXPOSE ${PORT}); without this the port falls back to the type
+            # default and Traefik targets the wrong port (#172 review).
+            current["exposes"].append(
+                _expand_docker_vars(args, {**current["args"], **current["env"]})
+            )
 
         # A heredoc opener makes the following lines content until its
         # terminator; only COPY/ADD/RUN may carry one, and only unquoted

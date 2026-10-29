@@ -220,6 +220,65 @@ class FirstExposedPortTests(unittest.TestCase):
         d = self.make_dir("FROM\talpine\nEXPOSE\t80\n")
         self.assertEqual(docker_manager.first_exposed_port(d), 80)
 
+    def test_continued_run_argument_is_not_an_instruction(self):
+        # A backslash continuation keeps the next physical line part of the
+        # RUN, so its "EXPOSE 9000" is shell text, not a declaration (#172).
+        d = self.make_dir(
+            "FROM alpine\n"
+            "RUN printf \"%s\\n\" \\\n"
+            "EXPOSE 9000\n"
+            "EXPOSE 3000\n"
+        )
+        self.assertEqual(docker_manager.first_exposed_port(d), 3000)
+
+    def test_continued_expose_is_one_instruction(self):
+        d = self.make_dir("FROM alpine\nEXPOSE 80 \\\n9000\n")
+        self.assertEqual(docker_manager.first_exposed_port(d), 80)
+
+    def test_comments_inside_a_continued_instruction_are_ignored(self):
+        d = self.make_dir(
+            "FROM alpine\n"
+            "RUN echo hello \\\n"
+            "# a comment inside the continuation\n"
+            "\n"
+            "world\n"
+            "EXPOSE 80\n"
+        )
+        self.assertEqual(docker_manager.first_exposed_port(d), 80)
+
+    def test_from_options_are_not_the_parent_stage(self):
+        # FROM --platform=... base refers to the named stage "base"; the
+        # option must not be mistaken for the parent (#172).
+        d = self.make_dir(
+            "FROM alpine AS base\nEXPOSE 80\n"
+            "FROM --platform=linux/amd64 base\n"
+        )
+        self.assertEqual(docker_manager.first_exposed_port(d), 80)
+
+    def test_expose_resolves_env_variable(self):
+        # Docker expands ENV values in EXPOSE (ENV PORT=80, EXPOSE ${PORT}).
+        d = self.make_dir("FROM alpine\nENV PORT=80\nEXPOSE ${PORT}\n")
+        self.assertEqual(docker_manager.first_exposed_port(d), 80)
+
+    def test_expose_resolves_arg_and_protocol_suffix(self):
+        d = self.make_dir("FROM alpine\nARG PORT=8080\nEXPOSE $PORT/tcp\n")
+        self.assertEqual(docker_manager.first_exposed_port(d), 8080)
+
+    def test_expose_resolves_default_modifier(self):
+        d = self.make_dir("FROM alpine\nEXPOSE ${PORT:-9000}\n")
+        self.assertEqual(docker_manager.first_exposed_port(d), 9000)
+
+    def test_env_is_inherited_from_named_stage(self):
+        d = self.make_dir(
+            "FROM alpine AS base\nENV PORT=8081\n"
+            "FROM base\nEXPOSE ${PORT}\n"
+        )
+        self.assertEqual(docker_manager.first_exposed_port(d), 8081)
+
+    def test_unresolved_expose_variable_returns_none(self):
+        d = self.make_dir("FROM alpine\nEXPOSE ${PORT}\n")
+        self.assertIsNone(docker_manager.first_exposed_port(d))
+
     def test_read_failure_is_logged_and_returns_none(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
