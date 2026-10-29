@@ -128,7 +128,9 @@ async function runSslManager(
     : process.env.PYTHONPATH;
 
   return new Promise((res, rej) => {
-    const child = spawn(pythonExe, [scriptPath, command, JSON.stringify(payload)], {
+    // The request carries a private key; it goes over stdin so it never shows
+    // up in the helper's command line (visible to `ps` and /proc).
+    const child = spawn(pythonExe, [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,
@@ -190,6 +192,9 @@ async function runSslManager(
     child.on("error", (err) => {
       rej(new DomainError(`Failed to spawn ssl_manager.py: ${err.message}`, "SSL_SPAWN_ERROR", 500));
     });
+
+    child.stdin.write(JSON.stringify({ command, payload }));
+    child.stdin.end();
   });
 }
 
