@@ -74,3 +74,31 @@ describe("mail error response contract", () => {
     },
   );
 });
+
+describe("test email body validation (#194)", () => {
+  it("rejects a subject with line breaks before reaching the helper", async () => {
+    const send = vi.spyOn(MailService.prototype, "sendTestEmail");
+    const app = Fastify();
+    app.decorate("prisma", {} as PrismaClient);
+    app.decorate("requireAuth", async (request) => {
+      request.userId = "u1";
+    });
+    app.decorate("requireRole", () => app.requireAuth);
+    await app.register(mailRoutes, { prefix: "/api/mail" });
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/mail/test-send",
+        payload: {
+          from: "no-reply@one.example",
+          to: "someone@example.net",
+          subject: "Hi\r\nBcc: victim@example.net",
+        },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+});

@@ -4,6 +4,10 @@ All notable changes to Vexlyx are documented here. The format follows [Keep a Ch
 
 ## Unreleased
 
+### Security
+
+- The SMTP test-email endpoint can only send as an address on a domain the caller owns. The helper reaches Postfix from the trusted Docker network, where `permit_mynetworks` relays without authentication, so any user could send mail as any domain on the server. The subject and SASL username can no longer contain line breaks, the body is dot-stuffed so a line containing a single dot cannot end the message early, and `Message-ID` uses the sender's domain (#194).
+
 ### Fixed
 
 - Connecting or updating a git project no longer deletes files git does not track. A failed fetch, checkout or pull (network, authentication, local changes) now fails with its error and leaves the workspace untouched; previously it re-cloned the project and lost uploads and other untracked files. Switching a project to another repository, or connecting git to a workspace that already has files, keeps the old workspace next to the project as `<id>.replaced-<timestamp>` (reported as `previousWorkspace`) and restores it if the clone fails.

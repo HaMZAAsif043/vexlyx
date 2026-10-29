@@ -11,7 +11,7 @@ vi.mock("./state-sync.js", async (original) => ({
   ...(await original<typeof import("./state-sync.js")>()),
   reconcileMailState: vi.fn(),
 }));
-const { MailService, synchronizeMailState } = await import("./service.js");
+const { MailService, senderBelongsToDomains, synchronizeMailState } = await import("./service.js");
 const { MailboxService } = await import("../mailboxes/service.js");
 const domains = [
   {
@@ -163,6 +163,44 @@ describe("authoritative shared mail snapshot", () => {
       statusCode: 503,
       code: "MAIL_STATE_ACTIVATION_FAILED",
       details: { rollbackFailed: ["postfix"] },
+    });
+  });
+});
+
+describe("test email sender ownership (#194)", () => {
+  it("accepts an address on an owned domain or its subdomains", () => {
+    expect(senderBelongsToDomains("one.example", ["one.example"])).toBe(true);
+    expect(senderBelongsToDomains("mail.one.example", ["one.example"])).toBe(true);
+    expect(senderBelongsToDomains("one.example", ["*.one.example"])).toBe(true);
+    expect(senderBelongsToDomains("deep.mail.one.example", ["one.example"])).toBe(true);
+  });
+
+  it("rejects look-alike and unrelated domains", () => {
+    expect(senderBelongsToDomains("notone.example", ["one.example"])).toBe(false);
+    expect(senderBelongsToDomains("one.example.evil.test", ["one.example"])).toBe(false);
+    expect(senderBelongsToDomains("two.example", ["one.example"])).toBe(false);
+    expect(senderBelongsToDomains("example.com", [])).toBe(false);
+  });
+
+  it("refuses to send when the sender is not on a domain the caller owns", async () => {
+    const prisma = {
+      domain: {
+        findMany: vi.fn(async () => [{ hostname: "one.example" }]),
+      },
+    } as unknown as PrismaClient;
+    await expect(
+      new MailService(prisma).sendTestEmail("u1", {
+        from: "ceo@bank.example",
+        to: "victim@example.net",
+        subject: "Test",
+        body: "Test",
+        port: 587,
+        useTls: true,
+      }),
+    ).rejects.toMatchObject({ code: "SENDER_NOT_OWNED", statusCode: 403 });
+    expect(prisma.domain.findMany).toHaveBeenCalledWith({
+      where: { userId: "u1" },
+      select: { hostname: true },
     });
   });
 });

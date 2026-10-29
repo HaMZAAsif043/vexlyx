@@ -50,6 +50,22 @@ export class MailError extends Error {
   }
 }
 
+/**
+ * True when `senderDomain` is an owned hostname or a subdomain of one (mail
+ * often uses `mail.example.com` under the `example.com` domain record).
+ * Wildcard domain records own their subdomains.
+ */
+export function senderBelongsToDomains(
+  senderDomain: string,
+  ownedHostnames: string[],
+): boolean {
+  const sender = senderDomain.toLowerCase();
+  return ownedHostnames.some((hostname) => {
+    const owned = hostname.toLowerCase().replace(/^\*\./, "");
+    return sender === owned || sender.endsWith(`.${owned}`);
+  });
+}
+
 function getPostfixManagerScriptPath(): string {
   const currentDir = dirname(fileURLToPath(import.meta.url));
   const candidates = [
@@ -1005,11 +1021,30 @@ export class MailService {
 
   /**
    * Sends a test email via Postfix SMTP, returning the full SMTP handshake transcript.
+   *
+   * The helper talks to Postfix from inside the trusted Docker network, where
+   * `permit_mynetworks` accepts any sender without authentication. The sender
+   * must therefore be an address on a domain the caller owns, otherwise the
+   * endpoint is a relay that can spoof any domain on the server.
    */
   async sendTestEmail(
     userId: string,
     input: SendTestEmailInput,
   ): Promise<TestEmailResultResponse> {
+    const senderDomain = input.from.split("@").pop()!.toLowerCase();
+    const ownedDomains = await this.prisma.domain.findMany({
+      where: { userId },
+      select: { hostname: true },
+    });
+
+    if (!senderBelongsToDomains(senderDomain, ownedDomains.map((d) => d.hostname))) {
+      throw new MailError(
+        `Sender ${input.from} is not on a domain you own. Use an address on one of your mail domains.`,
+        "SENDER_NOT_OWNED",
+        403,
+      );
+    }
+
     const host = process.env.SMTP_HOST || "127.0.0.1";
     const payload = {
       ...input,

@@ -289,6 +289,17 @@ export default function MailPage() {
             size="sm"
             onClick={() => {
               setTestResult(null);
+              setTestForm((prev) => {
+                // The sender must be on a domain the user owns, so the static
+                // placeholder is replaced by a real address when one exists.
+                const senderDomain = prev.from.split("@").pop()?.toLowerCase() ?? "";
+                const isOwned = domains.some((d) => {
+                  const host = d.hostname.toLowerCase().replace(/^\*\./, "");
+                  return senderDomain === host || senderDomain.endsWith(`.${host}`);
+                });
+                if (isOwned || domains.length === 0) return prev;
+                return { ...prev, from: `no-reply@${domains[0].hostname}` };
+              });
               setIsTestEmailOpen(true);
             }}
             className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90"
@@ -949,6 +960,9 @@ export default function MailPage() {
                   value={testForm.from}
                   onChange={(e) => setTestForm({ ...testForm, from: e.target.value })}
                 />
+                <p className="text-xs text-muted-foreground">
+                  Must be an address on one of your domains.
+                </p>
               </div>
 
               <div className="space-y-1.5">

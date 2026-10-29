@@ -769,21 +769,38 @@ def get_postfix_status(host: str = "127.0.0.1") -> dict:
 # Test Email Sender
 # ---------------------------------------------------------------------------
 
+def _reject_line_breaks(value: str, field: str) -> str:
+    """Headers and SMTP commands are built by concatenation, so a CRLF in a
+    value would append extra headers or SMTP commands to the session."""
+    if "\r" in value or "\n" in value:
+        raise ValueError(f"{field} must not contain line breaks")
+    return value
+
+
+def _dot_stuff(body: str) -> str:
+    """Escape lines that start with '.' so the body cannot end DATA early."""
+    lines = body.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    return "\r\n".join("." + line if line.startswith(".") else line for line in lines)
+
+
 def send_test_email(params: dict) -> dict:
     host = params.get("host", "127.0.0.1")
     port = int(params.get("port", 587))
-    from_addr = params.get("from", "admin@vexlyx.local")
-    to_addr = params.get("to", "recipient@vexlyx.local")
-    subject = params.get("subject", "Vexlyx Test Email")
-    body = params.get("body", "Test email payload")
-    use_tls = bool(params.get("useTls", True))
-    username = params.get("username")
-    password = params.get("password")
-
     transcript = []
-    message_id = f"<{datetime.now().timestamp()}@vexlyx.local>"
-
     try:
+        from_addr = _reject_line_breaks(str(params.get("from", "admin@vexlyx.local")), "From address")
+        to_addr = _reject_line_breaks(str(params.get("to", "recipient@vexlyx.local")), "Recipient address")
+        subject = _reject_line_breaks(str(params.get("subject", "Vexlyx Test Email")), "Subject")
+        username = params.get("username")
+        if username:
+            username = _reject_line_breaks(str(username), "Username")
+        password = params.get("password")
+        body = str(params.get("body", "Test email payload"))
+        use_tls = bool(params.get("useTls", True))
+
+        sender_domain = from_addr.rsplit("@", 1)[-1] or "vexlyx.local"
+        message_id = f"<{datetime.now().timestamp()}@{sender_domain}>"
+
         s = socket.create_connection((host, port), timeout=5.0)
         s.settimeout(5.0)
         banner = s.recv(1024).decode("utf-8", errors="replace").strip()
@@ -868,7 +885,7 @@ def send_test_email(params: dict) -> dict:
             f"Message-ID: {message_id}\r\n"
             f"Date: {datetime.now(timezone.utc).strftime('%a, %d %b %Y %H:%M:%S +0000')}\r\n"
             f"Content-Type: text/plain; charset=utf-8\r\n\r\n"
-            f"{body}\r\n.\r\n"
+            f"{_dot_stuff(body)}\r\n.\r\n"
         )
         s.sendall(msg.encode("utf-8"))
         done_resp = s.recv(1024).decode("utf-8", errors="replace").strip()
