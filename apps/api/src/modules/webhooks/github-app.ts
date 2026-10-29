@@ -91,16 +91,22 @@ export function registerGitHubAppWebhook(
         const status = action === "suspend" ? "SUSPENDED" : action === "deleted" ? "DISCONNECTED" : "CONNECTED";
         const reason = action === "suspend" ? "GitHub App installation suspended" : action === "deleted" ? "GitHub App uninstalled" : null;
         const installation = await app.prisma.gitHubInstallation.updateMany({
-          where: { installationId: BigInt(installationId) },
+          where: {
+            installationId: BigInt(installationId),
+            ...(status !== "DISCONNECTED" ? { disconnectedAt: null } : {}),
+          },
           data: {
             status,
             suspendedAt: action === "suspend" ? new Date() : null,
-            disconnectedAt: action === "deleted" ? new Date() : null,
+            ...(action === "deleted" ? { disconnectedAt: new Date() } : {}),
           },
         });
         if (installation.count && status !== "CONNECTED") {
           await app.prisma.project.updateMany({
-            where: { githubInstallation: { installationId: BigInt(installationId) } },
+            where: {
+              githubInstallation: { installationId: BigInt(installationId) },
+              ...(status === "SUSPENDED" ? { githubConnectionStatus: { not: "DISCONNECTED" } } : {}),
+            },
             data: { githubConnectionStatus: status, githubDisconnectReason: reason },
           });
         }

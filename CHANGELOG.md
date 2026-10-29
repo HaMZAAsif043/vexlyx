@@ -6,6 +6,7 @@ All notable changes to Vexlyx are documented here. The format follows [Keep a Ch
 
 ### Fixed
 
+- GitHub installation webhooks no longer undo an explicit local disconnect, and replacing the configured GitHub App now disconnects installations and projects that belong to the old App instead of leaving them apparently usable (#70).
 - Connecting or updating a git project no longer deletes files git does not track. A failed fetch, checkout or pull (network, authentication, local changes) now fails with its error and leaves the workspace untouched; previously it re-cloned the project and lost uploads and other untracked files. Switching a project to another repository, or connecting git to a workspace that already has files, keeps the old workspace next to the project as `<id>.replaced-<timestamp>` (reported as `previousWorkspace`) and restores it if the clone fails.
 
 ## [0.4.2] - 2026-10-26

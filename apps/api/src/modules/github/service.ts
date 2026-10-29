@@ -251,29 +251,46 @@ export class GitHubService {
   }
 
   private async saveApp(userId: string, input: ConfigureGitHubAppInput) {
-    const existed = Boolean(await this.prisma.gitHubApp.findUnique({ where: { id: APP_ID }, select: { id: true } }));
-    const app = await this.prisma.gitHubApp.upsert({
-      where: { id: APP_ID },
-      create: {
-        id: APP_ID,
-        appId: BigInt(input.appId),
-        slug: input.slug,
-        clientId: input.clientId,
-        encryptedClientSecret: encrypt(input.clientSecret),
-        encryptedPrivateKey: encrypt(input.privateKey),
-        encryptedWebhookSecret: encrypt(input.webhookSecret),
-      },
-      update: {
-        appId: BigInt(input.appId),
-        slug: input.slug,
-        clientId: input.clientId,
-        encryptedClientSecret: encrypt(input.clientSecret),
-        encryptedPrivateKey: encrypt(input.privateKey),
-        encryptedWebhookSecret: encrypt(input.webhookSecret),
-      },
+    const existing = await this.prisma.gitHubApp.findUnique({ where: { id: APP_ID }, select: { appId: true } });
+    const appId = BigInt(input.appId);
+    const app = await this.prisma.$transaction(async (transaction) => {
+      const saved = await transaction.gitHubApp.upsert({
+        where: { id: APP_ID },
+        create: {
+          id: APP_ID,
+          appId,
+          slug: input.slug,
+          clientId: input.clientId,
+          encryptedClientSecret: encrypt(input.clientSecret),
+          encryptedPrivateKey: encrypt(input.privateKey),
+          encryptedWebhookSecret: encrypt(input.webhookSecret),
+        },
+        update: {
+          appId,
+          slug: input.slug,
+          clientId: input.clientId,
+          encryptedClientSecret: encrypt(input.clientSecret),
+          encryptedPrivateKey: encrypt(input.privateKey),
+          encryptedWebhookSecret: encrypt(input.webhookSecret),
+        },
+      });
+      if (existing && existing.appId !== appId) {
+        await transaction.gitHubInstallation.updateMany({
+          where: { status: { not: "DISCONNECTED" } },
+          data: { status: "DISCONNECTED", suspendedAt: null, disconnectedAt: new Date() },
+        });
+        await transaction.project.updateMany({
+          where: { githubInstallationId: { not: null }, githubConnectionStatus: { not: "DISCONNECTED" } },
+          data: {
+            githubConnectionStatus: "DISCONNECTED",
+            githubDisconnectReason: "GitHub App was replaced; reconnect the installation",
+          },
+        });
+      }
+      return saved;
     });
     installationTokens.clear();
-    await this.auditLog.log(userId, existed ? "github.app_replaced" : "github.app_created", { type: "GitHubApp", id: APP_ID }, { after: { appId: app.appId.toString(), slug: app.slug } });
+    await this.auditLog.log(userId, existing ? "github.app_replaced" : "github.app_created", { type: "GitHubApp", id: APP_ID }, { after: { appId: app.appId.toString(), slug: app.slug } });
     return this.getAppStatus();
   }
 
