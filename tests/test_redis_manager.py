@@ -10,11 +10,12 @@ import importlib.util
 import io
 import json
 import os
+import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import unittest
-import shutil
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -299,6 +300,32 @@ class TestDockerRunArguments(ManagerCommandTestCase):
         self.assertTrue(container_path.startswith("/"), "docker requires an absolute in-container path")
         self.assertEqual(container_path, manager.CONFIG_RELPATH)
         self.assertEqual(run_cmd[-1], manager.CONFIG_RELPATH)
+
+    def test_instances_join_the_apps_network_not_the_panel_network(self):
+        # Deployed project containers live on vexlyx-apps; a tenant Redis on
+        # the panel network would be unreachable by the REDIS_URL we inject.
+        stub = self.use_stub()
+        container = VALID_PAYLOAD["containerName"]
+        manager.write_config(container, VALID_PAYLOAD["password"], 64, "noeviction", "RDB")
+        manager.run_container("docker", container, "valkey/valkey:8.0", 64)
+
+        run_cmd = next(cmd for cmd in stub.calls if cmd[1] == "run")
+        network = run_cmd[run_cmd.index("--network") + 1]
+        self.assertEqual(network, "vexlyx-apps")
+        self.assertNotIn("traefik-net", run_cmd)
+
+
+@unittest.skipUnless(os.name == "posix", "POSIX file modes")
+class TestConfigPermissions(ManagerCommandTestCase):
+    def test_config_is_readable_by_the_container_user_but_private_on_the_host(self):
+        # The image drops privileges before starting the server, so a 0600
+        # root-owned file is unreadable inside the container. 0644 inside a
+        # 0700 directory keeps other host users out (#170 review).
+        container = VALID_PAYLOAD["containerName"]
+        path = manager.write_config(container, VALID_PAYLOAD["password"], 64, "noeviction", "RDB")
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o644)
+        self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
+
 
 
 class TestRemoveContainerConfidence(ManagerCommandTestCase):

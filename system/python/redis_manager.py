@@ -4,9 +4,10 @@ redis_manager.py -- System-layer script for Vexlyx Redis instances (F5.30).
 
 Manages one dedicated Redis-compatible container per instance: create,
 recreate (limits/password changes), start/stop/restart, stats and teardown.
-Each instance gets its own container on the internal `traefik-net` network,
-a named volume at /data, and a generated redis.conf (mounted read-only)
-carrying requirepass, maxmemory, the eviction policy and persistence mode.
+Each instance gets its own container on the customer-apps `vexlyx-apps`
+network (never the panel network), a named volume at /data, and a generated
+redis.conf (mounted read-only) carrying requirepass, maxmemory, the eviction
+policy and persistence mode.
 
 The password lives ONLY in that config file (chmod 600 on the host, mounted
 :ro into the container) — never in a docker CLI argument (visible in host
@@ -141,9 +142,11 @@ ALLOWED_EVICTION = {
 
 ALLOWED_PERSISTENCE = {"NONE", "RDB", "AOF"}
 
-# Every project container and every infra service joins this network; tenant
-# Redis instances publish NO host port and are reachable only from it.
-NETWORK_NAME = "traefik-net"
+# Tenant instances must be reachable from deployed project containers, which
+# live on the apps network; the panel network is reserved for panel services
+# (see docs/dev/network-layout.md) and must never carry tenant workloads.
+# Instances publish no host port and are reachable only from vexlyx-apps.
+NETWORK_NAME = "vexlyx-apps"
 
 # Absolute path INSIDE the container — Docker rejects relative -v targets, so
 # every create/recreate would fail at `docker run` without the leading slash.
@@ -290,12 +293,18 @@ def write_config(
 ) -> Path:
     config_dir = get_config_dir() / container_name
     config_dir.mkdir(parents=True, exist_ok=True)
+    # 0700 on the directory keeps the password file private on the host: no
+    # other host user can traverse into it. The file itself must be 0644
+    # because the Redis/Valkey image drops to its unprivileged user before
+    # starting the server, which cannot read a root-owned 0600 file even
+    # through the bind mount (#170 review).
+    os.chmod(config_dir, 0o700)
     path = config_dir / "redis.conf"
     path.write_text(
         build_redis_config(password, memory_limit_mb, eviction_policy, persistence),
         encoding="utf-8",
     )
-    os.chmod(path, 0o600)
+    os.chmod(path, 0o644)
     return path
 
 

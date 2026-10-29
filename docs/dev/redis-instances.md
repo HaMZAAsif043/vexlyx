@@ -1,6 +1,6 @@
 # Redis Instances (F5.30)
 
-Users can provision PostgreSQL and MySQL databases (F2.6) but had no key-value store: an app that needs a cache, a session store or a job queue (BullMQ, Sidekiq, Celery, Laravel queues) had to bundle its own Redis in its project or go without. This feature provisions a **dedicated, password-protected Redis container per instance** on the internal Docker network, with a memory cap, an eviction policy, a persistence mode and a ready-to-paste connection URL.
+Users can provision PostgreSQL and MySQL databases (F2.6) but had no key-value store: an app that needs a cache, a session store or a job queue (BullMQ, Sidekiq, Celery, Laravel queues) had to bundle its own Redis in its project or go without. This feature provisions a **dedicated, password-protected Redis container per instance** on the apps Docker network (`vexlyx-apps`, where deployed project containers live), with a memory cap, an eviction policy, a persistence mode and a ready-to-paste connection URL.
 
 ## Why a container per instance (not a shared server)
 
@@ -28,9 +28,9 @@ The image line is pinned in `RedisImageEnum` (`packages/shared/src/schemas/redis
 
 Same contract as `database_manager.py`: JSON on stdin, JSON on stdout, hard timeouts, docker invocations as argument lists only.
 
-- **Config file, not flags.** Each instance gets a generated `redis.conf` on the host (`workspaces/redis-instances/<container>/redis.conf`, override with `REDIS_INSTANCE_CONFIG_DIR`), chmod 600, mounted **read-only** at `/usr/local/etc/redis/redis.conf`. It carries `requirepass`, `maxmemory`, `maxmemory-policy`, the persistence mode, and `rename-command` lines removing `CONFIG`, `FLUSHALL`, `FLUSHDB`, `DEBUG` and `SHUTDOWN`. The password therefore never appears in a command-line argument, environment variable or `docker inspect` field.
+- **Config file, not flags.** Each instance gets a generated `redis.conf` on the host (`workspaces/redis-instances/<container>/redis.conf`, override with `REDIS_INSTANCE_CONFIG_DIR`), mounted **read-only** at `/usr/local/etc/redis/redis.conf`. The per-instance directory is `0700` and the file `0644`: the Redis/Valkey image drops to its unprivileged user before starting the server, so a root-owned `0600` file would be unreadable inside the container, while the private directory keeps the password file inaccessible to other host users. It carries `requirepass`, `maxmemory`, `maxmemory-policy`, the persistence mode, and `rename-command` lines removing `CONFIG`, `FLUSHALL`, `FLUSHDB`, `DEBUG` and `SHUTDOWN`. The password therefore never appears in a command-line argument, environment variable or `docker inspect` field.
 - **Health checks read the password from the config file** (`sh -c 'PW=$(sed -n "s/^requirepass //p" …)'`) — the `docker exec` snippet (`_CLI_SNIPPET`) never interpolates the password itself, so it stays out of host `ps` output too.
-- **Container**: `traefik-net` only (no published host port), `--restart unless-stopped`, named volume `<container>-data:/data`, Docker memory limit = `memoryLimitMb + 32 MB` headroom (a background fork/AOF rewrite briefly doubles memory; OOM-killing the container for doing what it was told would look like a crash). Docker's `--memory-swap` is pinned equal so no swap escape hatch exists.
+- **Container**: `vexlyx-apps` only (no published host port), `--restart unless-stopped`, named volume `<container>-data:/data`, Docker memory limit = `memoryLimitMb + 32 MB` headroom (a background fork/AOF rewrite briefly doubles memory; OOM-killing the container for doing what it was told would look like a crash). Docker's `--memory-swap` is pinned equal so no swap escape hatch exists. It never joins the panel network (`traefik-net`), which is reserved for panel services.
 - **Commands**: `create_instance` (refuses to overwrite an existing container, waits for `healthy`, cleans up config on failure), `recreate_instance` (used for limit changes and password rotation — container replaced, **same volume**, hostname preserved), `delete_instance` (container + volume + config dir; reports `TEARDOWN_FAILED` instead of pretending success if the container survives), `start/stop/restart_instance`, `stats_instance` (parses `INFO` into JSON: used memory, % of maxmemory, key count, clients, evicted keys, uptime).
 - Validation: identifiers, `[A-Za-z0-9]{16,128}` passwords (they are written verbatim into a config file, so the charset must never be able to alter its structure), image allowlist, eviction policy, persistence mode, memory bounds.
 
@@ -70,7 +70,7 @@ If `projectId` is set and `autoInjectEnv` is true, the service writes `REDIS_URL
 
 | Env var | Default | Purpose |
 | --- | --- | --- |
-| `REDIS_INSTANCE_CONFIG_DIR` | `<repo>/workspaces/redis-instances` | Host dir for per-instance `redis.conf` files (chmod 600) |
+| `REDIS_INSTANCE_CONFIG_DIR` | `<repo>/workspaces/redis-instances` | Host dir for per-instance `redis.conf` files (per-instance directory `0700`) |
 | `REDIS_INSTANCE_MAX_MEMORY_MB` | `1024` | Admin cap on a single instance's `memoryLimitMb` (400 `REDIS_MEMORY_LIMIT_TOO_HIGH` above it) |
 
 `REDIS_CONTAINER_NAME` (F5.6) remains the **panel's own** Redis and is never used for tenant data.
@@ -83,6 +83,6 @@ If `projectId` is set and `autoInjectEnv` is true, the service writes `REDIS_URL
 ## Risks and mitigations
 
 - **Orphaned container behind a deleted record** → delete tears down first, keeps the row on failure; create cleans up if the row insert fails.
-- **Password leakage** → config-file-only storage (chmod 600), health/stats snippets read it in-container, audit logs and list responses never carry it.
+- **Password leakage** → config-file-only storage (file `0644` inside a `0700` directory), health/stats snippets read it in-container, audit logs and list responses never carry it.
 - **Unpinned images / licence drift** → enum + server-side allowlist; `latest` rejected.
-- **Tenant reaching the host or other tenants** → no published ports, `traefik-net` only, `protected-mode yes`, dangerous commands renamed away.
+- **Tenant reaching the host or other tenants** → no published ports, `vexlyx-apps` only (never the panel network), `protected-mode yes`, dangerous commands renamed away.

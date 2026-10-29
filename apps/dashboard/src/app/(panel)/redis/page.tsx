@@ -69,8 +69,8 @@ import type {
   RedisEvictionPolicy,
   RedisPersistence,
   RedisImage,
-  Project,
-} from "@vexlyx/shared";
+} from "@vexlyx/shared/schemas/redisInstances";
+import type { Project } from "@vexlyx/shared";
 
 // ---------------------------------------------------------------------------
 // Helpers & constants
@@ -262,9 +262,12 @@ export default function RedisInstancesPage() {
     try {
       const [instRes, projRes] = await Promise.all([
         fetchAPI<RedisInstanceListResponse>("/api/redis"),
-        fetchAPI<{ projects: Project[] }>("/api/projects?limit=100").catch(() => ({
-          projects: [],
-        })),
+        fetchAPI<{ projects: Project[] }>("/api/projects?limit=100").catch(
+          (err: unknown) => {
+            console.error("Failed to load projects for the Redis page:", err);
+            return { projects: [] };
+          },
+        ),
       ]);
       setInstances(instRes.instances ?? []);
       setProjects(projRes.projects ?? []);
@@ -522,7 +525,6 @@ export default function RedisInstancesPage() {
 
   return (
     <div className="space-y-6">
-      {/* Top Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-foreground">
@@ -560,7 +562,6 @@ export default function RedisInstancesPage() {
 
       <Separator />
 
-      {/* Filter and search bar */}
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div className="flex flex-1 items-center gap-3 max-w-md">
           <div className="relative flex-1">
@@ -575,7 +576,6 @@ export default function RedisInstancesPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Status filter toggle */}
           <div className="flex items-center rounded-lg border border-border bg-card p-1">
             {(["ALL", "RUNNING", "STOPPED"] as const).map((status) => (
               <button
@@ -597,7 +597,6 @@ export default function RedisInstancesPage() {
             ))}
           </div>
 
-          {/* Refresh Button */}
           <Button
             variant="outline"
             size="icon"
@@ -611,7 +610,6 @@ export default function RedisInstancesPage() {
         </div>
       </div>
 
-      {/* Main Instance Grid */}
       {isLoading ? (
         <RedisListSkeleton />
       ) : filtered.length === 0 ? (
@@ -718,7 +716,6 @@ export default function RedisInstancesPage() {
                     </div>
                   </div>
 
-                  {/* Actions row */}
                   <div className="flex items-center gap-2 pt-1">
                     <Button
                       variant="outline"
@@ -789,7 +786,6 @@ export default function RedisInstancesPage() {
         </div>
       )}
 
-      {/* ── Create Instance Dialog ────────────────────────────────────────── */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="sm:max-w-md">
           <form onSubmit={handleCreate}>
@@ -805,7 +801,6 @@ export default function RedisInstancesPage() {
             </DialogHeader>
 
             <div className="space-y-4 py-4">
-              {/* Image selection */}
               <div className="space-y-2">
                 <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Image (pinned)
@@ -816,7 +811,7 @@ export default function RedisInstancesPage() {
                     onClick={() => setCreateImage("valkey/valkey:8.0")}
                     aria-pressed={createImage === "valkey/valkey:8.0"}
                     className={cn(
-                      "cursor-pointer rounded-lg border p-3.5 transition-all text-center select-none",
+                      "cursor-pointer rounded-lg border p-3.5 transition-all text-center select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
                       createImage === "valkey/valkey:8.0"
                         ? "border-primary bg-primary/10 text-foreground ring-1 ring-primary"
                         : "border-border bg-card hover:bg-muted/50 text-muted-foreground",
@@ -835,7 +830,7 @@ export default function RedisInstancesPage() {
                     onClick={() => setCreateImage("redis:7.2-alpine")}
                     aria-pressed={createImage === "redis:7.2-alpine"}
                     className={cn(
-                      "cursor-pointer rounded-lg border p-3.5 transition-all text-center select-none",
+                      "cursor-pointer rounded-lg border p-3.5 transition-all text-center select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
                       createImage === "redis:7.2-alpine"
                         ? "border-primary bg-primary/10 text-foreground ring-1 ring-primary"
                         : "border-border bg-card hover:bg-muted/50 text-muted-foreground",
@@ -851,7 +846,6 @@ export default function RedisInstancesPage() {
                 </div>
               </div>
 
-              {/* Instance name */}
               <div className="space-y-1.5">
                 <Label
                   htmlFor="create-redis-name"
@@ -873,7 +867,6 @@ export default function RedisInstancesPage() {
                 </p>
               </div>
 
-              {/* Preset */}
               <div className="space-y-2">
                 <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Preset
@@ -886,7 +879,7 @@ export default function RedisInstancesPage() {
                       onClick={() => applyPreset(preset.key)}
                       aria-pressed={createPreset === preset.key}
                       className={cn(
-                        "cursor-pointer rounded-lg border p-2.5 transition-all text-center select-none",
+                        "cursor-pointer rounded-lg border p-2.5 transition-all text-center select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
                         createPreset === preset.key
                           ? "border-primary bg-primary/10 text-foreground ring-1 ring-primary"
                           : "border-border bg-card hover:bg-muted/50 text-muted-foreground",
@@ -903,7 +896,6 @@ export default function RedisInstancesPage() {
                 </div>
               </div>
 
-              {/* Memory limit */}
               <div className="space-y-1.5">
                 <Label
                   htmlFor="create-redis-memory"
@@ -926,7 +918,6 @@ export default function RedisInstancesPage() {
                 </p>
               </div>
 
-              {/* Advanced: eviction + persistence */}
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <Label className="text-xs font-medium text-foreground">
@@ -975,7 +966,6 @@ export default function RedisInstancesPage() {
                 </div>
               </div>
 
-              {/* Attach to project */}
               <div className="space-y-1.5">
                 <Label
                   htmlFor="create-redis-project"
@@ -1004,7 +994,6 @@ export default function RedisInstancesPage() {
                 </Select>
               </div>
 
-              {/* Auto-inject env vars checkbox */}
               {createProjectId !== "none" && (
                 <div className="flex items-start gap-2.5 rounded-lg border border-border/80 bg-muted/30 p-3">
                   <input
@@ -1057,7 +1046,6 @@ export default function RedisInstancesPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Detail Dialog: connection URI + stats ─────────────────────────── */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
         <DialogContent className="sm:max-w-xl max-h-[85vh] overflow-y-auto">
           {detail && (
@@ -1084,7 +1072,6 @@ export default function RedisInstancesPage() {
               </DialogHeader>
 
               <div className="space-y-4 py-3 text-sm">
-                {/* Connection URL */}
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
                     <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -1136,7 +1123,6 @@ export default function RedisInstancesPage() {
 
                 <Separator />
 
-                {/* Live stats */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -1212,7 +1198,6 @@ export default function RedisInstancesPage() {
 
                 <Separator />
 
-                {/* Settings summary */}
                 <div className="rounded-lg border border-border divide-y divide-border bg-card text-xs">
                   <div className="flex items-center justify-between p-2.5">
                     <span className="text-muted-foreground">Image</span>
@@ -1280,7 +1265,6 @@ export default function RedisInstancesPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Configure Dialog ──────────────────────────────────────────────── */}
       <Dialog
         open={!!configInstance}
         onOpenChange={(open) => !open && setConfigInstance(null)}
@@ -1381,7 +1365,6 @@ export default function RedisInstancesPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Delete Confirmation Dialog ────────────────────────────────────── */}
       <Dialog
         open={!!deleteTarget}
         onOpenChange={(open) => !open && setDeleteTarget(null)}

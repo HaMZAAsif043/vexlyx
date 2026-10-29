@@ -9,7 +9,7 @@ import {
   type RedisInstanceSummary,
   type RedisInstanceDetail,
   type RedisInstanceStats,
-} from "@vexlyx/shared";
+} from "@vexlyx/shared/schemas/redisInstances";
 
 export const RedisInstanceIdParamSchema = z.object({
   id: z.string().min(1, "Redis instance ID is required"),
