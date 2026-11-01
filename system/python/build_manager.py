@@ -1015,6 +1015,33 @@ def detect_framework_and_commands(project_dir: Path, plan: dict) -> tuple[str, s
     return (str(framework), build_cmd, start_cmd, detected_type)
 
 
+def derive_install_cmd(project_dir: Path, detected_type: str | None) -> str | None:
+    """
+    Propose the Nixpacks install command for a project from its lockfiles.
+
+    Shared by cmd_plan, so the dashboard can show what auto-detection picks,
+    and by cmd_build, where an explicit payload override wins and this only
+    fills the gap. Returning None leaves Nixpacks' own provider default in
+    charge, which is the correct answer for a plain npm project.
+    """
+    # Python builds need a venv plus setuptools pinned below 70 — the image's
+    # default toolchain breaks older requirements files without it.
+    if detected_type == "PYTHON":
+        if (project_dir / "requirements.txt").is_file():
+            return "python -m venv --copies /opt/venv && . /opt/venv/bin/activate && pip install 'setuptools<70' && pip install -r requirements.txt"
+        if (project_dir / "pyproject.toml").is_file():
+            return "python -m venv --copies /opt/venv && . /opt/venv/bin/activate && pip install 'setuptools<70' && pip install ."
+        return None
+
+    if (project_dir / "bun.lockb").is_file() or (project_dir / "bun.lock").is_file():
+        return "bun install"
+    if (project_dir / "pnpm-lock.yaml").is_file():
+        return "pnpm install"
+    if (project_dir / "yarn.lock").is_file():
+        return "yarn install"
+    return None
+
+
 def cmd_plan(payload: dict) -> None:
     """
     Detect the framework and proposed build command for a project directory.
@@ -1024,7 +1051,8 @@ def cmd_plan(payload: dict) -> None:
       envVars    — optional dict of environment variables
 
     Returns a single JSON object:
-      { framework: string, buildCmd: string | null, startCmd: string | null, detectedType: string | null }
+      { framework: string, buildCmd: string | null, startCmd: string | null,
+        installCmd: string | null, detectedType: string | null }
     """
     project_dir = require_field(payload, "projectDir")
     env_vars = payload.get("envVars")
@@ -1043,6 +1071,9 @@ def cmd_plan(payload: dict) -> None:
         df_info = parse_dockerfile_info(dockerfile_p)
         respond({
             "framework": "dockerfile",
+            # A Dockerfile owns its own dependency step; Nixpacks is never
+            # invoked, so there is no install command to propose.
+            "installCmd": None,
             "buildCmd": None,
             "startCmd": None,
             "detectedType": "DOCKER",
@@ -1108,6 +1139,7 @@ def cmd_plan(payload: dict) -> None:
 
     respond({
         "framework": framework,
+        "installCmd": derive_install_cmd(project_path, detected_type),
         "buildCmd": build_cmd,
         "startCmd": start_cmd,
         "detectedType": detected_type,
@@ -1121,6 +1153,7 @@ def cmd_build(payload: dict) -> None:
     Payload fields:
       projectDir — absolute path to the cloned project source
       imageName  — Docker image name/tag (e.g. vexlyx-<projectId>)
+      installCmd — optional install command override (passed via --install-cmd)
       buildCmd   — optional build command override (passed via --build-cmd)
       startCmd   — optional start command override (passed via --start-cmd)
       cacheKey   — optional cache key for incremental builds (passed via --cache-key)
@@ -1228,18 +1261,8 @@ def cmd_build(payload: dict) -> None:
         log_line("[vexlyx] No composer.json found — created a minimal one so Nixpacks can build this PHP project")
 
     # For Python projects, ensure setuptools<70 is installed into venv
-    if detected_type == "PYTHON" and not install_cmd:
-        if (project_path / "requirements.txt").is_file():
-            install_cmd = "python -m venv --copies /opt/venv && . /opt/venv/bin/activate && pip install 'setuptools<70' && pip install -r requirements.txt"
-        elif (project_path / "pyproject.toml").is_file():
-            install_cmd = "python -m venv --copies /opt/venv && . /opt/venv/bin/activate && pip install 'setuptools<70' && pip install ."
-    elif not install_cmd:
-        if (project_path / "bun.lockb").is_file() or (project_path / "bun.lock").is_file():
-            install_cmd = "bun install"
-        elif (project_path / "pnpm-lock.yaml").is_file():
-            install_cmd = "pnpm install"
-        elif (project_path / "yarn.lock").is_file():
-            install_cmd = "yarn install"
+    if not install_cmd:
+        install_cmd = derive_install_cmd(project_path, detected_type)
 
     cmd = [nixpacks_bin, "build", project_dir, "--name", image_name]
 

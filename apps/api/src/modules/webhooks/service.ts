@@ -98,6 +98,7 @@ export class WebhookService {
         userId: true,
         gitUrl: true,
         branch: true,
+        installCmd: true,
         buildCmd: true,
         webhookSecret: true,
         deletedAt: true,
@@ -157,6 +158,7 @@ export class WebhookService {
       id: string;
       userId: string;
       branch: string;
+      installCmd: string | null;
       buildCmd: string | null;
     },
     event: string,
@@ -212,6 +214,7 @@ export class WebhookService {
             userId: project.userId,
             projectDir: resolve(env.PROJECTS_DIR, project.id),
             imageName: `${env.NIXPACKS_IMAGE_PREFIX}-${project.id}`,
+            installCmd: project.installCmd ?? null,
             buildCmd: project.buildCmd ?? null,
           },
         },

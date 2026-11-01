@@ -6,8 +6,38 @@ All notable changes to Vexlyx are documented here. The format follows [Keep a Ch
 
 ### Fixed
 
-- Connecting or updating a git project no longer deletes files git does not track. A failed fetch, checkout or pull (network, authentication, local changes) now fails with its error and leaves the workspace untouched; previously it re-cloned the project and lost uploads and other untracked files. Switching a project to another repository, or connecting git to a workspace that already has files, keeps the old workspace next to the project as `<id>.replaced-<timestamp>` (reported as `previousWorkspace`) and restores it if the clone fails.
-- Switching a project to a branch that was created after the first clone no longer fails with `pathspec ... did not match`: the sync now fetches the branch into its remote-tracking ref before checking it out, and a failed update reports one clear error instead of a stale document the API cannot parse (#153).
+- A container that fails its own healthcheck is no longer reported as a healthy deployment. The panel read only Docker's `.State.Status`, and that says *the process is up* — an app that binds `127.0.0.1` instead of the address Traefik routes to keeps its process up, keeps its in-container probe passing, and answers nothing, so the project page said "Running" while the domain returned 502. `docker inspect` now reads `.State.Health` alongside the status in the same call, and the project page shows **Unhealthy** with the reason instead of **Running**, or **Waiting for healthcheck** while the image is still inside its start period. Images that declare no healthcheck at all report nothing rather than a false pass (#202).
+- Switching a project to a branch created after the first clone now fetches its remote-tracking ref before checkout, preventing the “pathspec did not match” error. Failed updates preserve existing files and return one JSON response (#153).
+
+### Upgrade notes
+
+- Re-run the installer to rebuild the API and dashboard. No schema change: the health status is read live from Docker and is not stored, and `GET /api/projects/:id/container/status` only gains an extra `containerHealth` field (`healthy` / `unhealthy` / `starting`, or `null` when the image declares no healthcheck).
+
+## [0.4.4] - 2026-11-01
+
+### Added
+
+- A project now has **Build Settings** on its Deploy tab: install, build and start commands plus the container port, each left blank to keep auto-detection in charge. **Detect** runs Nixpacks' plan over the current source and shows what each blank field would use, **Save & Deploy** deploys with what you typed, and **Auto** clears every override at once. `buildCmd`, `startCmd` and `port` already existed on the project and were shown read-only, with no panel to edit them, and an install command was accepted by the build script but never sent to it by the API — so `nixpacks build --install-cmd` had no effect on any deploy (#200, F5.34).
+
+### Upgrade notes
+
+- Re-run the installer. It applies one new nullable column (`projects.install_cmd`) and rebuilds the API and dashboard. Existing projects keep the commands they had, and nothing about a running site changes until you set an override and redeploy.
+
+## [0.4.3] - 2026-10-30
+
+### Added
+
+- Administrators now see an in-panel notice when a newer stable release is published, linking to its release notes and the upgrade guide. The API compares the running version with the newest GitHub release and caches the answer in Redis for six hours (a failed check for one), so the dashboard never calls GitHub itself. The check is display-only: nothing is downloaded or installed, and it stays separate from anonymous telemetry (F5.32). Set `UPDATE_CHECK_ENABLED=false` on an air-gapped server, or `UPDATE_CHECK_REPO` to publish from a different repository.
+
+### Fixed
+
+- WordPress plugin and theme uploads accept real archives again: the panel streams them as `multipart/form-data` instead of base64 inside a JSON body, so a several-megabyte theme no longer fails with `413 Request body is too large`. Temporary archives are removed on every exit path, concurrent uploads of the same filename no longer collide, and client filenames are sanitized before they reach the disk (#154).
+- Connecting or updating a git project no longer deletes files git does not track. A failed fetch, checkout or pull (network, authentication, local changes) now fails with its error and leaves the workspace untouched; previously it re-cloned the project and lost uploads and other untracked files. Switching a project to another repository, or connecting git to a workspace that already has files, keeps the old workspace next to the project as `<id>.replaced-<timestamp>` (reported as `previousWorkspace`) and restores it if the clone fails (#182).
+
+### Upgrade notes
+
+- Re-run the installer. There is no schema or configuration change: it rebuilds the API and dashboard containers, and the update notice appears for administrators on the next sign-in.
+- If the panel cannot reach `api.github.com`, the notice stays hidden and nothing else is affected; `UPDATE_CHECK_ENABLED=false` skips the lookup entirely.
 
 ## [0.4.2] - 2026-10-26
 

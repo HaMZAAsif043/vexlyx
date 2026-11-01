@@ -918,24 +918,43 @@ def cmd_status(payload: dict) -> None:
     compose_dir = str(Path(project_dir) / "deploy")
 
     if not Path(compose_dir).is_dir():
-        respond({"containerStatus": "not_found", "containerId": None})
+        respond({"containerStatus": "not_found", "containerHealth": None, "containerId": None})
         return
 
     container_id = get_container_id(compose_dir, docker_bin, project_type)
     if not container_id:
-        respond({"containerStatus": "not_found", "containerId": None})
+        respond({"containerStatus": "not_found", "containerHealth": None, "containerId": None})
         return
 
+    # Both fields in one inspect: .State.Status alone calls a failing-healthcheck
+    # container a healthy deployment (#202).
     result = run_bounded(
         QUICK_TIMEOUT,
-        [docker_bin, "inspect", "--format", "{{.State.Status}}", container_id],
+        [
+            docker_bin,
+            "inspect",
+            "--format",
+            "{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}",
+            container_id,
+        ],
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
     )
-    status = result.stdout.strip() if result.returncode == 0 else "unknown"
-    respond({"containerStatus": status, "containerId": container_id})
+    if result.returncode != 0:
+        respond({"containerStatus": "unknown", "containerHealth": None, "containerId": container_id})
+        return
+
+    status, _, health = result.stdout.strip().partition("|")
+    respond(
+        {
+            "containerStatus": status.strip() or "unknown",
+            # An empty health means the image has no HEALTHCHECK, not that a probe failed.
+            "containerHealth": health.strip() or None,
+            "containerId": container_id,
+        }
+    )
 
 
 def cmd_logs(payload: dict) -> None:

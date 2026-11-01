@@ -1,10 +1,11 @@
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------
-// Trigger build — optional buildCmd overrides the project-level default
+// Trigger build — optional overrides of the project-level defaults
 // ---------------------------------------------------------------------------
 
 export const TriggerBuildBodySchema = z.object({
+  installCmd: z.string().max(500).optional(),
   buildCmd: z.string().max(500).optional(),
 });
 
@@ -31,5 +32,6 @@ export interface BuildJobData {
   userId: string;
   projectDir: string;
   imageName: string;
+  installCmd: string | null;
   buildCmd: string | null;
 }

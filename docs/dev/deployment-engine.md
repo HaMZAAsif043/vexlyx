@@ -79,7 +79,7 @@ API (apps/api/src/modules/deploy/)
 | [`packages/shared/src/schemas/projects.ts`](../packages/shared/src/schemas/projects.ts) | Shared `DeployBodySchema` and `ContainerActionSchema` |
 | [`packages/shared/src/types/index.ts`](../packages/shared/src/types/index.ts) | Extended `Project` type with container fields (`containerId`, `containerStatus`, etc.) |
 | [`apps/dashboard/src/hooks/useDeploy.ts`](../apps/dashboard/src/hooks/useDeploy.ts) | React hooks: `useContainerAction`, `useContainerStatus`, `useContainerLogs` |
-| [`apps/dashboard/src/components/projects/ContainerControls.tsx`](../apps/dashboard/src/components/projects/ContainerControls.tsx) | Live container status badge, start/stop/restart/remove action buttons, endpoint link, and runtime log viewer |
+| [`apps/dashboard/src/components/projects/ContainerControls.tsx`](../apps/dashboard/src/components/projects/ContainerControls.tsx) | Live container status badge (including Docker's unhealthy/starting states), start/stop/restart/remove action buttons, endpoint link, and runtime log viewer |
 
 ---
 
@@ -140,9 +140,16 @@ Returns real-time container status from Docker inspect.
   ```json
   {
     "containerStatus": "running",
+    "containerHealth": "healthy",
     "containerId": "a1b2c3d4e5f6"
   }
   ```
+
+  `containerHealth` is Docker's own `HEALTHCHECK` verdict — `healthy`, `unhealthy` or
+  `starting` — and `null` when the image declares no healthcheck. It is read live and not
+  stored on `Project`, because `.State.Status` alone only says the process is up: an app
+  bound to `127.0.0.1` instead of `$HOST` keeps reporting `running` while its domain returns
+  502 (#202).
 
 ### `GET /api/projects/:id/logs?tail=100`
 Fetches runtime logs from the container.
