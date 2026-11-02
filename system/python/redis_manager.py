@@ -169,9 +169,12 @@ HEALTH_WAIT_TIMEOUT = 90  # wait for the healthcheck to report healthy
 # blessed alternative and is exported only for the exec'd process, never for
 # the container itself (so it stays out of `docker inspect` too). Piping AUTH
 # over stdin was rejected: Docker healthchecks run with no stdin attached, so
-# the CLI would exit before sending its command.
+# the CLI would exit before sending its command. The `tr -d "\r"` tolerates
+# configs written by older builds on Windows (CRLF): the server stores the
+# password without the carriage return, so reading it back with one attached
+# authenticates as "pass\r" and every CLI call gets NOAUTH (#170 review).
 _CLI_SNIPPET = (
-    f'PW=$(sed -n "s/^requirepass //p" {CONFIG_RELPATH}); '
+    f'PW=$(sed -n "s/^requirepass //p" {CONFIG_RELPATH} | tr -d "\\r"); '
     'CLI=$(command -v valkey-cli || command -v redis-cli) || exit 127; '
     'REDISCLI_AUTH="$PW" exec "$CLI" --no-auth-warning {}'
 )
@@ -300,10 +303,14 @@ def write_config(
     # through the bind mount (#170 review).
     os.chmod(config_dir, 0o700)
     path = config_dir / "redis.conf"
-    path.write_text(
-        build_redis_config(password, memory_limit_mb, eviction_policy, persistence),
-        encoding="utf-8",
-    )
+    # newline="\n": Windows text mode would otherwise translate \n to \r\n and
+    # every directive (requirepass, maxmemory-policy) would carry a trailing
+    # carriage return — the CLI then authenticates with the wrong password
+    # while the instance looks RUNNING (#170 review).
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(
+            build_redis_config(password, memory_limit_mb, eviction_policy, persistence)
+        )
     os.chmod(path, 0o644)
     return path
 
@@ -404,7 +411,10 @@ def run_container(
     memory_limit_mb: int,
 ) -> None:
     docker_memory_mb = memory_limit_mb + DOCKER_MEMORY_HEADROOM_MB
-    health_cmd = "sh -c '" + _CLI_SNIPPET.format("ping") + "'"
+    # redis-cli exits 0 even when the server answers NOAUTH or the connection
+    # fails, so a bare `ping` would report an unauthenticated instance as
+    # healthy. The health check must see the actual PONG (#170 review).
+    health_cmd = "sh -c '" + _CLI_SNIPPET.format("ping") + " | grep -qx PONG'"
     cmd = [
         docker_bin,
         "run",
@@ -660,6 +670,16 @@ def cmd_stats_instance(payload: dict) -> None:
     if res.returncode != 0:
         fail(
             f"Failed to read INFO from '{container_name}': {res.stderr.strip() or res.stdout.strip()}",
+            "STATS_FAILED",
+        )
+
+    # redis-cli exits 0 even for NOAUTH/error replies: an INFO reply that
+    # lacks the field the server always sends would otherwise be reported as
+    # an all-zero success (#170 review).
+    if "used_memory:" not in res.stdout:
+        fail(
+            f"INFO from '{container_name}' carried no data (authentication failed?): "
+            f"{(res.stderr or res.stdout or '').strip()[:300]}",
             "STATS_FAILED",
         )
 

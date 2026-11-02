@@ -328,6 +328,60 @@ class TestConfigPermissions(ManagerCommandTestCase):
 
 
 
+class TestConfigLineEndings(ManagerCommandTestCase):
+    """Windows text mode used to translate \\n to \\r\\n, so every directive
+    carried a trailing carriage return: the CLI then authenticated with
+    "pass\\r" and got NOAUTH while the instance reported RUNNING (#170)."""
+
+    def test_config_file_is_lf_only(self):
+        path = manager.write_config(
+            VALID_PAYLOAD["containerName"], VALID_PAYLOAD["password"], 64, "noeviction", "RDB"
+        )
+        raw = path.read_bytes()
+        self.assertNotIn(b"\r", raw, "CRLF in redis.conf breaks requirepass auth")
+        self.assertTrue(raw.endswith(b"\n"))
+        self.assertIn(b"requirepass " + VALID_PAYLOAD["password"].encode("ascii"), raw)
+
+    def test_password_snippet_strips_carriage_returns_from_legacy_configs(self):
+        # Configs written by earlier builds on Windows still contain CRLF;
+        # reading requirepass with its trailing \\r authenticates as the wrong
+        # password (the reviewer confirmed trimming it turns NOAUTH into PONG).
+        self.assertIn("tr -d", manager._CLI_SNIPPET)
+        self.assertIn("requirepass", manager._CLI_SNIPPET)
+
+
+class TestAuthFailureIsNeverReportedHealthy(ManagerCommandTestCase):
+    """redis-cli exits 0 even on NOAUTH replies, so exit codes alone made an
+    unauthenticated instance look healthy with all-zero stats (#170)."""
+
+    CONTAINER = VALID_PAYLOAD["containerName"]
+
+    def test_health_command_requires_an_actual_pong(self):
+        stub = self.use_stub()
+        manager.write_config(self.CONTAINER, VALID_PAYLOAD["password"], 64, "noeviction", "RDB")
+        manager.run_container("docker", self.CONTAINER, "valkey/valkey:8.0", 64)
+
+        run_cmd = next(cmd for cmd in stub.calls if cmd[1] == "run")
+        health = run_cmd[run_cmd.index("--health-cmd") + 1]
+        # An auth failure must fail the healthcheck: the reply is checked,
+        # not just redis-cli's exit code, and legacy CRLF configs still auth.
+        self.assertIn("grep -qx PONG", health)
+        self.assertIn("tr -d", health)
+
+    def test_stats_rejects_an_info_reply_without_data(self):
+        stub = self.use_stub(
+            (lambda c: c[1] == "inspect", cp(rc=0, stdout="running")),
+            (lambda c: c[1] == "exec", cp(rc=0, stdout="(error) NOAUTH Authentication required.\n")),
+        )
+
+        code, result = self.run_cmd({"command": "stats_instance", "containerName": self.CONTAINER})
+
+        self.assertEqual(code, 1)
+        self.assertEqual(result.get("code"), "STATS_FAILED")
+        self.assertNotIn("usedMemoryBytes", result)
+        self.assertTrue(stub.calls)
+
+
 class TestRemoveContainerConfidence(ManagerCommandTestCase):
     """A Docker outage must never look like a successful removal."""
 
@@ -499,10 +553,41 @@ class TestRedisLifecycle(unittest.TestCase):
         self.assertTrue(result.get("success"))
 
         try:
+            # Authenticated round-trip through the mounted config: health now
+            # requires a real PONG and stats a real INFO reply, so NOAUTH
+            # (e.g. from a legacy CRLF config) can never look like a working
+            # instance (#170 review).
+            docker_bin = shutil.which("docker")
+            ping = subprocess.run(
+                [docker_bin, "exec", container, "sh", "-c", manager._CLI_SNIPPET.format("ping")],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(ping.returncode, 0, ping.stderr)
+            self.assertIn("PONG", ping.stdout)
+
+            probe = subprocess.run(
+                [
+                    docker_bin,
+                    "exec",
+                    container,
+                    "sh",
+                    "-c",
+                    manager._CLI_SNIPPET.format("set vexlyx:unittest probe"),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(probe.returncode, 0, probe.stderr)
+            self.assertIn("OK", probe.stdout)
+
             code, result, _ = run_py_script({"command": "stats_instance", "containerName": container})
             self.assertEqual(code, 0, f"stats failed: {result}")
             self.assertIn("usedMemoryBytes", result)
             self.assertGreaterEqual(result["uptimeSeconds"], 0)
+            self.assertGreaterEqual(result["totalKeys"], 1, "the probe key must be counted")
         finally:
             code, result, _ = run_py_script({"command": "delete_instance", "containerName": container})
             self.assertEqual(code, 0, f"delete failed: {result}")

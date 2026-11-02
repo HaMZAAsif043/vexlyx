@@ -224,25 +224,69 @@ describe("RedisInstanceService.create (F5.30)", () => {
     expect(prisma.redisInstance.delete).toHaveBeenCalledWith({ where: { id: INSTANCE_ID } });
   });
 
-  it("reports rollback failures instead of swallowing them", async () => {
+  it("keeps the reservation row marked ERROR when provisioning and cleanup both fail", async () => {
+    // #170 review: the row is the only record of a container that may still
+    // exist — releasing it after a failed rollback hid surviving resources.
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
       spawnMock.mockImplementation(() =>
         scriptResult(JSON.stringify({ error: "boom", code: "CREATE_FAILED" }), 1),
       );
       const { prisma, service } = fixture({}, null);
-      prisma.redisInstance.delete.mockRejectedValueOnce(new Error("db down"));
 
       await expect(service.create(USER_ID, CREATE_INPUT)).rejects.toMatchObject({ code: "CREATE_FAILED" });
 
-      // Both the teardown failure (container name included) and the failed
-      // reservation release are reported, and the original error still wins.
+      // The original provisioning error still wins, the row (and its quota
+      // slot) survives with a visible ERROR status, and nothing is deleted.
+      expect(prisma.redisInstance.delete).not.toHaveBeenCalled();
+      expect(prisma.redisInstance.update).toHaveBeenCalledWith({
+        where: { id: INSTANCE_ID },
+        data: { status: "ERROR" },
+      });
       const messages = consoleError.mock.calls.map((args) => String(args[0]));
       expect(messages.some((m) => m.includes("rollback of container 'vexlyx-redis-"))).toBe(true);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("reports a failed ERROR-status write instead of swallowing it, still keeping the row", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      spawnMock.mockImplementation(() =>
+        scriptResult(JSON.stringify({ error: "boom", code: "CREATE_FAILED" }), 1),
+      );
+      const { prisma, service } = fixture({}, null);
+      prisma.redisInstance.update.mockRejectedValueOnce(new Error("db down"));
+
+      await expect(service.create(USER_ID, CREATE_INPUT)).rejects.toMatchObject({ code: "CREATE_FAILED" });
+
+      expect(prisma.redisInstance.delete).not.toHaveBeenCalled();
+      const messages = consoleError.mock.calls.map((args) => String(args[0]));
       expect(messages.some((m) => m.includes(INSTANCE_ID))).toBe(true);
     } finally {
       consoleError.mockRestore();
     }
+  });
+
+  it("accepts log/progress lines on stdout before the result JSON (#170)", async () => {
+    // redis_manager.py writes one JSON document to stdout and logs to stderr,
+    // but the API must honor the manager's actual stdout contract: stray
+    // lines before the result can never fail a successful operation
+    // (REDIS_SYSTEM_INVALID_JSON used to drop the created record).
+    spawnMock.mockReturnValue(
+      scriptResult(
+        'progress line\n{"log":"starting container"}\n' +
+          JSON.stringify({ success: true, container: CONTAINER }) +
+          "\n",
+        0,
+      ),
+    );
+    const { service } = fixture({}, null);
+
+    const result = await service.create(USER_ID, CREATE_INPUT);
+
+    expect(result.connectionUrl).toContain(`@${CONTAINER}:6379`);
   });
 
   it("refuses a memory limit above the admin cap", async () => {
@@ -255,6 +299,45 @@ describe("RedisInstanceService.create (F5.30)", () => {
       }),
     ).rejects.toMatchObject({ code: "REDIS_MEMORY_LIMIT_TOO_HIGH", statusCode: 400 });
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("RedisInstanceService.update persistence guard (#170)", () => {
+  it.each([
+    ["RDB", "AOF"],
+    ["AOF", "RDB"],
+  ] as const)(
+    "rejects switching %s -> %s before touching Docker or the database",
+    async (from, to) => {
+      const { prisma, service } = fixture({ persistence: from });
+
+      await expect(service.update(INSTANCE_ID, USER_ID, { persistence: to })).rejects.toMatchObject({
+        code: "REDIS_PERSISTENCE_CHANGE_UNSUPPORTED",
+        statusCode: 422,
+      });
+
+      // No recreate, no row change: with the container untouched, existing
+      // keys cannot be lost in either direction.
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(prisma.redisInstance.update).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still recreates when the persistence mode is unchanged", async () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    spawnMock.mockReturnValue(scriptResult(JSON.stringify({ success: true }), 0, payloads));
+    const { prisma, service } = fixture();
+
+    await service.update(INSTANCE_ID, USER_ID, { persistence: "RDB", memoryLimitMb: 128 });
+
+    expect(payloads[0]).toMatchObject({
+      command: "recreate_instance",
+      persistence: "RDB",
+      memoryLimitMb: 128,
+    });
+    expect(prisma.redisInstance.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ memoryLimitMb: 128, persistence: "RDB" }) }),
+    );
   });
 });
 

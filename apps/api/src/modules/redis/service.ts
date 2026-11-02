@@ -318,16 +318,28 @@ export class RedisInstanceService {
     } catch (err) {
       // Roll back the reservation and any resources the attempt may have left
       // (the script cleans up after itself, but a timed-out kill can strand a
-      // container). delete_instance is idempotent, and rollback failures are
-      // reported — never swallowed — with the container name, the only handle
-      // left for manual cleanup.
+      // container). delete_instance is idempotent. If teardown cannot be
+      // confirmed, keep the row and its quota slot so the resources remain
+      // visible and manageable.
       try {
         await runPythonCommand({ command: "delete_instance", containerName });
       } catch (cleanupErr) {
         console.error(
-          `[RedisInstanceService] Create of '${input.name}' failed and rollback of container '${containerName}' also failed; remove the container manually:`,
+          `[RedisInstanceService] Create of '${input.name}' failed and rollback of container '${containerName}' also failed; the instance record was kept for retry or manual cleanup:`,
           cleanupErr,
         );
+        try {
+          await this.prisma.redisInstance.update({
+            where: { id: record.id },
+            data: { status: "ERROR" },
+          });
+        } catch (statusErr) {
+          console.error(
+            `[RedisInstanceService] Failed to mark instance reservation '${record.id}' (container '${containerName}') as ERROR after rollback failed:`,
+            statusErr,
+          );
+        }
+        throw err;
       }
       await this.releaseReservation(record.id, containerName);
       throw err;
@@ -555,6 +567,19 @@ export class RedisInstanceService {
     }
     const evictionPolicy = input.evictionPolicy ?? record.evictionPolicy;
     const persistence = input.persistence ?? record.persistence;
+    if (persistence !== record.persistence) {
+      // Switching persistence modes swaps which on-disk format Redis loads
+      // (dump.rdb vs appendonlydir/) without converting the stored data, so
+      // the stale files from the previous mode can silently discard keys —
+      // Redis documents this exact data-loss risk (#170 review). Refuse the
+      // change before Docker or the database is touched; a safe conversion
+      // can lift this later.
+      throw new RedisInstanceError(
+        `Changing the persistence mode is not supported yet: switching '${record.persistence}' to '${persistence}' can discard stored keys. The instance keeps '${record.persistence}'; create a new instance if you need a different mode.`,
+        "REDIS_PERSISTENCE_CHANGE_UNSUPPORTED",
+        422,
+      );
+    }
 
     const plainPassword = this.decryptPassword(record);
     await runPythonCommand({

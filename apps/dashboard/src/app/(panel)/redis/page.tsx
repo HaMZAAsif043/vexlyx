@@ -474,7 +474,6 @@ export default function RedisInstancesPage() {
         body: JSON.stringify({
           memoryLimitMb: Number(configMemory),
           evictionPolicy: configEviction,
-          persistence: configPersistence,
         }),
       });
       toast.success(`Configuration saved for "${configInstance.name}"`);
@@ -1324,23 +1323,16 @@ export default function RedisInstancesPage() {
               <Label className="text-xs font-medium text-foreground">
                 Persistence
               </Label>
-              <Select
-                value={configPersistence}
-                onValueChange={(v) =>
-                  setConfigPersistence(v as RedisPersistence)
-                }
-              >
-                <SelectTrigger className="bg-card border-border text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {PERSISTENCE_OPTIONS.map((mode) => (
-                    <SelectItem key={mode} value={mode}>
-                      {mode}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {/* Read-only: switching modes swaps which on-disk format Redis
+                  loads without converting stored data and can discard keys,
+                  so the API rejects a change (#170 review). */}
+              <div className="flex h-9 items-center rounded-md border border-border bg-card px-3 font-mono text-xs text-muted-foreground">
+                {configPersistence}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Set when the instance is created; changing it is not supported
+                yet (it can lose stored keys).
+              </p>
             </div>
           </div>
 
