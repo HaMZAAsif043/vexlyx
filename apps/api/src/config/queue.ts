@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import fp from "fastify-plugin";
 import { Queue, Worker, type Processor, type JobsOptions } from "bullmq";
 import { env } from "./env.js";
+import { parseRedisUrl } from "./redisConnection.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -15,11 +16,7 @@ declare module "fastify" {
 // ---------------------------------------------------------------------------
 
 function redisConnection() {
-  const url = new URL(env.REDIS_URL);
-  return {
-    host: url.hostname,
-    port: Number(url.port) || 6379,
-  };
+  return parseRedisUrl(env.REDIS_URL);
 }
 
 // ---------------------------------------------------------------------------

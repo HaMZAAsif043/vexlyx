@@ -56,7 +56,7 @@ class GitUrlPolicyTests(unittest.TestCase):
     def test_existing_workspace_fetches_only_validated_origin(self):
         (Path(self.temp.name) / "test" / ".git").mkdir(parents=True)
         git_manager.cmd_clone({**self.payload, "gitUrl": "https://github.com/team/repo"})
-        commands = [call.args[0] for call in self.run.call_args_list]
+        commands = [call.args[0] for call in self.run.call_args_list if "config" not in call.args[0]]
         self.assertEqual(commands[0][-4:], ["remote", "set-url", "origin", "https://github.com/team/repo"])
         self.assertEqual(commands[1][-2:], ["fetch", "origin"])
 

@@ -119,6 +119,23 @@ detect_public_ip() {
   return 1
 }
 
+# show_secret_to_operator LINE — writes LINE to the operator's terminal only,
+# bypassing the install log (run.sh keeps the real stdout on fd 3 before it
+# starts the tee). fd 3 is used only when it is a real terminal: if the
+# installer's stdout was redirected (`> file`, `| tee`, a CI log) fd 3 is that
+# file or pipe, and the secret must not go there. Otherwise it falls back to
+# /dev/tty, and returns 1 when there is no terminal at all; callers must then
+# not print the secret anywhere.
+show_secret_to_operator() {
+  if [[ -t 3 ]]; then
+    printf '%s\n' "$1" >&3
+  elif [[ -c /dev/tty ]] && { true >/dev/tty; } 2>/dev/null; then
+    printf '%s\n' "$1" >/dev/tty
+  else
+    return 1
+  fi
+}
+
 # upsert_secret VAR_NAME VALUE — sets VAR_NAME=VALUE in the persisted secrets
 # file, replacing an existing line for that key or appending one, then
 # updates the current shell's copy too. Unlike generate_secrets() (write
@@ -152,4 +169,32 @@ load_secrets_file() {
       export "${key?}"
     fi
   done < "${VEXLYX_SECRETS_FILE}"
+}
+
+# render_traefik_config TEMPLATE DEST ACME_EMAIL — renders Traefik's static
+# config and sets VEXLYX_TRAEFIK_RESTART_NEEDED=1 when DEST already existed
+# with different content. Static config is only read at start-up, and DEST is
+# a single-file bind mount that `docker compose up -d` does not notice
+# changing, so restart_traefik_if_config_changed has to apply it. DEST is
+# rewritten in place (cat >, never mv): the container is bound to the file's
+# inode, and a replacement file would never reach it.
+render_traefik_config() {
+  local template="$1" dest="$2" email="$3" rendered
+  rendered="$(mktemp)"
+  sed "s/__ACME_EMAIL__/${email}/" "${template}" > "${rendered}"
+  if [[ -f "${dest}" ]] && ! cmp -s "${rendered}" "${dest}"; then
+    VEXLYX_TRAEFIK_RESTART_NEEDED=1
+  fi
+  cat "${rendered}" > "${dest}"
+  rm -f "${rendered}"
+}
+
+# Restarts the shared proxy once, and only if render_traefik_config changed
+# its static config. Every site on the server drops for a few seconds.
+restart_traefik_if_config_changed() {
+  [[ "${VEXLYX_TRAEFIK_RESTART_NEEDED:-}" == "1" ]] || return 0
+  log_info "Traefik's static configuration changed; restarting it once to apply it (sites reconnect within seconds)..."
+  docker restart vexlyx-traefik >/dev/null
+  VEXLYX_TRAEFIK_RESTART_NEEDED=0
+  log_ok "Traefik restarted with the new configuration."
 }

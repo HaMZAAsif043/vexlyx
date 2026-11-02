@@ -1,4 +1,10 @@
 import { z } from "zod";
+import {
+  DEV_REDIS_PASSWORD,
+  DEV_REDIS_URL,
+  parseRedisUrl,
+  redisUrlHasPassword,
+} from "./redisConnection.js";
 
 /**
  * Zod schema defining all required environment variables for the API server.
@@ -13,7 +19,10 @@ const envSchema = z
       .default("development"),
     CORS_ORIGIN: z.string().url().default("http://localhost:3000"),
     DATABASE_URL: z.string().url(),
-    REDIS_URL: z.string().default("redis://localhost:6379"),
+    // Must carry the Redis password (redis://:password@host:6379). Optional
+    // here only so development gets the compose dev default; production
+    // requires it, see the superRefine below.
+    REDIS_URL: z.string().min(1).optional(),
     SESSION_SECRET: z.string().min(32),
     // Key for everything encrypted at rest (#69). Required in production so a
     // SESSION_SECRET leak cannot also decrypt stored credentials, and so
@@ -60,6 +69,18 @@ const envSchema = z
       .enum(["true", "false"])
       .default("false")
       .transform((v) => v === "true"),
+    // In-panel update notices (F5.33). The API asks GitHub for the newest
+    // stable release (cached in Redis for 6 hours) so the dashboard can tell
+    // admins a newer version exists. Disable on air-gapped servers, and point
+    // UPDATE_CHECK_REPO at the repository whose releases you publish from.
+    UPDATE_CHECK_ENABLED: z
+      .enum(["true", "false"])
+      .default("true")
+      .transform((v) => v === "true"),
+    UPDATE_CHECK_REPO: z
+      .string()
+      .regex(/^[\w.-]+\/[\w.-]+$/, "Must be an owner/repo slug")
+      .default("atlantiqshq/vexlyx"),
     // Git integration (F1.3)
     PROJECTS_DIR: z.string().min(1).default("./workspaces/projects"),
     SSH_KEYS_DIR: z.string().min(1).default("./workspaces/keys"),
@@ -71,7 +92,7 @@ const envSchema = z
     // Base domain used to generate per-project Traefik hostnames: {name}.{BASE_DOMAIN}
     BASE_DOMAIN: z.string().min(1).default("vexlyx.localhost"),
     // Default memory limit passed to Docker (e.g. 128m, 256m, 512m)
-    DEPLOY_MEMORY_LIMIT: z.string().min(1).default("128m"),
+    DEPLOY_MEMORY_LIMIT: z.string().min(1).default("512m"),
     // Dynamic host-port range used when no project.port is set
     DEPLOY_PORT_RANGE_START: z.coerce.number().int().min(1024).default(8100),
     DEPLOY_PORT_RANGE_END: z.coerce.number().int().max(65535).default(8999),
@@ -221,6 +242,25 @@ const envSchema = z
       });
     }
     if (value.NODE_ENV === "production") {
+      if (!value.REDIS_URL) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["REDIS_URL"],
+          message: "REDIS_URL is required in production and must include the Redis password (redis://:password@host:6379)",
+        });
+      } else if (!redisUrlHasPassword(value.REDIS_URL)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["REDIS_URL"],
+          message: "REDIS_URL must include a password in production (redis://:password@host:6379)",
+        });
+      } else if (parseRedisUrl(value.REDIS_URL).password === DEV_REDIS_PASSWORD) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["REDIS_URL"],
+          message: "REDIS_URL uses the well-known development password; set REDIS_PASSWORD to a random value",
+        });
+      }
       if (!value.ENCRYPTION_KEY) {
         if (!value.ENCRYPTION_KEY_LEGACY_FALLBACK) {
           ctx.addIssue({
@@ -295,6 +335,7 @@ function validateEnv() {
 
   return {
     ...result.data,
+    REDIS_URL: result.data.REDIS_URL ?? DEV_REDIS_URL,
     EMAIL_TRANSPORT:
       result.data.EMAIL_TRANSPORT ??
       (result.data.NODE_ENV === "production"

@@ -518,7 +518,7 @@ export class MailService {
 
   constructor(
     private readonly prisma: PrismaClient,
-    logger?: Pick<FastifyBaseLogger, "error" | "warn">,
+    private readonly logger?: Pick<FastifyBaseLogger, "error" | "warn">,
   ) {
     this.dnsService = new DnsService(prisma, logger);
   }
@@ -806,21 +806,19 @@ export class MailService {
     });
 
     const selector = activeDkimKey?.selector ?? "default";
-    const dkim =
+    const dkimValue =
       domain.dnsMode === "CONNECTED"
-        ? await runPostfixManager<{ found: boolean; dnsRecordValue: string }>(
-            "get_dkim",
-            {
-              domain: domain.hostname,
-              selector,
-            },
+        ? await this.connectedDomainDkimValue(
+            domain.hostname,
+            selector,
+            activeDkimKey !== null,
           )
         : undefined;
 
     const { records, requiredRecords } = await this.resolveAuthRecords(
       domain,
       selector,
-      dkim?.found ? dkim.dnsRecordValue : undefined,
+      dkimValue,
     );
     const { checks, score, grade } = this.computeAuthChecks(records, selector);
 
@@ -837,6 +835,46 @@ export class MailService {
       grade,
       checks,
     };
+  }
+
+  /**
+   * The DKIM TXT value a CONNECTED domain has to publish. A domain that has no
+   * key yet gets one on its first check, so the record is listed with MX, SPF
+   * and DMARC instead of appearing only after "regenerate" (#159).
+   *
+   * The key is read first and created only when absent: generate_dkim returns
+   * an existing key unchanged (it never rotates), but it also rewrites
+   * OpenDKIM's tables and signals it, which a check that the dashboard polls
+   * should not do. A domain whose active selector came from a rotation is only
+   * ever read: a missing key file there is a fault to surface, not a reason to
+   * invent a different key under that selector.
+   */
+  private async connectedDomainDkimValue(
+    hostname: string,
+    selector: string,
+    selectorFromRotation: boolean,
+  ): Promise<string | undefined> {
+    const existing = await runPostfixManager<{
+      found: boolean;
+      dnsRecordValue: string;
+    }>("get_dkim", { domain: hostname, selector });
+    if (existing.found) return existing.dnsRecordValue;
+    if (selectorFromRotation) return undefined;
+
+    try {
+      const created = await runPostfixManager<{ dnsRecordValue: string }>(
+        "generate_dkim",
+        { domain: hostname, selector, keyLength: 2048 },
+      );
+      return created.dnsRecordValue;
+    } catch (err) {
+      // The rest of the check is still useful without it.
+      this.logger?.warn(
+        { err, hostname },
+        "Could not create the DKIM key while checking mail authentication",
+      );
+      return undefined;
+    }
   }
 
   /**

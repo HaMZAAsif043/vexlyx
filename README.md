@@ -75,7 +75,7 @@ It is a single cross-platform script ([scripts/dev-setup.mjs](./scripts/dev-setu
 
 1. Verifies Node, pnpm, Git, Docker (and that the daemon is running) and tells you how to fix anything missing.
 2. Creates `apps/api/.env` and `apps/dashboard/.env.local` from the examples, with **freshly generated** `SESSION_SECRET` and `ENCRYPTION_KEY`.
-3. Creates the external `traefik-net` Docker network and the `acme.json` file Traefik mounts.
+3. Creates the external `traefik-net` and `vexlyx-apps` Docker networks and the `acme.json` file Traefik mounts.
 4. Runs `pnpm install`.
 5. Starts **Postgres, Redis and Traefik** and waits until they are healthy.
 6. Generates the Prisma client, applies migrations and seeds the development users.
@@ -119,9 +119,9 @@ Most features only need the core three. You only need `--full` when working on m
 ### Troubleshooting
 
 <details>
-<summary><strong>Docker says <code>network traefik-net declared as external, but could not be found</code></strong></summary>
+<summary><strong>Docker says <code>network traefik-net</code> (or <code>vexlyx-apps</code>) <code>declared as external, but could not be found</code></strong></summary>
 
-Run `docker network create traefik-net`, or just use `pnpm bootstrap` which does it for you.
+Run `docker network create traefik-net` and `docker network create vexlyx-apps`, or just use `pnpm bootstrap` which does it for you.
 </details>
 
 <details>

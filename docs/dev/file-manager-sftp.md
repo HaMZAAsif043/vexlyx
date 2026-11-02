@@ -208,6 +208,10 @@ Streams file as `application/octet-stream` download.
 
 Multipart form upload. Max 100 MB per file (configurable via `FILE_UPLOAD_MAX_MB`).
 
+Each file is streamed to a hidden `.vexlyx-upload-<random>.part` file in the target directory and renamed into place only when the whole body arrived. If the request is aborted, errors, or is cut off by the size limit (`413 FILE_TOO_LARGE`), the temporary file is removed: nothing is left behind, a retry does not get `409`, and a file being overwritten stays intact. Directory listings hide `.part` files, so an in-progress upload is not shown.
+
+Slow uploads are not limited by the proxy: Traefik's `websecure` entry point sets `respondingTimeouts.readTimeout: 0s` (its default of 60 s cut off any upload that took longer than a minute) and a 180 s `idleTimeout` for connections that go quiet.
+
 | Field | Type | Description |
 |---|---|---|
 | `path` | string (field) | Target directory |

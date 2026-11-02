@@ -114,7 +114,7 @@ Validated with Zod on startup (`apps/api/src/config/env.ts`) — the server refu
 | `NODE_ENV` | enum | `development` | `development`, `production`, `test` |
 | `CORS_ORIGIN` | string (URL) | `http://localhost:3000` | Allowed CORS origin |
 | `DATABASE_URL` | string (URL) | — required | PostgreSQL connection string |
-| `REDIS_URL` | string | `redis://localhost:6379` | Redis connection string |
+| `REDIS_URL` | string | `redis://:vexlyx_dev@localhost:6379` (development only) | Redis connection string including the password. Required in production, where a URL without a password (or with the development one) is rejected at startup |
 | `SESSION_SECRET` | string | — required, min 32 chars | Session token signing |
 
 Beyond that, each feature module that needs its own configuration adds a block to the same schema — container names for [service status](service-status.md), backup schedule defaults, mail/webmail ports, the [DNS onboarding](dns-onboarding.md) nameservers, and so on. `env.ts` itself is the up-to-date source of truth; each variable there has an inline comment naming the feature that added it.

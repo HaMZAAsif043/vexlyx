@@ -40,6 +40,7 @@ const groups: Group[] = [
       "reference/shared-package",
       "reference/database",
       "reference/infrastructure",
+      "reference/network-layout",
       "reference/design-system",
     ],
   },

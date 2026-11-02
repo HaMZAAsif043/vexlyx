@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
+import fs from "node:fs/promises";
 import { WordPressService, WordPressError } from "./service.js";
 import {
   ProjectIdParamSchema,
@@ -21,6 +22,15 @@ function handleWordPressError(err: unknown, reply: FastifyReply): void {
     return;
   }
   throw err;
+}
+
+/** Discards a stream without collecting its contents in memory. */
+async function drainStream(stream: NodeJS.ReadableStream): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    stream.on("end", resolve);
+    stream.on("error", reject);
+    stream.resume();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -52,20 +62,73 @@ export async function wordpressRoutes(app: FastifyInstance) {
 
   // -------------------------------------------------------------------------
   // POST /api/projects/:id/wordpress/upload
-  // Upload and unpack plugin or theme zip
+  // Upload and unpack plugin or theme zip (multipart — real theme/plugin
+  // archives are routinely multiple MB, which exceeded Fastify's default
+  // 1 MiB JSON body limit when this endpoint expected base64 JSON, #154).
   // -------------------------------------------------------------------------
   app.post(
     "/:id/wordpress/upload",
     { preHandler: [app.requireAuth] },
     async (request, reply) => {
+      const { id } = ProjectIdParamSchema.parse(request.params);
+      // Every archive this request put on disk, so the finally block below
+      // can remove it no matter how the request exits.
+      const tempPaths: string[] = [];
+
       try {
-        const { id } = ProjectIdParamSchema.parse(request.params);
-        const body = WordPressUploadSchema.parse(request.body);
+        let assetType: string | undefined;
+        let zipPath: string | undefined;
+
+        // File-size ceiling comes from the global multipart registration
+        // (FILE_UPLOAD_MAX_MB) — same policy as the files module.
+        const parts = request.parts();
+
+        for await (const part of parts) {
+          if (part.type === "field" && part.fieldname === "assetType") {
+            assetType = String(part.value);
+          } else if (part.type === "file") {
+            if (
+              part.fieldname === "file" &&
+              part.filename.toLowerCase().endsWith(".zip")
+            ) {
+              // saveTempUpload generates the unique, sanitized on-disk name;
+              // the client filename is only carried through for readability.
+              zipPath = await service.saveTempUpload(
+                id,
+                part.file,
+                part.filename,
+                request.log,
+              );
+              tempPaths.push(zipPath);
+            } else {
+              // Drain rejected files without buffering them — a single file
+              // may be as large as FILE_UPLOAD_MAX_MB (1 GiB by default).
+              await drainStream(part.file);
+            }
+          }
+        }
+
+        const body = WordPressUploadSchema.parse({ assetType, zipPath });
         const result = await service.uploadAsset(request.userId!, id, body);
         reply.status(200);
         return result;
       } catch (err) {
         handleWordPressError(err, reply);
+      } finally {
+        // The archive is only needed while uploadAsset streams it into the
+        // extractor. Remove it on EVERY exit path — schema rejection, failed
+        // ownership checks, extraction errors — so repeated rejected uploads
+        // cannot accumulate on the host disk.
+        await Promise.all(
+          tempPaths.map((p) =>
+            fs.rm(p, { force: true }).catch((err: unknown) => {
+              request.log.error(
+                { err, path: p },
+                "failed to remove temporary WordPress upload",
+              );
+            }),
+          ),
+        );
       }
     },
   );
@@ -131,7 +194,12 @@ export async function wordpressRoutes(app: FastifyInstance) {
           if (part.type === "field") {
             if (part.fieldname === "databaseId") databaseId = part.value as string;
           } else if (part.type === "file" && part.filename.endsWith(".tar.gz")) {
-            tarPath = await service.saveTempUpload(id, part.file, part.filename);
+            tarPath = await service.saveTempUpload(
+              id,
+              part.file,
+              part.filename,
+              request.log,
+            );
           }
         }
 

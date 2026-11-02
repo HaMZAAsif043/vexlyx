@@ -1,17 +1,22 @@
 #!/usr/bin/env bash
-# Creates the external `traefik-net` Docker network every service (dev and
-# prod) joins — the same network docker_manager.py's ensure_traefik_network()
-# creates on demand for user project containers.
+# Creates the two external Docker networks (dev and prod share them):
+#   traefik-net  panel-internal: Redis, the API, the panel database, mail, DNS.
+#                Project containers never join it.
+#   vexlyx-apps  project containers, Traefik and the database servers customer
+#                databases live on — the same network docker_manager.py's
+#                ensure_apps_network() creates on demand for project containers.
 set -euo pipefail
 
-log_step "[8/16] Configuring Docker network"
+log_step "[8/16] Configuring Docker networks"
 
-if docker network inspect traefik-net >/dev/null 2>&1; then
-  log_ok "Docker network 'traefik-net' already exists."
-else
-  docker network create traefik-net
-  log_ok "Created Docker network 'traefik-net'."
-fi
+for network in traefik-net vexlyx-apps; do
+  if docker network inspect "${network}" >/dev/null 2>&1; then
+    log_ok "Docker network '${network}' already exists."
+  else
+    docker network create "${network}"
+    log_ok "Created Docker network '${network}'."
+  fi
+done
 
 # Public IP detection (F5.9) — re-detected every run (not skipped like
 # one-time secrets) since it can legitimately change, e.g. after migrating

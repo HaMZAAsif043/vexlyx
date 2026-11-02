@@ -8,6 +8,17 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
+    # A no-build site serves the whole project directory, which also holds
+    # the generated deploy/ files and whatever dot files the repository has
+    # (.git, .env, ...). None of that is content. Only the exact deploy/
+    # directory is private, and /.well-known/ stays reachable. nginx decodes
+    # and normalises the URI before matching, so encoded and dot-segment
+    # spellings are caught too; ^~ makes the deploy rule win over the regex
+    # locations.
+    location = /deploy { return 404; }
+    location ^~ /deploy/ { return 404; }
+    location ~ /\.(?!well-known(/|$)) { return 404; }
+
     location / {
         try_files $uri $uri/ /index.html;
     }

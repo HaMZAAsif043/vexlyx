@@ -157,13 +157,12 @@ When triggering the 1-click installer:
 ### 2. Upload Plugin / Theme ZIP Archive
 - **Endpoint**: `POST /api/projects/:id/wordpress/upload`
 - **Auth**: Required (`requireAuth`)
-- **Request Body**:
-  ```json
-  {
-    "assetType": "plugin",
-    "zipBase64": "UEsDBBQAAAAIA..."
-  }
-  ```
+- **Request**: `multipart/form-data` with two parts:
+  - `assetType` (field): `plugin` or `theme`
+  - `file` (file): the `.zip` archive (size ceiling: `FILE_UPLOAD_MAX_MB`)
+
+  Base64-in-JSON is no longer accepted — ordinary theme archives are multiple
+  MB and exceeded Fastify's 1 MiB JSON body limit (#154).
 - **Response**:
   ```json
   {

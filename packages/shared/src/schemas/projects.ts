@@ -55,6 +55,7 @@ export const CreateProjectSchema = z.object({
   type: ProjectTypeSchema,
   gitUrl: gitUrlSchema.optional().or(z.literal("")),
   branch: z.string().min(1).max(255).default("main"),
+  installCmd: z.string().max(500).optional(),
   buildCmd: z.string().max(500).optional(),
   startCmd: z.string().max(500).optional(),
   port: z.number().int().min(1).max(65535).optional(),
@@ -70,9 +71,12 @@ export const UpdateProjectSchema = z.object({
   name: projectNameSchema.optional(),
   gitUrl: gitUrlSchema.optional().or(z.literal("")),
   branch: z.string().min(1).max(255).optional(),
-  buildCmd: z.string().max(500).optional(),
-  startCmd: z.string().max(500).optional(),
-  port: z.number().int().min(1).max(65535).optional(),
+  // An explicit null clears a stored override and returns the field to
+  // auto-detection, which `undefined` (leave untouched) cannot express.
+  installCmd: z.string().max(500).nullish(),
+  buildCmd: z.string().max(500).nullish(),
+  startCmd: z.string().max(500).nullish(),
+  port: z.number().int().min(1).max(65535).nullish(),
 }).refine(
   (data) => Object.keys(data).length > 0,
   "At least one field must be provided for update",
@@ -125,6 +129,7 @@ export interface GitMetadata {
 // ---------------------------------------------------------------------------
 
 export const TriggerBuildSchema = z.object({
+  installCmd: z.string().max(500).optional(),
   buildCmd: z.string().max(500).optional(),
 });
 

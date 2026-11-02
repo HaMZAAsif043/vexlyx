@@ -31,10 +31,10 @@ This document is the **single source of truth** for all Vexlyx features.
 | Phase 2: Multi-Runtime Support | 🟢 COMPLETED | 100% (8/8) |
 | Phase 3: Domain & DNS | 🟢 COMPLETED | 100% (5/5) |
 | Phase 4: Email Server | 🟢 COMPLETED | 100% (8/8) |
-| Phase 5: System & Administration | 🟡 IN PROGRESS | 88% (28/32) |
+| Phase 5: System & Administration | 🟡 IN PROGRESS | 85% (29/34) |
 | Phase 6: Ecosystem & Launch | 🟡 IN PROGRESS | 67% (2/3) |
 
-**Overall Completion:** 93% (66/71 features)
+**Overall Completion:** 92% (67/73 features)
 
 ---
 
@@ -2712,6 +2712,83 @@ Vexlyx is self-hosted, so the maintainers have no way to know how many installs 
 - `apps/api/prisma/migrations/<timestamp>_add_telemetry_settings/migration.sql`
 - `apps/dashboard/src/components/settings/TelemetryCard.tsx`, `src/hooks/useTelemetry.ts`
 - `docs/dev/telemetry.md` and a public privacy page
+
+---
+
+### F5.33 — In-Panel Update Notifications
+**Status:** 🟢 COMPLETED
+
+**Description:**
+An administrator should not have to re-run the installer on a hunch to learn that a fix exists. The API compares `VEXLYX_VERSION` with the newest stable GitHub release, caches the result in Redis, and the dashboard shows admins a dismissible banner with links to the release notes and the upgrade guide. It is display-only — nothing is downloaded or installed automatically — and is deliberately separate from opt-in telemetry (F5.32), which stays off until an admin enables it.
+
+**Acceptance Criteria:**
+- [x] `GET /api/system/update` returns the current and latest versions, update availability, release URL, publish time, and whether the check ran or failed (ADMIN only; 401/403 otherwise)
+- [x] A successful check is cached for 6 hours, a failed one for 1 hour, and a GitHub outage never fails the request
+- [x] `UPDATE_CHECK_ENABLED=false` performs no outbound call; `UPDATE_CHECK_REPO` changes the source repository for forks
+- [x] Prerelease and draft releases are never offered; comparison handles the `v` prefix, build metadata and prerelease ordering
+- [x] The dashboard shows the banner to admins only, remembers dismissal per version, and links to the release notes and upgrade guide
+
+**Test Plan:**
+1. Publish a newer tag → an admin sees the banner within the cache window; a non-admin never does
+2. Dismiss the banner → it stays hidden for that version and reappears for the next release
+3. Block outbound access to `api.github.com` → the panel keeps working, the notice stays hidden, one warning is logged
+4. Set `UPDATE_CHECK_ENABLED=false` → no request to GitHub; the endpoint reports `checkEnabled: false`
+
+**Developer Docs:**
+- **Location:** `docs/dev/system-updates.md`
+- **Contents:** flow, caching/failure behaviour, version comparison rules, operator controls, how to test
+
+**Files:**
+- `apps/api/src/modules/system/update-service.ts` (and `update-service.test.ts`), `routes.ts`
+- `apps/api/src/utils/version.ts` (and `version.test.ts`)
+- `packages/shared/src/schemas/systemUpdate.ts`
+- `apps/dashboard/src/hooks/useSystemUpdate.ts`, `src/components/layout/UpdateBanner.tsx`
+
+---
+
+### F5.34 — Per-Project Build Settings in the Dashboard
+**Status:** 🟡 IN PROGRESS
+
+**Description:**
+A deploy that Nixpacks misreads has no way out from the panel. The columns and the `PUT /api/projects/:id` fields for `buildCmd`, `startCmd` and `port` already existed, but nothing in the dashboard exposed them, so a user whose repository needs `pnpm install --frozen-lockfile`, a monorepo `filter`, or a port other than the detected one had to delete the project or shell out to the API. Worse, `build_manager.py` accepted an install command and passed `--install-cmd` to Nixpacks, but the API never put `installCmd` in the payload, so the flag was dead code end to end.
+
+This feature gives a project a **Build Settings** card on the Deploy tab with the same shape Vercel and Dokploy use: one field per command, blank means auto-detection, a **Detect** button that runs `nixpacks plan` over the current source and shows what would be used, and an explicit reset back to auto. Detection stays in `build_manager.py` — the API only shuttles its answer, so the panel can never disagree with a real build.
+
+**Acceptance Criteria:**
+- [x] `Project.installCmd` column and migration, nullable, `null` meaning "derive it from the source"
+- [x] `installCmd` accepted by create/update and by `POST /build` as a one-off override (500-char cap, same as the other commands)
+- [x] The build worker resolves install → build → start as *this run → project setting → detection* and sends the result in the payload, so `--install-cmd` finally reaches Nixpacks
+- [x] `derive_install_cmd()` in `build_manager.py` is shared by `cmd_plan` and `cmd_build`, so the plan and the build cannot drift
+- [x] `GET /api/projects/:id/build-plan` returns the detected framework and commands without building anything (owner-only, `400 PROJECT_NOT_CLONED` with no source)
+- [x] A Build Settings panel on the project Deploy tab: install/build/start/port fields pre-filled from the project, `Auto`/`Custom` badge per field, detected value shown as the placeholder, **Save**, **Save & Deploy**, and **Auto** to clear every override
+- [x] A field the user did not touch is left out of the write, so saving build commands cannot overwrite a port the Dockerfile panel synced from `EXPOSE`
+- [ ] Version selectors (Node, Python, PHP, Ruby) that emit `NIXPACKS_*_VERSION` build-time variables per project
+- [ ] Nixpacks cache directory, `--config-path`, base image override and per-project build RAM limit
+- [ ] Registry credentials and build/start hooks (out of scope for slice 1 of #200)
+
+**Test Plan:**
+1. pnpm-lock repository, all fields blank → the build log names no install command and Nixpacks picks `pnpm install`
+2. **Detect** → the Install field placeholder shows the command derived from the lockfile
+3. Type `pnpm install --frozen-lockfile`, **Save & Deploy** → the log opens with `[vexlyx] Install command: pnpm install --frozen-lockfile` and `nixpacks build` receives `--install-cmd`
+4. **Auto** → every badge returns to `Auto`, and the next deploy is stored with `installCmd: null`
+5. Save only a build command on a Dockerfile project whose port came from `EXPOSE` → the stored port is unchanged
+6. Another user's project id → `403` on `PUT`, `GET /build-plan` and `POST /build`, and nothing is spawned
+7. Project with no source on disk → `400 PROJECT_NOT_CLONED` with a message pointing at git, File Manager or WordPress
+8. Command longer than 500 characters → rejected by validation before anything is written
+
+**Developer Docs:**
+- **Location:** `docs/dev/build-system.md`
+- **Contents:** override resolution order, the plan/build payload shapes, the detection endpoint, the panel's save rules, how to test
+
+**Files:**
+- `apps/api/prisma/migrations/<timestamp>_add_project_install_cmd/migration.sql`
+- `apps/api/src/modules/projects/service.ts`, `apps/api/src/modules/build/{routes,schema,service}.ts` (and `installCmd.test.ts`)
+- `apps/api/src/modules/webhooks/{service,github-app}.ts` (GitHub deploys carry the stored override)
+- `packages/shared/src/schemas/projects.ts`, `packages/shared/src/types/index.ts` (`BuildPlan`)
+- `system/python/build_manager.py` (`derive_install_cmd()`) and `tests/test_build_install_command.py`
+- `apps/dashboard/src/components/projects/BuildSettingsPanel.tsx` (and `.test.tsx`), `src/app/(panel)/projects/[id]/page.tsx`
+
+Tracked in #200.
 
 ---
 

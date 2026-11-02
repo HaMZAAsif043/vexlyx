@@ -33,6 +33,18 @@ server {
     # default 1m limit and WordPress's 64m.
     client_max_body_size 512m;
 
+    # The docroot is the whole project directory, which also holds the
+    # generated deploy/ files and whatever dot files the repository has
+    # (.git, .env, ...). None of that is content. Only the exact deploy/
+    # directory is private, and /.well-known/ stays reachable. nginx decodes
+    # and normalises the URI before matching, so encoded and dot-segment
+    # spellings are caught too; ^~ makes the deploy rule win over the regex
+    # locations, and the dot rule comes before the PHP handler so a dot file
+    # can never be executed.
+    location = /deploy { return 404; }
+    location ^~ /deploy/ { return 404; }
+    location ~ /\.(?!well-known(/|$)) { return 404; }
+
     location / {
         try_files $uri $uri/ /index.php?$args;
     }
@@ -63,9 +75,5 @@ server {
         expires 30d;
         access_log off;
         try_files $uri =404;
-    }
-
-    location ~ /\.ht {
-        deny all;
     }
 }

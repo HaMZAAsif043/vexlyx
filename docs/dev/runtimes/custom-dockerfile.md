@@ -117,7 +117,7 @@ services:
 networks:
   default:
     external: true
-    name: traefik-net
+    name: vexlyx-apps
 ```
 
 Vexlyx does not inject a health check into custom Dockerfile deployments.

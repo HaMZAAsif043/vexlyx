@@ -136,7 +136,7 @@ services:
         limits:
           memory: "{{memory_limit}}"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:{{container_port}}/ || wget -qO- http://localhost:{{container_port}}/health || exit 1"]
+      test: ["CMD-SHELL", "nc -z -w 3 $${HOSTNAME} 80"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -150,7 +150,7 @@ services:
 networks:
   default:
     external: true
-    name: traefik-net
+    name: vexlyx-apps
 ```
 
 ---

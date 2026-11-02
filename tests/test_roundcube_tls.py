@@ -205,6 +205,7 @@ class TestRoundcubeTls(unittest.TestCase):
     def test_production_compose_overrides_development_insecurity(self):
         environment = os.environ | {"VEXLYX_MAIL_HOSTNAME": PEER, "VEXLYX_DOMAIN": "panel.roundcube-test.example",
                                     "POSTGRES_PASSWORD": "test", "MYSQL_ROOT_PASSWORD": "test", "MYSQL_PASSWORD": "test",
+                                    "REDIS_PASSWORD": "test",
                                     "SESSION_SECRET": "test", "ENCRYPTION_KEY": "test", "VEXLYX_MAIL_DOMAIN": "roundcube-test.example",
                                     "VEXLYX_BASE_DOMAIN": "roundcube-test.example"}
         development = json.loads(docker("compose", "-f", str(ROOT / "docker-compose.yml"),

@@ -25,9 +25,17 @@ echo "  Vexlyx is installed."
 echo ""
 echo "  Panel:        https://${VEXLYX_DOMAIN}"
 echo "  Admin email:  ${VEXLYX_ADMIN_EMAIL}"
-if [[ "${ADMIN_PASSWORD_WAS_GENERATED}" == "true" ]]; then
-  echo "  Admin password (generated, shown once): ${VEXLYX_ADMIN_PASSWORD}"
-  echo "  Save this now — it is not stored anywhere and cannot be recovered."
+if [[ "${ADMIN_USER_CREATED}" != "true" ]]; then
+  echo "  Admin password: unchanged — an admin account with this email already existed."
+elif [[ "${ADMIN_PASSWORD_WAS_GENERATED}" == "true" ]]; then
+  # Shown on the terminal only, never through the tee into ${VEXLYX_STATE_FILE}.
+  if show_secret_to_operator "  Admin password (generated, shown once): ${VEXLYX_ADMIN_PASSWORD}" \
+    && show_secret_to_operator "  Save it now. It is not written to ${VEXLYX_STATE_FILE} or ${VEXLYX_SECRETS_FILE}; only its Argon2id hash is stored, so it cannot be recovered."; then
+    echo "  Admin password (generated): shown on your terminal only, not recorded in ${VEXLYX_STATE_FILE}."
+  else
+    echo "  Admin password (generated): could not be shown because no terminal is attached, and it is deliberately not logged."
+    echo "  Create a new admin with the command in the Troubleshooting guide."
+  fi
 else
   echo "  Admin password: the one you provided via VEXLYX_ADMIN_PASSWORD."
 fi

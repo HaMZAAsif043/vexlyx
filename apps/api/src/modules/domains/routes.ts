@@ -40,9 +40,9 @@ function handleDomainError(err: unknown, reply: FastifyReply): void {
 
 export async function domainRoutes(app: FastifyInstance) {
   const auditLog = new AuditLogService(app.prisma, app.log);
-  const service = new DomainService(app.prisma, auditLog);
+  const service = new DomainService(app.prisma, auditLog, app.log);
   const dnsService = new DnsService(app.prisma, app.log);
-  const sslService = new SslService(app.prisma);
+  const sslService = new SslService(app.prisma, app.log);
 
   app.patch("/:id", { preHandler: [app.requireAuth] }, async (request, reply) => {
     try {

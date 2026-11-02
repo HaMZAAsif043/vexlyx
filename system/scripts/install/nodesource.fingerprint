@@ -1,0 +1,5 @@
+# Primary-key fingerprint of the NodeSource signing key
+# (https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key).
+# steps/04-runtime.sh refuses to trust a downloaded key that does not match.
+# See docs/dev/installer.md ("Pinned NodeSource key") before changing it.
+6F71F525282841EEDAF851B42F59B5F99B1BE0B4

@@ -80,7 +80,7 @@ Add tests for the happy path, invalid input, and authorization where applicable.
 
 - Run `pnpm bootstrap --check` to verify prerequisites without changing the environment.
 - If PostgreSQL port 5432 is occupied, bootstrap can select 5433 and keep the environment files aligned.
-- If Docker reports that `traefik-net` is missing, rerun `pnpm bootstrap`.
+- If Docker reports that `traefik-net` or `vexlyx-apps` is missing, rerun `pnpm bootstrap`.
 - If Prisma cannot connect, check `docker compose ps`, compare the published PostgreSQL port with `DATABASE_URL`, and regenerate the client.
 
 For product and production failures, use the [troubleshooting guide](/guide/troubleshooting).

@@ -8,6 +8,7 @@ import { createQueue } from "../../config/queue.js";
 import { BUILD_QUEUE_NAME } from "../build/service.js";
 import type { BuildJobData } from "../build/schema.js";
 import { registerGitHubAppWebhook } from "./github-app.js";
+import { readDeliveryId } from "./delivery.js";
 
 // ---------------------------------------------------------------------------
 // Error handler
@@ -30,7 +31,7 @@ function handleWebhookError(err: unknown, reply: FastifyReply): void {
 // ---------------------------------------------------------------------------
 
 export async function webhookRoutes(app: FastifyInstance) {
-  const service = new WebhookService(app.prisma, app.log);
+  const service = new WebhookService(app.prisma, app.log, app.redis);
   const buildQueue = createQueue(BUILD_QUEUE_NAME);
 
   // Content type parser preserving exact raw body buffer for HMAC signature verification
@@ -91,6 +92,7 @@ export async function webhookRoutes(app: FastifyInstance) {
         signatureHeader,
         request.body,
         enqueueJob,
+        readDeliveryId(request.headers["x-github-delivery"]),
       );
 
       reply.status(result.ignored ? 200 : 202).send(result);
@@ -130,6 +132,7 @@ export async function webhookRoutes(app: FastifyInstance) {
         signatureHeader,
         request.body,
         enqueueJob,
+        readDeliveryId(request.headers["x-github-delivery"]),
       );
 
       reply.status(result.ignored ? 200 : 202).send(result);

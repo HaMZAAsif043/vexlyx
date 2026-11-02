@@ -162,7 +162,7 @@ async function initSocketPlugin(app: FastifyInstance) {
           where: { id: { in: userIds } },
           select: { id: true },
         });
-        return new Set(rows.map((row) => row.id));
+        return new Set(rows.map((row: { id: string }) => row.id));
       },
     },
     app.log,

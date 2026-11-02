@@ -18,7 +18,7 @@ export class DashboardService {
     logger: FastifyBaseLogger,
   ) {
     this.monitoringService = new MonitoringService(prisma, logger);
-    this.sslService = new SslService(prisma);
+    this.sslService = new SslService(prisma, logger);
   }
 
   async getSummary(userId: string): Promise<DashboardSummaryResponse> {

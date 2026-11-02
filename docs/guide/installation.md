@@ -51,7 +51,7 @@ VEXLYX_ADMIN_EMAIL=admin@example.com \
 ```
 
 ::: warning Protect the generated password
-If you do not provide `VEXLYX_ADMIN_PASSWORD`, the installer prints a generated password once. Store it in a password manager before closing the terminal.
+If you do not provide `VEXLYX_ADMIN_PASSWORD`, the installer shows a generated password once, on your terminal only. It is deliberately not written to `/etc/vexlyx/install.log` or `/etc/vexlyx/vexlyx.env`; only its Argon2id hash is stored in the database. Store it in a password manager before closing the terminal. If you re-run the installer on a server that already has an admin, no password is shown and the existing one is left unchanged.
 :::
 
 The installer configures Docker, the application runtimes, PostgreSQL, Redis, Traefik, DNS, mail services, the panel, TLS, and firewall rules. It checks existing state and is safe to run again after a partial failure.

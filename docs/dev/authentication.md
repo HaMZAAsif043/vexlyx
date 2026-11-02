@@ -86,7 +86,7 @@ The limiter keys on `request.ip`. In production the API is only reachable throug
 
 A numeric hop count is deliberately not supported: Fastify 5 fails closed on numbers because a hop count cannot validate the direct peer.
 
-**Not covered:** the limiter state is in-process memory (resets on API restart), and the key is the IP alone, not IP + email. Another container on `traefik-net` that reaches the API directly can still choose its own `X-Forwarded-For`.
+**Not covered:** the limiter state is in-process memory (resets on API restart), and the key is the IP alone, not IP + email. Another container on the panel-internal `traefik-net` network that reaches the API directly can still choose its own `X-Forwarded-For`; project containers are not on that network (see [Network layout](network-layout.md)).
 
 Tests: `apps/api/src/modules/auth/rate-limit-proxy.test.ts`.
 
@@ -159,7 +159,7 @@ curl http://localhost:5000/api/auth/me -b cookies.txt
 # Should redirect to /login
 
 # 10. Check Redis sessions
-docker exec -it vexlyx-redis redis-cli keys "session:*"
+docker exec -it vexlyx-redis sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli keys "session:*"'
 ```
 
 ### Login timing (account enumeration, #44)
