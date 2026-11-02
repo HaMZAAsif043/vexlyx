@@ -51,6 +51,7 @@ API (apps/api/src/modules/deploy/)
      - Writes `docker-compose.yml` in `{PROJECTS_DIR}/{projectId}/deploy/`.
      - Executes `docker compose up -d --force-recreate --pull never`.
      - Resolves container ID and verifies container startup.
+     - If the image declares no `HEALTHCHECK`, connects from the host to the container's `vexlyx-apps` address on the port the Traefik router upstreams to, and logs the answer — `Routable check <ip>:<port> answered`, or a `WARNING` naming that address and the bind fix (#202). It needs nothing inside the image, so it works on any base image, and it never fails the deploy: an app bound to `127.0.0.1` keeps its process up and answers nothing on the routable address, which is exactly the 502-while-"Running" case. Images that do declare a healthcheck are left to Docker's own verdict, which `GET /api/projects/:id/container/status` already reports.
    - Updates `Project` record in PostgreSQL (`containerId`, `containerStatus`, `internalPort`, `deployedDomain`, `deployedAt`, `status = ACTIVE`).
    - Marks `Deployment` record as `RUNNING`.
 
@@ -79,7 +80,7 @@ API (apps/api/src/modules/deploy/)
 | [`packages/shared/src/schemas/projects.ts`](../packages/shared/src/schemas/projects.ts) | Shared `DeployBodySchema` and `ContainerActionSchema` |
 | [`packages/shared/src/types/index.ts`](../packages/shared/src/types/index.ts) | Extended `Project` type with container fields (`containerId`, `containerStatus`, etc.) |
 | [`apps/dashboard/src/hooks/useDeploy.ts`](../apps/dashboard/src/hooks/useDeploy.ts) | React hooks: `useContainerAction`, `useContainerStatus`, `useContainerLogs` |
-| [`apps/dashboard/src/components/projects/ContainerControls.tsx`](../apps/dashboard/src/components/projects/ContainerControls.tsx) | Live container status badge, start/stop/restart/remove action buttons, endpoint link, and runtime log viewer |
+| [`apps/dashboard/src/components/projects/ContainerControls.tsx`](../apps/dashboard/src/components/projects/ContainerControls.tsx) | Live container status badge (including Docker's unhealthy/starting states), start/stop/restart/remove action buttons, endpoint link, and runtime log viewer |
 
 ---
 
@@ -140,9 +141,27 @@ Returns real-time container status from Docker inspect.
   ```json
   {
     "containerStatus": "running",
+    "containerHealth": "healthy",
     "containerId": "a1b2c3d4e5f6"
   }
   ```
+
+  `containerHealth` is Docker's own `HEALTHCHECK` verdict — `healthy`, `unhealthy` or
+  `starting` — and `null` when the image declares no healthcheck. It is read live and not
+  stored on `Project`, because `.State.Status` alone only says the process is up: an app
+  bound to `127.0.0.1` instead of `$HOST` keeps reporting `running` while its domain returns
+  502 (#202).
+
+  What the probe asks comes from the compose template, and every template now asks the
+  question Traefik asks: *is something answering on the container's own routable address*.
+  That address is what Docker writes next to the container's name in `/etc/hosts`, so the
+  probes resolve `os.hostname()` / `gethostname()` / `$HOSTNAME` rather than `127.0.0.1` —
+  loopback stays reachable when an app binds only loopback, which is exactly how a 502 site
+  used to pass its own healthcheck. They stop at the TCP layer (`net.connect`,
+  `socket.create_connection`, `fsockopen`, `nc -z`) because a project has no guaranteed
+  index route, and each one uses a tool its image is certain to ship: the Nixpacks images
+  carry no `wget`, and busybox resolves `localhost` to `::1` first, so an HTTP-level probe
+  could call a correctly bound app unhealthy (#202).
 
 ### `GET /api/projects/:id/logs?tail=100`
 Fetches runtime logs from the container.

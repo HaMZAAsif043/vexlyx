@@ -73,6 +73,25 @@ export async function buildRoutes(app: FastifyInstance) {
   );
 
   // -------------------------------------------------------------------------
+  // GET /api/projects/:id/build-plan
+  // Run Nixpacks detection over the project's current source without building
+  // anything, so the dashboard can show the detected commands beside the
+  // overrides stored on the project.
+  // -------------------------------------------------------------------------
+  app.get(
+    "/:id/build-plan",
+    { preHandler: [app.requireAuth] },
+    async (request, reply) => {
+      try {
+        const { id } = request.params as { id: string };
+        return await service.getBuildPlan(request.userId!, id);
+      } catch (err) {
+        handleBuildError(err, reply);
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
   // GET /api/projects/:id/deployments
   // List all deployments for a project (newest first), paginated.
   // -------------------------------------------------------------------------

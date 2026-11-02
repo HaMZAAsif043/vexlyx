@@ -6,7 +6,50 @@ All notable changes to Vexlyx are documented here. The format follows [Keep a Ch
 
 ### Fixed
 
-- Connecting or updating a git project no longer deletes files git does not track. A failed fetch, checkout or pull (network, authentication, local changes) now fails with its error and leaves the workspace untouched; previously it re-cloned the project and lost uploads and other untracked files. Switching a project to another repository, or connecting git to a workspace that already has files, keeps the old workspace next to the project as `<id>.replaced-<timestamp>` (reported as `previousWorkspace`) and restores it if the clone fails.
+- A deploy whose app binds only `127.0.0.1` now says so in the build log instead of finishing silent. For an image that declares no `HEALTHCHECK`, Docker has nothing to grade, so the container came up *running*, the deployment reported success, and the domain returned 502 — the app was answering loopback while the address Traefik connects to answered nothing. After the container starts, the deployer now opens a TCP connection to the container's own `vexlyx-apps` address on the port its router upstreams to, retries three times, and logs either `Routable check <ip>:<port> answered — Traefik can reach this container` or a warning naming the port, the hostname, and the fix (bind to `$HOSTNAME` or `0.0.0.0`). The check is informational: it can not fail a deploy, and images that do declare a healthcheck are skipped so their own probe stays the single verdict (#202).
+
+### Upgrade notes
+
+- Re-run the installer to update the deploy scripts. No schema change and no API change — the verdict is one line in the existing build log. Projects on images that declare a `HEALTHCHECK` deploy exactly as before; the rest gain a few seconds of post-startup probing.
+
+## [0.4.5] - 2026-11-02
+
+### Fixed
+
+- A container that fails its own healthcheck is no longer reported as a healthy deployment. The panel read only Docker's `.State.Status`, and that says *the process is up* — an app that binds `127.0.0.1` instead of the address Traefik routes to keeps its process up, keeps its in-container probe passing, and answers nothing, so the project page said "Running" while the domain returned 502. `docker inspect` now reads `.State.Health` alongside the status in the same call, and the project page shows **Unhealthy** with the reason instead of **Running**, or **Waiting for healthcheck** while the image is still inside its start period. Images that declare no healthcheck at all report nothing rather than a false pass (#202).
+
+- Every project healthcheck now probes the address Traefik actually connects to. The compose templates probed `127.0.0.1` or `localhost`, and loopback answers even when the app refuses the routable interface, which is the 502-while-"healthy" case above. Checking each template against live containers turned up three probes that could not work as written: the Next.js image Nixpacks builds ships no `wget` at all, so any `wget`-based check there exits 127; busybox resolves `localhost` to `::1` before `127.0.0.1`, so an app correctly bound to IPv4 loopback looked unhealthy; and the nginx check `test $? -ne 4` only trips GNU wget's network-failure code, while `nginx:alpine`'s busybox wget returns 1 for a refused connection — that healthcheck could never have reported a dead container. Probes are now TCP-level and use whatever the image is certain to ship (`node`, `python`, `php`, or `nc` on nginx), stopping at "is something listening where the router points": an app that answers 404 or 502 is still reachable, and that is a content problem rather than a routing one (#202).
+
+### Upgrade notes
+
+- Re-run the installer to rebuild the API and dashboard. No schema change: the health status is read live from Docker and is not stored, and `GET /api/projects/:id/container/status` only gains an extra `containerHealth` field (`healthy` / `unhealthy` / `starting`, or `null` when the image declares no healthcheck).
+- The new healthchecks live in the compose templates, which are read when a project deploys, so a project that is already running keeps its old probe until its next deploy. After upgrading, redeploy to move one. A site that has been quietly returning 502 will therefore start showing **Unhealthy** — that is the old false pass surfacing, not a new failure.
+
+## [0.4.4] - 2026-11-01
+
+### Added
+
+- A project now has **Build Settings** on its Deploy tab: install, build and start commands plus the container port, each left blank to keep auto-detection in charge. **Detect** runs Nixpacks' plan over the current source and shows what each blank field would use, **Save & Deploy** deploys with what you typed, and **Auto** clears every override at once. `buildCmd`, `startCmd` and `port` already existed on the project and were shown read-only, with no panel to edit them, and an install command was accepted by the build script but never sent to it by the API — so `nixpacks build --install-cmd` had no effect on any deploy (#200, F5.34).
+
+### Upgrade notes
+
+- Re-run the installer. It applies one new nullable column (`projects.install_cmd`) and rebuilds the API and dashboard. Existing projects keep the commands they had, and nothing about a running site changes until you set an override and redeploy.
+
+## [0.4.3] - 2026-10-30
+
+### Added
+
+- Administrators now see an in-panel notice when a newer stable release is published, linking to its release notes and the upgrade guide. The API compares the running version with the newest GitHub release and caches the answer in Redis for six hours (a failed check for one), so the dashboard never calls GitHub itself. The check is display-only: nothing is downloaded or installed, and it stays separate from anonymous telemetry (F5.32). Set `UPDATE_CHECK_ENABLED=false` on an air-gapped server, or `UPDATE_CHECK_REPO` to publish from a different repository.
+
+### Fixed
+
+- WordPress plugin and theme uploads accept real archives again: the panel streams them as `multipart/form-data` instead of base64 inside a JSON body, so a several-megabyte theme no longer fails with `413 Request body is too large`. Temporary archives are removed on every exit path, concurrent uploads of the same filename no longer collide, and client filenames are sanitized before they reach the disk (#154).
+- Connecting or updating a git project no longer deletes files git does not track. A failed fetch, checkout or pull (network, authentication, local changes) now fails with its error and leaves the workspace untouched; previously it re-cloned the project and lost uploads and other untracked files. Switching a project to another repository, or connecting git to a workspace that already has files, keeps the old workspace next to the project as `<id>.replaced-<timestamp>` (reported as `previousWorkspace`) and restores it if the clone fails (#182).
+
+### Upgrade notes
+
+- Re-run the installer. There is no schema or configuration change: it rebuilds the API and dashboard containers, and the update notice appears for administrators on the next sign-in.
+- If the panel cannot reach `api.github.com`, the notice stays hidden and nothing else is affected; `UPDATE_CHECK_ENABLED=false` skips the lookup entirely.
 
 ## [0.4.2] - 2026-10-26
 

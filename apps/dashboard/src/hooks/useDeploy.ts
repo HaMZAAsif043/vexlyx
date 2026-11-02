@@ -5,6 +5,7 @@ import { fetchAPI } from "@/lib/api";
 
 export interface ContainerStatusResponse {
   containerStatus: string;
+  containerHealth: string | null;
   containerId: string | null;
 }
 
