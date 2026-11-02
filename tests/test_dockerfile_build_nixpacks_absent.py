@@ -9,6 +9,9 @@ The nixpacks lookup now happens only after the Dockerfile branch returns.
 This test simulates the exact host: a working `docker` on PATH, no nixpacks
 resolvable anywhere, then drives `cmd_build()` end to end and asserts the
 image build completes and nixpacks is never consulted.
+
+The lookup helper is patched by name so the same test runs on branches that
+predate the find_nixpacks_binary()/get_nixpacks_binary() split.
 """
 
 import importlib.util
@@ -69,6 +72,15 @@ class TestDockerfileBuildWithoutNixpacks(unittest.TestCase):
     def test_dockerfile_build_succeeds_when_nixpacks_is_absent(self):
         build_manager = load_build_manager()
 
+        # Older branches only have get_nixpacks_binary(); this PR's branch
+        # splits out find_nixpacks_binary(). Patch whichever exists so the
+        # absence of nixpacks is modelled on every branch.
+        lookup_name = (
+            "find_nixpacks_binary"
+            if hasattr(build_manager, "find_nixpacks_binary")
+            else "get_nixpacks_binary"
+        )
+
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             project_dir = root / "project"
@@ -92,7 +104,7 @@ class TestDockerfileBuildWithoutNixpacks(unittest.TestCase):
             stdout = io.StringIO()
             try:
                 with mock.patch.object(
-                    build_manager, "find_nixpacks_binary", return_value=None
+                    build_manager, lookup_name, return_value=None
                 ) as nixpacks_lookup, mock.patch.object(
                     build_manager, "get_docker_binary", wraps=build_manager.get_docker_binary
                 ) as docker_lookup, redirect_stdout(stdout):
@@ -120,12 +132,17 @@ class TestDockerfileBuildWithoutNixpacks(unittest.TestCase):
             ]
             self.assertTrue(messages, f"cmd_build() produced no output:\n{output}")
 
+            # The nixpacks lookup must never run on the Dockerfile path.
+            if nixpacks_lookup.called:
+                self.fail(
+                    f"cmd_build() resolved {lookup_name}() before the Dockerfile "
+                    "branch; a Dockerfile build must not require nixpacks. "
+                    f"Output:\n{output}"
+                )
+
             # Log lines are JSON, so parsing them unescapes the backslashes in
             # Windows paths before we assert on them.
             logs = [m["log"] for m in messages if "log" in m]
-
-            # The nixpacks lookup must never run on the Dockerfile path.
-            nixpacks_lookup.assert_not_called()
 
             # Docker was actually resolved and executed (`shutil.which` may
             # report a different extension case, e.g. docker.CMD).
