@@ -663,11 +663,12 @@ def _is_instruction_continuation(line: str) -> bool:
     return line.rstrip().endswith("\\")
 
 
-def _parse_build_stages(content: str) -> list[dict]:
+def _parse_build_stages(content: str, build_args: dict | None = None) -> list[dict]:
     """Parse a Dockerfile into its build stages.
 
     Returns one dict per stage in declaration order:
-        {"alias": str | None, "parent": str | None, "exposes": [str, ...]}
+        {"alias": str | None, "parent": str | None, "exposes": [str, ...],
+         "env": {...}, "args": {...}}
 
     Heredoc bodies (COPY/ADD/RUN <<EOF ... EOF) are treated as content, so
     instruction-looking text inside them never starts a new stage (#172
@@ -675,8 +676,20 @@ def _parse_build_stages(content: str) -> list[dict]:
     hide the real final stage). Backslash-continued physical lines are joined
     into one logical instruction, so an argument that looks like EXPOSE is
     never mistaken for a real one (#172 review).
+
+    `build_args` are the --build-arg values the build passes for this project
+    (payload.envVars): wherever an ARG declares a name they override its
+    declared default, exactly as `docker build --build-arg` does (#172
+    review). ARG/ENV values are evaluated against the pre-instruction state
+    and a stage inherits the ARGs of its named parent stage.
     """
     lines = content.splitlines()
+    build_args = {
+        str(k): str(v) for k, v in (build_args or {}).items() if k and v is not None
+    }
+    # ARGs declared before the first FROM: a stage's bare `ARG NAME`
+    # re-declares the global default (#172 review).
+    global_args: dict[str, str] = {}
     stages: list[dict] = []
     stages_by_alias: dict[str, dict] = {}
     current: dict | None = None
@@ -739,16 +752,22 @@ def _parse_build_stages(content: str) -> list[dict]:
                     alias = from_parts[j + 1]
                     break
             inherited_env: dict[str, str] = {}
+            inherited_args: dict[str, str] = {}
             parent_stage = stages_by_alias.get((parent or "").lower())
             if parent_stage is not None:
-                # ENV carries over from a named parent stage into the image.
+                # ENV carries over from a named parent stage into the image,
+                # and Docker inherits declared build arguments from it too:
+                # `FROM scratch AS base / ARG PORT=8080 / FROM base /
+                # EXPOSE $PORT` deploys on 8080, not the type default (#172
+                # review).
                 inherited_env = dict(parent_stage["env"])
+                inherited_args = dict(parent_stage["args"])
             current = {
                 "alias": alias,
                 "parent": parent,
                 "exposes": [],
                 "env": inherited_env,
-                "args": {},
+                "args": inherited_args,
             }
             stages.append(current)
             if alias:
@@ -757,15 +776,48 @@ def _parse_build_stages(content: str) -> list[dict]:
 
         if current is None:
             # Legal content before the first FROM (parser directives, ARG).
+            # Global ARGs set the defaults a stage's bare `ARG NAME` picks up
+            # (#172 review); a build --build-arg for the name overrides them.
+            if instruction == "ARG":
+                values = _parse_docker_assignments(args)
+                bare = len(values) == 1 and "=" not in args
+                for name, value in values.items():
+                    if bare:
+                        global_args[name] = build_args.get(
+                            name, global_args.get(name, "")
+                        )
+                    else:
+                        global_args[name] = build_args.get(
+                            name, _expand_docker_vars(value, global_args)
+                        )
             continue
 
         if instruction in ("ENV", "ARG"):
             values = _parse_docker_assignments(args)
-            target = current["env"] if instruction == "ENV" else current["args"]
+            # Docker evaluates every value against the state BEFORE this
+            # instruction, not against earlier assignments of the same line:
+            # `ENV PORT=80` then `ENV PORT=8080 HTTP_PORT=$PORT` leaves
+            # HTTP_PORT=80 (the pre-instruction PORT), then sets PORT=8080 —
+            # applying the first assignment first gave 8080 here (#172
+            # review).
+            snapshot = {**current["args"], **current["env"]}
             for name, value in values.items():
-                target[name] = _expand_docker_vars(
-                    value, {**current["args"], **current["env"]}
-                )
+                if instruction == "ARG":
+                    if len(values) == 1 and "=" not in args:
+                        # A bare `ARG NAME` re-declares the global default;
+                        # the build --build-arg for this name wins over both.
+                        current["args"][name] = build_args.get(
+                            name, global_args.get(name, "")
+                        )
+                    else:
+                        # An ARG default yields to the matching --build-arg
+                        # (ARG PORT=8080 built with --build-arg PORT=9000
+                        # deploys on 9000 — #172 review).
+                        current["args"][name] = build_args.get(
+                            name, _expand_docker_vars(value, snapshot)
+                        )
+                else:
+                    current["env"][name] = _expand_docker_vars(value, snapshot)
             continue
 
         if instruction == "EXPOSE" and args:
@@ -807,11 +859,15 @@ def _stage_effective_exposes(stages: list[dict], index: int) -> list[str]:
     return effective
 
 
-def first_exposed_port(project_dir: str) -> int | None:
+def first_exposed_port(project_dir: str, build_args: dict | None = None) -> int | None:
     """
     Return the first port EXPOSEd by the FINAL stage of the project's
-    Dockerfile (including ports inherited from named parent stages), if
-    present.
+    Dockerfile (including ports and ARGs inherited from named parent
+    stages), if present.
+
+    `build_args` are the --build-arg values the build passes for the
+    project (payload.envVars): they override ARG defaults when the EXPOSE
+    port is resolved (#172 review).
 
     A Dockerfile that ships in the git repository was never parsed — only
     Dockerfiles saved through the dashboard's editor persisted their EXPOSE
@@ -835,7 +891,7 @@ def first_exposed_port(project_dir: str) -> int | None:
         )
         return None
 
-    stages = _parse_build_stages(content)
+    stages = _parse_build_stages(content, build_args)
     if not stages:
         return None
 
@@ -868,7 +924,14 @@ def resolve_container_port(payload: dict, project_type: str, project_dir: str) -
     if payload.get("containerPort"):
         return int(payload["containerPort"])
     if project_type.upper() == "DOCKER":
-        exposed = first_exposed_port(project_dir)
+        # The build passes the project env as --build-arg values, so the
+        # resolver must too: `ARG PORT=8080` built with `--build-arg
+        # PORT=9000` deploys on 9000, not the Dockerfile default (#172
+        # review).
+        build_args = payload.get("envVars")
+        if not isinstance(build_args, dict):
+            build_args = {}
+        exposed = first_exposed_port(project_dir, build_args)
         if exposed:
             return exposed
     return default_container_port(project_type)

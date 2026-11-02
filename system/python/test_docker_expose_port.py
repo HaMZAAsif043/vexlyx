@@ -275,6 +275,75 @@ class FirstExposedPortTests(unittest.TestCase):
         )
         self.assertEqual(docker_manager.first_exposed_port(d), 8081)
 
+    def test_arg_is_inherited_from_named_parent_stage(self):
+        # FROM <alias> inherits declared build arguments, so the child
+        # stage's EXPOSE $PORT still resolves to the parent's ARG default
+        # instead of falling back to the type default (#172 review).
+        d = self.make_dir(
+            "FROM scratch AS base\nARG PORT=8080\n"
+            "FROM base\nEXPOSE $PORT\n"
+        )
+        self.assertEqual(docker_manager.first_exposed_port(d), 8080)
+
+    def test_arg_inheritance_is_recursive(self):
+        d = self.make_dir(
+            "FROM scratch AS base\nARG PORT=8080\n"
+            "FROM base AS middle\n"
+            "FROM middle\nEXPOSE $PORT\n"
+        )
+        self.assertEqual(docker_manager.first_exposed_port(d), 8080)
+
+    def test_bare_arg_in_stage_picks_up_global_default(self):
+        # An ARG before the first FROM is global: a stage's bare
+        # `ARG PORT` re-declares that default (#172 review).
+        d = self.make_dir(
+            "ARG PORT=9000\nFROM alpine\nARG PORT\nEXPOSE $PORT\n"
+        )
+        self.assertEqual(docker_manager.first_exposed_port(d), 9000)
+
+    def test_env_multi_assignment_uses_pre_instruction_values(self):
+        # Docker evaluates each ENV value against the state BEFORE the
+        # instruction: in `ENV PORT=8080 HTTP_PORT=$PORT` the $PORT still
+        # sees the old 80 — not the 8080 being set alongside it (#172
+        # review). Applying the first assignment first gave HTTP_PORT=8080.
+        content = (
+            "FROM alpine\nENV PORT=80\n"
+            "ENV PORT=8080 HTTP_PORT=$PORT\n"
+            "EXPOSE ${HTTP_PORT}\n"
+        )
+        d = self.make_dir(content)
+        self.assertEqual(docker_manager.first_exposed_port(d), 80)
+
+        # And the assignment order still leaves PORT at its final value.
+        stages = docker_manager._parse_build_stages(content)
+        self.assertEqual(stages[-1]["env"]["PORT"], "8080")
+        self.assertEqual(stages[-1]["env"]["HTTP_PORT"], "80")
+
+    def test_build_args_override_arg_defaults(self):
+        # `docker build --build-arg PORT=9000` beats `ARG PORT=8080`, the
+        # same value the build manager passes for this project (#172
+        # review).
+        d = self.make_dir("FROM alpine\nARG PORT=8080\nEXPOSE $PORT\n")
+        self.assertEqual(docker_manager.first_exposed_port(d, {"PORT": "9000"}), 9000)
+        # Without a build arg the Dockerfile default still wins.
+        self.assertEqual(docker_manager.first_exposed_port(d), 8080)
+
+    def test_build_args_do_not_inject_undeclared_names(self):
+        # A --build-arg the Dockerfile never declares with ARG is unused by
+        # Docker (warning only) and must not create a port out of thin air.
+        d = self.make_dir("FROM alpine\nEXPOSE 80\n")
+        self.assertEqual(
+            docker_manager.first_exposed_port(d, {"PORT": "9000"}), 80
+        )
+
+    def test_build_args_beat_global_arg_defaults(self):
+        d = self.make_dir(
+            "ARG PORT=8080\nFROM alpine\nARG PORT\nEXPOSE $PORT\n"
+        )
+        self.assertEqual(
+            docker_manager.first_exposed_port(d, {"PORT": "9000"}), 9000
+        )
+
     def test_unresolved_expose_variable_returns_none(self):
         d = self.make_dir("FROM alpine\nEXPOSE ${PORT}\n")
         self.assertIsNone(docker_manager.first_exposed_port(d))
@@ -315,6 +384,23 @@ class ResolveContainerPortTests(unittest.TestCase):
         self.assertEqual(
             docker_manager.resolve_container_port({"containerPort": 9000}, "DOCKER", d),
             9000,
+        )
+
+    def test_project_env_vars_are_honored_as_build_args(self):
+        # cmd_deploy feeds payload.envVars — exactly what the build passes
+        # as --build-arg — into the resolver, so an ARG default yields to
+        # it (#172 review).
+        d = self.make_dir("FROM x\nARG PORT=8080\nEXPOSE $PORT\n")
+        self.assertEqual(
+            docker_manager.resolve_container_port(
+                {"envVars": {"PORT": "9000"}}, "DOCKER", d
+            ),
+            9000,
+        )
+        # Non-dict envVars must not crash the resolver.
+        self.assertEqual(
+            docker_manager.resolve_container_port({"envVars": None}, "DOCKER", d),
+            8080,
         )
 
     def test_docker_without_dockerfile_keeps_default(self):
