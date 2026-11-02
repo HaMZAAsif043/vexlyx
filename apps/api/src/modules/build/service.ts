@@ -4,7 +4,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PrismaClient } from "@prisma/client";
 import type { FastifyBaseLogger } from "fastify";
-import type { Deployment, ProjectType } from "@vexlyx/shared";
+import type { BuildPlan, Deployment, ProjectType } from "@vexlyx/shared";
 import { env } from "../../config/env.js";
 import { runDockerDeploy, runDockerStatus } from "../deploy/service.js";
 import { runGitManager } from "../git/service.js";
@@ -68,6 +68,7 @@ interface BuildManagerLine {
   done?: boolean;
   imageName?: string;
   framework?: string;
+  installCmd?: string;
   buildCmd?: string;
   error?: string;
   code?: string;
@@ -75,6 +76,7 @@ interface BuildManagerLine {
 
 interface PlanResult {
   framework: string;
+  installCmd: string | null;
   buildCmd: string | null;
   startCmd: string | null;
   detectedType: string | null;
@@ -135,6 +137,7 @@ function runBuildPlan(
 
       resolveP({
         framework: parsed.framework ?? "unknown",
+        installCmd: parsed.installCmd ?? null,
         buildCmd: parsed.buildCmd ?? null,
         startCmd: parsed.startCmd ?? null,
         detectedType: parsed.detectedType ?? null,
@@ -156,6 +159,7 @@ function runBuildPlan(
 interface BuildImageOptions {
   projectDir: string;
   imageName: string;
+  installCmd?: string | null;
   buildCmd: string | null;
   startCmd?: string | null;
   cacheKey?: string | null;
@@ -172,6 +176,7 @@ function runBuildImage(
       command: "build",
       projectDir: options.projectDir,
       imageName: options.imageName,
+      installCmd: options.installCmd,
       buildCmd: options.buildCmd,
       startCmd: options.startCmd,
       cacheKey: options.cacheKey,
@@ -365,7 +370,7 @@ export function createBuildProcessor(
   logger: FastifyBaseLogger,
 ) {
   return async (job: { id?: string; name: string; data: BuildJobData }): Promise<void> => {
-    const { deploymentId, projectId, projectDir, imageName, buildCmd } = job.data;
+    const { deploymentId, projectId, projectDir, imageName, installCmd, buildCmd } = job.data;
     const startedAt = Date.now();
 
     // Maintain an in-memory log accumulator to prevent async race conditions
@@ -433,6 +438,7 @@ export function createBuildProcessor(
           name: true,
           type: true,
           port: true,
+          installCmd: true,
           startCmd: true,
           gitUrl: true,
           branch: true,
@@ -545,6 +551,15 @@ export function createBuildProcessor(
         );
       }
 
+      // Install command: this job's override, then the project's stored
+      // override, then what the plan derived from the lockfiles. Null leaves
+      // the choice with Nixpacks' own provider default.
+      const effectiveInstallCmd =
+        installCmd ?? project.installCmd ?? planResult.installCmd ?? null;
+      if (effectiveInstallCmd) {
+        await appendLog(`[vexlyx] Install command: ${effectiveInstallCmd}`);
+      }
+
       // Use provided buildCmd override, then plan's detected cmd, then null
       const effectiveBuildCmd = buildCmd ?? planResult.buildCmd;
       if (effectiveBuildCmd) {
@@ -594,6 +609,7 @@ export function createBuildProcessor(
           {
             projectDir,
             imageName,
+            installCmd: effectiveInstallCmd,
             buildCmd: effectiveBuildCmd,
             startCmd: project.startCmd ?? planResult.startCmd,
             cacheKey: `vexlyx-${projectId}`,
@@ -766,6 +782,7 @@ export class BuildService {
       },
     });
 
+    const effectiveInstallCmd = body.installCmd ?? project.installCmd ?? null;
     const effectiveBuildCmd = body.buildCmd ?? project.buildCmd ?? null;
 
     await enqueueJob({
@@ -774,10 +791,43 @@ export class BuildService {
       userId,
       projectDir,
       imageName,
+      installCmd: effectiveInstallCmd,
       buildCmd: effectiveBuildCmd,
     });
 
     return this.toDeploymentShape(deployment);
+  }
+
+  /**
+   * Runs the Nixpacks plan over the project's current source without building
+   * anything, so the dashboard can show what auto-detection would pick next to
+   * the values the user overrode. Detection lives in build_manager.py; this
+   * only shuttles its answer, so the two can never drift apart.
+   */
+  async getBuildPlan(userId: string, projectId: string): Promise<BuildPlan> {
+    await this.findOwnedProject(userId, projectId);
+
+    const projectDir = resolve(env.PROJECTS_DIR, projectId);
+    if (!existsSync(projectDir) || readdirSync(projectDir).length === 0) {
+      throw new BuildError(
+        "There is no source to analyse yet. Connect a repository or upload files, then deploy once.",
+        "PROJECT_NOT_CLONED",
+        400,
+      );
+    }
+
+    const envService = new EnvService(this.prisma);
+    const envVars = await envService.getDecryptedMap(projectId);
+
+    const plan = await runBuildPlan(projectDir, envVars);
+
+    return {
+      framework: plan.framework,
+      detectedType: plan.detectedType,
+      installCmd: plan.installCmd,
+      buildCmd: plan.buildCmd,
+      startCmd: plan.startCmd,
+    };
   }
 
   async getDeployment(
@@ -858,6 +908,7 @@ export class BuildService {
         id: true,
         userId: true,
         gitUrl: true,
+        installCmd: true,
         buildCmd: true,
         deletedAt: true,
       },

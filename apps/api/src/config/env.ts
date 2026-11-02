@@ -69,6 +69,18 @@ const envSchema = z
       .enum(["true", "false"])
       .default("false")
       .transform((v) => v === "true"),
+    // In-panel update notices (F5.33). The API asks GitHub for the newest
+    // stable release (cached in Redis for 6 hours) so the dashboard can tell
+    // admins a newer version exists. Disable on air-gapped servers, and point
+    // UPDATE_CHECK_REPO at the repository whose releases you publish from.
+    UPDATE_CHECK_ENABLED: z
+      .enum(["true", "false"])
+      .default("true")
+      .transform((v) => v === "true"),
+    UPDATE_CHECK_REPO: z
+      .string()
+      .regex(/^[\w.-]+\/[\w.-]+$/, "Must be an owner/repo slug")
+      .default("atlantiqshq/vexlyx"),
     // Git integration (F1.3)
     PROJECTS_DIR: z.string().min(1).default("./workspaces/projects"),
     SSH_KEYS_DIR: z.string().min(1).default("./workspaces/keys"),
