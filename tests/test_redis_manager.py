@@ -533,17 +533,55 @@ class TestCreateCleansUpAfterItself(ManagerCommandTestCase):
         self.assertTrue(any(a.startswith("volume rm") for a in argv), argv)
         self.assertFalse(self.config_dir_for(container).exists(), "a failed create must not leave an untracked config behind")
 
+    def test_unhealthy_container_after_a_successful_run_is_cleaned_up(self):
+        # docker run succeeds but the container never reports healthy: that
+        # failure must still remove the container, volume and config so they
+        # never become invisible, untracked resources (#170 review).
+        container = VALID_PAYLOAD["containerName"]
+        stub = self.use_stub(
+            (lambda c: c[1] == "inspect" and "Health" in c[3], cp(rc=0, stdout="unhealthy")),
+            (
+                lambda c: c[1] == "inspect" and "State.Status" in c[3],
+                cp(rc=1, stderr="Error: No such container: x"),
+            ),
+            (lambda c: c[1] == "run", cp(rc=0, stdout="container123")),
+        )
+        self.patch("HEALTH_WAIT_TIMEOUT", 1)
 
-@unittest.skipUnless(DOCKER, "Docker engine is required for the lifecycle test")
+        code, result = self.run_cmd(VALID_PAYLOAD)
+
+        self.assertEqual(code, 1)
+        self.assertEqual(result.get("code"), "CREATE_FAILED")
+        self.assertIn("did not become healthy", result.get("error", ""))
+        argv = stub.argv()
+        self.assertTrue(any(a.startswith("run ") for a in argv), "docker run must have succeeded first")
+        self.assertTrue(any(a.startswith("rm -f") for a in argv), argv)
+        self.assertTrue(any(a.startswith("volume rm") for a in argv), argv)
+        self.assertFalse(self.config_dir_for(container).exists(), "the generated config must be cleaned up too")
+
+
+@unittest.skipUnless(DOCKER, "Docker engine is required for the lifecycle tests")
 class TestRedisLifecycle(unittest.TestCase):
-    CONTAINER = "vexlyx-redis unittest-lifecycle-0001"
+    """Round-trip against a real engine for every allowed image: create,
+    authenticated PONG, a written key counted by stats, then teardown."""
 
-    def test_create_ping_stats_delete(self):
-        container = self.CONTAINER.replace(" ", "-")
+    @staticmethod
+    def exec_cli(container: str, command: str) -> subprocess.CompletedProcess:
+        # The snippet authenticates with the password currently in the mounted
+        # config — never with a password interpolated here.
+        return subprocess.run(
+            [shutil.which("docker"), "exec", container, "sh", "-c", manager._CLI_SNIPPET.format(command)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    def round_trip(self, image: str):
+        container = "vexlyx-redis-unittest-" + image.replace("/", "-").replace(":", "-")
         code, result, stderr = run_py_script({
             "command": "create_instance",
             "containerName": container,
-            "image": "valkey/valkey:8.0",
+            "image": image,
             "password": "b" * 32,
             "memoryLimitMb": 64,
             "evictionPolicy": "noeviction",
@@ -557,29 +595,11 @@ class TestRedisLifecycle(unittest.TestCase):
             # requires a real PONG and stats a real INFO reply, so NOAUTH
             # (e.g. from a legacy CRLF config) can never look like a working
             # instance (#170 review).
-            docker_bin = shutil.which("docker")
-            ping = subprocess.run(
-                [docker_bin, "exec", container, "sh", "-c", manager._CLI_SNIPPET.format("ping")],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
+            ping = self.exec_cli(container, "ping")
             self.assertEqual(ping.returncode, 0, ping.stderr)
             self.assertIn("PONG", ping.stdout)
 
-            probe = subprocess.run(
-                [
-                    docker_bin,
-                    "exec",
-                    container,
-                    "sh",
-                    "-c",
-                    manager._CLI_SNIPPET.format("set vexlyx:unittest probe"),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
+            probe = self.exec_cli(container, "set vexlyx:unittest probe")
             self.assertEqual(probe.returncode, 0, probe.stderr)
             self.assertIn("OK", probe.stdout)
 
@@ -588,6 +608,55 @@ class TestRedisLifecycle(unittest.TestCase):
             self.assertIn("usedMemoryBytes", result)
             self.assertGreaterEqual(result["uptimeSeconds"], 0)
             self.assertGreaterEqual(result["totalKeys"], 1, "the probe key must be counted")
+        finally:
+            code, result, _ = run_py_script({"command": "delete_instance", "containerName": container})
+            self.assertEqual(code, 0, f"delete failed: {result}")
+            self.assertTrue(result.get("containerRemoved"))
+
+    def test_valkey_startup_and_round_trip(self):
+        self.round_trip("valkey/valkey:8.0")
+
+    def test_redis_startup_and_round_trip(self):
+        # Both allowed images must start against the generated config (#170).
+        self.round_trip("redis:7.2-alpine")
+
+    def test_key_survives_password_rotation(self):
+        # recreate_instance backs password rotation and limit changes: the
+        # container is gracefully stopped so Redis runs its final persistence
+        # work, then replaced over the SAME volume (#170 review).
+        container = "vexlyx-redis-unittest-rotation-0001"
+        code, result, stderr = run_py_script({
+            "command": "create_instance",
+            "containerName": container,
+            "image": "valkey/valkey:8.0",
+            "password": "b" * 32,
+            "memoryLimitMb": 64,
+            "evictionPolicy": "noeviction",
+            "persistence": "RDB",
+        })
+        self.assertEqual(code, 0, f"create failed: {result} {stderr}")
+
+        try:
+            stored = self.exec_cli(container, "set vexlyx:rotation survivor")
+            self.assertEqual(stored.returncode, 0, stored.stderr)
+            self.assertIn("OK", stored.stdout)
+
+            code, result, stderr = run_py_script({
+                "command": "recreate_instance",
+                "containerName": container,
+                "image": "valkey/valkey:8.0",
+                "password": "c" * 32,
+                "memoryLimitMb": 64,
+                "evictionPolicy": "noeviction",
+                "persistence": "RDB",
+            })
+            self.assertEqual(code, 0, f"recreate failed: {result} {stderr}")
+
+            # The snippet reads requirepass from the rewritten config, so this
+            # authenticates with the NEW password and must still see the key.
+            fetched = self.exec_cli(container, "get vexlyx:rotation")
+            self.assertEqual(fetched.returncode, 0, fetched.stderr)
+            self.assertEqual(fetched.stdout.strip(), "survivor")
         finally:
             code, result, _ = run_py_script({"command": "delete_instance", "containerName": container})
             self.assertEqual(code, 0, f"delete failed: {result}")
