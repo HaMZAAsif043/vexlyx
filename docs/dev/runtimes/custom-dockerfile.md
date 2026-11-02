@@ -185,6 +185,9 @@ Run the automated test suite:
 ```bash
 # Custom Dockerfile runtime tests
 python tests/test_dockerfile_runtime.py
+# Dockerfile builds must not require nixpacks (also runs in CI)
+python -m unittest tests.test_dockerfile_build_nixpacks_absent -v
+
 
 # Multi-project isolation verification
 python tests/test_multi_project_isolation.py
