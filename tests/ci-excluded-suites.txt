@@ -1,0 +1,36 @@
+# Suites under tests/ that CI deliberately does not run (#226).
+#
+# Format: one filename per line, then '#' and the reason. The reason is required:
+# tests/check_ci_suite_coverage.py fails when a suite is neither named in
+# .github/workflows/ci.yml nor listed here, when an entry has no reason, when an
+# entry names a file that no longer exists, or when a suite is both listed here
+# and run by CI. Removing a line is how a suite gets wired back in.
+#
+# "script-style" means the file defines module-level test_* functions and a
+# main() but no unittest.TestCase, so `unittest discover` collects 0 tests from
+# it; on Python 3.12+ that is "NO TESTS RAN" and exit 5. Running it needs
+# `python3 tests/<name>.py` instead, which is a separate change from wiring it
+# into the test job.
+
+test_custom_domains.py            # needs a live panel API; its probe catches URLError and prints SKIP, so it passes without asserting anything
+test_database_provisioning.py     # script-style (0 tests under discover); its live parts need docker inspect of vexlyx-postgres / vexlyx-mysql
+test_dns_management.py            # writes docker/coredns/zones into the checkout instead of a temp dir, and its live parts need the panel API
+test_dockerfile_runtime.py        # script-style (0 tests under discover)
+test_dovecot_imap.py              # needs docker exec into vexlyx-dovecot; USERS_FILE (:36) still reads docker/dovecot/config/users, which get_users_file() replaced with active_directory("dovecot")
+test_file_manager_sftp.py         # sync_user_projects runs sudo mount --bind and sudo chown on POSIX, so it needs root and leaves a bind mount behind
+test_github_webhooks.py           # setUpClass probes a live panel API and skips the suite without one
+test_installer_dns_guidance.py    # hermetic but measured at 291s for 3 tests: the fake cert store never matches, so 16-summary.sh sleeps 2s up to 45 times per test
+test_live_dns_e2e.py              # script-style (0 tests under discover); needs the live API and real DNS propagation
+test_live_mock_domains.py         # script-style (0 tests under discover); needs the live API and Traefik listening on port 80
+test_mail_authentication.py       # needs an admin login to a live panel; 6 of its 7 tests skip without one
+test_mailbox_management.py        # needs docker exec into vexlyx-postfix and writes repo config paths; still expects docker/postfix/config, which moved to docker/mail-data/state
+test_multi_project_isolation.py   # script-style (0 tests under discover)
+test_nextjs_runtime.py            # script-style (0 tests under discover); needs the nixpacks binary (get_nixpacks_binary() returns None without it); :174 asserts connect(3000,'127.0.0.1' while next.yml:25 probes require('os').hostname() (#202)
+test_opendkim_reload.py           # fails at import: :14 loads postfix_manager without system/python on sys.path, so postfix_manager.py:32 "from mail_state import ..." raises ModuleNotFoundError
+test_php_wordpress_runtime.py     # script-style (0 tests under discover); needs nixpacks; expects wp-config.php and .htaccess scaffolding that cmd_wordpress_install() replaced with wp-content only (build_manager.py:1488-1493)
+test_postfix_smtp.py              # publishes through docker exec into vexlyx-postfix; expects docker/postfix/config and docker/postfix/opendkim/keys, which moved to docker/mail-data/state
+test_python_runtime.py            # script-style (0 tests under discover); needs the nixpacks binary
+test_react_runtime.py             # script-style (0 tests under discover); needs the nixpacks binary
+test_scheduled_task_exec.py       # script-style (0 tests under discover)
+test_subdomains.py                # needs a live panel API; its probe catches URLError and prints SKIP, so it passes without asserting anything
+test_vacation_responder.py        # writes docker/mail-data/vhosts into the checkout and needs docker exec chown; 2 of its 10 tests skip without a live panel

@@ -115,6 +115,24 @@ jobs:
       # the post-deploy probe reaches the container's bridge address, but the
       # tests only bind a local socket, so they need no docker daemon.
       - run: python3 -m unittest discover -s tests -p test_post_deploy_routable_probe.py
+      # The suites below existed but were named nowhere, so they had never run
+      # in CI (#226). Each was executed on a Linux checkout of main before being
+      # added here: 66 tests, no docker daemon, no network, no live panel.
+      - run: python3 -m unittest discover -s tests -p test_backup_database_restore.py
+      - run: python3 -m unittest discover -s tests -p test_build_install_command.py
+      - run: python3 -m unittest discover -s tests -p test_compose_healthcheck_target.py
+      - run: python3 -m unittest discover -s tests -p test_container_health_status.py
+      - run: python3 -m unittest discover -s tests -p test_github_app_git_credentials.py
+      - run: python3 -m unittest discover -s tests -p test_installer_output.py
+      - run: python3 -m unittest discover -s tests -p test_mail_tls.py
+      - run: python3 -m unittest discover -s tests -p test_postfix_map_rebuild.py
+      - run: python3 -m unittest discover -s tests -p test_ssl_management.py
+      - run: python3 -m unittest discover -s tests -p test_subprocess_timeouts.py
+      - run: python3 -m unittest discover -s tests -p test_ci_suite_coverage.py
+      # Fails when a tests/test_*.py is neither named above nor listed with a
+      # reason in tests/ci-excluded-suites.txt, or when a named suite is one
+      # unittest discover collects nothing from.
+      - run: python3 tests/check_ci_suite_coverage.py
 
   build:
     runs-on: ubuntu-latest
