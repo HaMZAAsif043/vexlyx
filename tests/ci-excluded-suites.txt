@@ -25,12 +25,12 @@ test_live_mock_domains.py         # script-style (0 tests under discover); needs
 test_mail_authentication.py       # needs an admin login to a live panel; 6 of its 7 tests skip without one
 test_mailbox_management.py        # needs docker exec into vexlyx-postfix and writes repo config paths; still expects docker/postfix/config, which moved to docker/mail-data/state
 test_multi_project_isolation.py   # script-style (0 tests under discover)
-test_nextjs_runtime.py            # needs the nixpacks binary (get_nixpacks_binary() returns None without it); :174 asserts connect(3000,'127.0.0.1' while next.yml:25 probes require('os').hostname() (#202)
+test_nextjs_runtime.py            # script-style (0 tests under discover); needs the nixpacks binary (get_nixpacks_binary() returns None without it); :174 asserts connect(3000,'127.0.0.1' while next.yml:25 probes require('os').hostname() (#202)
 test_opendkim_reload.py           # fails at import: :14 loads postfix_manager without system/python on sys.path, so postfix_manager.py:32 "from mail_state import ..." raises ModuleNotFoundError
-test_php_wordpress_runtime.py     # needs nixpacks; expects wp-config.php and .htaccess scaffolding that cmd_wordpress_install() replaced with wp-content only (build_manager.py:1488-1493)
+test_php_wordpress_runtime.py     # script-style (0 tests under discover); needs nixpacks; expects wp-config.php and .htaccess scaffolding that cmd_wordpress_install() replaced with wp-content only (build_manager.py:1488-1493)
 test_postfix_smtp.py              # publishes through docker exec into vexlyx-postfix; expects docker/postfix/config and docker/postfix/opendkim/keys, which moved to docker/mail-data/state
-test_python_runtime.py            # needs the nixpacks binary
-test_react_runtime.py             # needs the nixpacks binary
+test_python_runtime.py            # script-style (0 tests under discover); needs the nixpacks binary
+test_react_runtime.py             # script-style (0 tests under discover); needs the nixpacks binary
 test_scheduled_task_exec.py       # script-style (0 tests under discover)
 test_subdomains.py                # needs a live panel API; its probe catches URLError and prints SKIP, so it passes without asserting anything
 test_vacation_responder.py        # writes docker/mail-data/vhosts into the checkout and needs docker exec chown; 2 of its 10 tests skip without a live panel
