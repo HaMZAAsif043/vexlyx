@@ -8,7 +8,7 @@
 #
 # "script-style" means the file defines module-level test_* functions and a
 # main() but no unittest.TestCase, so `unittest discover` collects 0 tests from
-# it and still exits 0, so the job stays green. Running it needs
+# it; on Python 3.12+ that is "NO TESTS RAN" and exit 5. Running it needs
 # `python3 tests/<name>.py` instead, which is a separate change from wiring it
 # into the test job.
 

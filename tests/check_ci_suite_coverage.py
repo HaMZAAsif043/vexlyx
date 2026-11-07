@@ -2,9 +2,10 @@
 """Fail CI when a tests/test_*.py is neither run nor deliberately excluded (#226).
 
 The workflow used to name suites one by one, so a new suite could be added, come
-back "test: pass", and never have executed. Two shapes of that silence are checked
-here: a suite nobody names, and a suite that is named but from which
-`unittest discover` collects nothing.
+back "test: pass", and never have executed. That is the gap this closes. It also
+reports a named suite from which `unittest discover` collects nothing, which the
+runner's Python answers with `NO TESTS RAN` and exit 5 — a failure that names no
+file and explains nothing.
 """
 
 import ast
@@ -140,7 +141,7 @@ def check(root: Path = ROOT, workflow: Path = WORKFLOW, exclusions: Path = EXCLU
             if not collects_tests(path):
                 problems.append(
                     f"{name} is run by CI but defines no TestCase and no load_tests, "
-                    "so unittest discover collects 0 tests and still exits 0"
+                    "so unittest discover collects 0 tests from it"
                 )
         elif name not in reasons:
             problems.append(
