@@ -9,8 +9,10 @@ Integrates [Nixpacks](https://nixpacks.com) for zero-configuration application b
 ## Architecture
 
 ```
-Dashboard (BuildPanel.tsx / useBuild.ts)
+Dashboard (BuildSettingsPanel.tsx / BuildPanel.tsx / useBuild.ts)
     │
+    │  PUT  /api/projects/:id            (installCmd / buildCmd / startCmd / port)
+    │  GET  /api/projects/:id/build-plan (what auto-detection would pick)
     │  POST /api/projects/:id/build
     │  GET  /api/projects/:id/deployments
     │  GET  /api/projects/:id/deployments/:deploymentId
@@ -23,29 +25,49 @@ API (apps/api/src/modules/build/)
          │  BullMQ 'build-queue' (Redis)
          │  Job processor
          │
-         │  stdin: JSON payload { command: "plan" | "build", ... }
+         │  stdin: JSON payload { command: "plan" | "build", installCmd, ... }
          │  stdout: newline-delimited JSON { log: "..." } / { done: true }
          ▼
     system/python/build_manager.py
          │
          ├── cmd_plan()  — nixpacks plan --format json (framework detection)
-         └── cmd_build() — nixpacks build <dir> --name <image> [--build-cmd <cmd>]
+         │                + derive_install_cmd() for the install command
+         └── cmd_build() — nixpacks build <dir> --name <image>
+                           [--install-cmd <cmd>] [--build-cmd <cmd>] [--start-cmd <cmd>]
 ```
 
 ### Data Flow
 
-1. **User clicks "Deploy"** in `BuildPanel.tsx`
-2. **Dashboard** calls `POST /api/projects/:id/build` with optional `buildCmd` override
+1. **User clicks "Deploy"** in `BuildPanel.tsx`, or sets a command in `BuildSettingsPanel.tsx` first
+2. **Dashboard** calls `POST /api/projects/:id/build` with optional `installCmd` / `buildCmd` overrides
 3. **API `buildRoutes`** validates request → calls `BuildService.triggerBuild()`
 4. **Service** creates a `Deployment` record with status `QUEUED` and enqueues a job into BullMQ `build-queue`
 5. **API returns 202 Accepted** immediately with the `Deployment` record; dashboard starts polling `GET /api/projects/:id/deployments/:deploymentId` every 3s
 6. **BullMQ Worker** picks up the job:
    - Updates status to `BUILDING`
    - Spawns `build_manager.py plan` to detect framework and default build command
-   - Spawns `build_manager.py build` to build the Docker image
+   - Resolves the install command (see below) and spawns `build_manager.py build` to build the Docker image
    - Progressively appends streamed stdout log lines to `Deployment.buildLogs`
    - On success: marks status as `RUNNING` and records `duration` (seconds)
    - On failure: marks status as `FAILED` and appends error details to `buildLogs`
+
+### Build command overrides (F5.34)
+
+Every command has three possible sources, resolved in this order — first non-null wins:
+
+| Command | 1. This run | 2. Project setting | 3. Auto-detection |
+|---------|-------------|--------------------|-------------------|
+| install | `POST /build` body `installCmd` | `Project.installCmd` | `derive_install_cmd()` from the lockfile / Python manifest |
+| build | `POST /build` body `buildCmd` | `Project.buildCmd` | `nixpacks plan` output |
+| start | — | `Project.startCmd` | `nixpacks plan` output |
+
+`derive_install_cmd()` lives in `build_manager.py` and is shared by `cmd_plan` and `cmd_build`, so what the
+**Detect** button reports is exactly what a build with an empty field would run. A `null` install command
+sends no `--install-cmd` flag at all, which leaves Nixpacks' own provider default in charge — that is the
+difference between "auto" and "an empty command".
+
+Dockerfile projects skip all of this: they build with `docker build`, where the image itself declares the
+install step.
 
 ---
 
@@ -62,6 +84,9 @@ API (apps/api/src/modules/build/)
 | [`packages/shared/src/types/index.ts`](../packages/shared/src/types/index.ts) | `Deployment`, `DeploymentStatus`, `PaginatedDeployments` types |
 | [`apps/dashboard/src/hooks/useBuild.ts`](../apps/dashboard/src/hooks/useBuild.ts) | React hooks: `useTriggerBuild`, `useDeploymentPolling`, `useDeployments` |
 | [`apps/dashboard/src/components/projects/BuildPanel.tsx`](../apps/dashboard/src/components/projects/BuildPanel.tsx) | Deployment list, status badges, trigger button, and terminal-styled `<pre>` log viewer |
+| [`apps/dashboard/src/components/projects/BuildSettingsPanel.tsx`](../../apps/dashboard/src/components/projects/BuildSettingsPanel.tsx) | Per-project install/build/start/port overrides, **Detect** and **Auto** (clear all) actions |
+| [`apps/api/src/modules/build/installCmd.test.ts`](../../apps/api/src/modules/build/installCmd.test.ts) | Resolution order for the install command and the payload handed to `build_manager.py` |
+| [`tests/test_build_install_command.py`](../../tests/test_build_install_command.py) | `derive_install_cmd()` heuristics, plan output, and `--install-cmd` forwarding |
 | [`apps/dashboard/src/app/(panel)/projects/[id]/page.tsx`](../apps/dashboard/src/app/(panel)/projects/[id]/page.tsx) | Project detail page hosting `<BuildPanel />` |
 
 ---
@@ -82,6 +107,17 @@ Uses the existing `Deployment` model in `apps/api/prisma/schema.prisma`:
 | `createdAt` | `DateTime` | Timestamp when build was queued |
 | `updatedAt` | `DateTime` | Timestamp of last status/log update |
 
+The stored commands (F5.34) live on `Project`, not on `Deployment`, so every later deploy reuses them
+until the user clears them. Each is nullable, and `null` always means "auto-detect". F5.34 added
+`installCmd`; the other three already existed but had no panel to set them.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `installCmd` | `String?` | `nixpacks build --install-cmd` override |
+| `buildCmd` | `String?` | `nixpacks build --build-cmd` override |
+| `startCmd` | `String?` | `nixpacks build --start-cmd` override |
+| `port` | `Int?` | Container port, when it should not follow detection or `EXPOSE` |
+
 ---
 
 ## Environment Variables
@@ -101,9 +137,13 @@ Triggers a new build for the project.
 **Request Body (optional):**
 ```json
 {
+  "installCmd": "npm ci --frozen-lockfile",
   "buildCmd": "npm run build:custom"
 }
 ```
+Each field applies to this run only and falls back to the project's stored value, then to
+auto-detection. The project-detail **Deploy** tab writes the stored values with
+`PUT /api/projects/:id`.
 
 **Response (`202 Accepted`):**
 ```json
@@ -145,6 +185,26 @@ Fetches a single deployment (used for log and status polling).
 
 **Response:** Single `Deployment` object.
 
+### `GET /api/projects/:id/build-plan`
+Runs `nixpacks plan` over the project's current source without building anything, so the dashboard can
+show what auto-detection would pick next to the values the user overrode. Detection itself stays in
+`build_manager.py` — this route only shuttles its answer.
+
+**Response (`200`):**
+```json
+{
+  "framework": "nextjs",
+  "detectedType": "NEXTJS",
+  "installCmd": "pnpm install",
+  "buildCmd": "pnpm run build",
+  "startCmd": "pnpm start"
+}
+```
+
+**Errors:** `403` for another user's project, `404 PROJECT_NOT_FOUND`, `400 PROJECT_NOT_CLONED` when there
+is no source on disk to analyse yet. A `null` field means Nixpacks proposed nothing for it, so a blank
+override leaves the choice with Nixpacks' own default.
+
 ---
 
 ## How to Test
@@ -183,6 +243,26 @@ curl -X POST http://localhost:5000/api/projects/<PROJECT_ID>/build \
 # Poll deployment logs
 curl http://localhost:5000/api/projects/<PROJECT_ID>/deployments/<DEPLOYMENT_ID> \
   --cookie "session=<YOUR_SESSION>"
+
+# Ask what auto-detection would pick (F5.34)
+curl http://localhost:5000/api/projects/<PROJECT_ID>/build-plan \
+  --cookie "session=<YOUR_SESSION>"
+```
+
+### 4. Build settings panel (F5.34)
+1. Open `http://localhost:3000/projects/<PROJECT_ID>` → **Deploy** tab, above the deployment list
+2. Click **Detect** — the placeholder in each field shows what `nixpacks plan` derived
+3. Type an install command (e.g. `pnpm install --frozen-lockfile`) and click **Save**: the badge flips to
+   `Custom` and the Overview tab shows the same value
+4. Click **Save & Deploy** — the build log opens with `[vexlyx] Install command: pnpm install --frozen-lockfile`
+5. Click **Auto** — every field returns to blank, the badges return to `Auto`, and the next build logs no
+   install command because Nixpacks decides again
+
+### 5. Automated coverage
+```bash
+python tests/test_build_install_command.py    # lockfile heuristics, plan output, --install-cmd forwarding
+npx vitest run src/modules/build/installCmd.test.ts                   # apps/api — resolution order + payload
+npx vitest run src/components/projects/BuildSettingsPanel.test.tsx    # apps/dashboard — the panel
 ```
 
 ---

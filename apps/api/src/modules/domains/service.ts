@@ -98,6 +98,9 @@ export function removeTraefikRouteFile(
     fs.unlinkSync(configPath);
   } catch (err) {
     logger?.error({ err, domainId }, "Failed to remove Traefik config for domain");
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new DomainError("Domain route cleanup failed; retry deleting the project", "DOMAIN_ROUTE_CLEANUP_FAILED", 503);
+    }
   }
 }
 

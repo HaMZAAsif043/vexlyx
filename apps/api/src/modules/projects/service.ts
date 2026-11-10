@@ -37,6 +37,7 @@ const PROJECT_SELECT = {
   status: true,
   gitUrl: true,
   branch: true,
+  installCmd: true,
   buildCmd: true,
   startCmd: true,
   port: true,
@@ -187,6 +188,7 @@ export class ProjectService {
           status: "ACTIVE",
           gitUrl: data.gitUrl || null,
           branch: data.branch,
+          installCmd: data.installCmd ?? null,
           buildCmd: data.buildCmd ?? null,
           startCmd: data.startCmd ?? null,
           port: data.port ?? null,
@@ -258,6 +260,7 @@ export class ProjectService {
           githubDisconnectReason: null,
         }),
         ...(data.branch !== undefined && { branch: data.branch }),
+        ...(data.installCmd !== undefined && { installCmd: data.installCmd }),
         ...(data.buildCmd !== undefined && { buildCmd: data.buildCmd }),
         ...(data.startCmd !== undefined && { startCmd: data.startCmd }),
         ...(data.port !== undefined && { port: data.port }),
@@ -308,8 +311,16 @@ export class ProjectService {
   }
 
   async softDelete(userId: string, projectId: string) {
-    // Verify ownership
-    const project = await this.getById(userId, projectId);
+    // A previous attempt may have marked the project deleted before cleanup
+    // failed. Keep that tombstone while allowing its owner to retry teardown.
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { ...PROJECT_SELECT, deletedAt: true },
+    });
+    if (!project) throw new ProjectError("Project not found", "PROJECT_NOT_FOUND", 404);
+    if (project.userId !== userId) {
+      throw new ProjectError("You do not have access to this project", "FORBIDDEN", 403);
+    }
 
     await this.prisma.project.update({
       where: { id: projectId },
