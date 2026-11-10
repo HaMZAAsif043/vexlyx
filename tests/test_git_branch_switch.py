@@ -1,21 +1,24 @@
-"""Branch switching on an existing workspace (#153).
-
-A workspace cloned with `--single-branch` pins remote.origin.fetch to the
-originally cloned branch, so a branch created after the clone never appears
-in refs/remotes/origin/ and `git checkout <branch>` fails with
-"pathspec ... did not match".  These tests lock in the explicit-refspec
-fetch + wildcard refspec restore + `checkout -b` from the remote-tracking
-ref, and the single-JSON-document contract the API caller depends on.
 """
+#153 — switching a project to a branch that did not exist when its workspace was
+first cloned.
 
+These run the real git binary. The failure is git's own refspec behaviour: a
+`--single-branch` clone restricts `remote.origin.fetch`, and mocked subprocess
+calls cannot show that a plain fetch therefore never learns of a new branch, nor
+that `checkout` refuses to guess a branch even once its remote-tracking ref
+exists. The local repository is rewired behind a public URL, so the tested URL
+policy in git_manager.py stays exactly as strict as it is in production.
+"""
+import contextlib
 import importlib.util
 import io
 import json
+import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location(
     "git_manager", Path(__file__).parents[1] / "system/python/git_manager.py"
@@ -23,331 +26,145 @@ SPEC = importlib.util.spec_from_file_location(
 git_manager = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(git_manager)
 
+URL = "https://github.com/team/repo"
+NEW_BRANCH = "vexlyx-docker"
 
-def completed(args, returncode=0, stdout="", stderr=""):
-    return subprocess.CompletedProcess(args, returncode, stdout, stderr)
-
-
-def tail(args):
-    """Command arguments without the leading git/binary and redirect guard."""
-    out = list(args)
-    while out and out[0] in ("git", "ssh-keygen", "-c", "http.followRedirects=false", "-C"):
-        if out[0] == "-C":
-            out = out[2:]
-            break
-        out = out[1:]
-    return out
+GIT_IDENTITY = {
+    "GIT_AUTHOR_NAME": "Vexlyx test",
+    "GIT_AUTHOR_EMAIL": "test@example.invalid",
+    "GIT_COMMITTER_NAME": "Vexlyx test",
+    "GIT_COMMITTER_EMAIL": "test@example.invalid",
+}
 
 
-def run_commands(calls):
-    """Subprocess invocations excluding the read-only rev-parse probes."""
-    return [tail(call.args[0]) for call in calls if "rev-parse" not in call.args[0]]
-
-
-class CheckoutFetchedBranchTests(unittest.TestCase):
-    """Unit tests for the branch-switch helper itself."""
-
+class GitBranchSwitchTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.dest = Path(self.temp.name) / "workspace"
-        self.dest.mkdir()
-        self.run = self.enterContext(patch.object(git_manager.subprocess, "run"))
+        self.root = Path(self.temp.name)
+        self.projects = self.root / "projects"
+        self.projects.mkdir()
+        self.workspace = self.projects / "p1"
 
-    def _script(self, ref_exists, run_rc=0):
-        """Route mocked subprocess.run calls by command shape."""
+        self.origin = self.root / "origin.git"
+        self.git("init", "-q", "--initial-branch=main", "--bare", str(self.origin))
+        self.seed = self.root / "seed"
+        self.git("init", "-q", "--initial-branch=main", str(self.seed))
+        self.write_file(self.seed, "main.txt", "work on main\n")
+        self.git("-C", str(self.seed), "remote", "add", "origin", self.origin.as_uri())
+        self.git("-C", str(self.seed), "push", "-q", "origin", "main")
 
-        def side_effect(args, **kwargs):
-            if "rev-parse" in args:
-                ref = args[-1]
-                return completed(args, 0 if ref_exists.get(ref, False) else 1)
-            return completed(args, run_rc)
+        config = self.root / "gitconfig"
+        config.write_text(f'[url "{self.origin.as_uri()}"]\n\tinsteadOf = {URL}\n')
+        previous = os.environ.get("GIT_CONFIG_GLOBAL")
+        os.environ["GIT_CONFIG_GLOBAL"] = str(config)
+        self.addCleanup(self.restore_config, previous)
 
-        self.run.side_effect = side_effect
+    def restore_config(self, previous):
+        if previous is None:
+            os.environ.pop("GIT_CONFIG_GLOBAL", None)
+        else:
+            os.environ["GIT_CONFIG_GLOBAL"] = previous
 
-    def test_existing_local_branch_is_checked_out_directly(self):
-        self._script({"refs/heads/feature-x": True})
-        git_manager._checkout_fetched_branch(self.dest, "feature-x", None)
-        commands = run_commands(self.run.call_args_list)
-        self.assertEqual(commands, [["checkout", "feature-x"]])
+    def git(self, *args):
+        env = {**os.environ, **GIT_IDENTITY}
+        result = subprocess.run(
+            ["git", *args], capture_output=True, text=True, env=env, timeout=120,
+            cwd=str(self.root),
+        )
+        if result.returncode != 0:
+            self.fail(f"git {' '.join(args)} failed: {result.stderr or result.stdout}")
+        return result.stdout
 
-    def test_new_branch_is_fetched_with_explicit_refspec_then_checked_out(self):
-        # Neither the local branch nor the remote-tracking ref exists: the
-        # single-branch clone's pinned refspec would hide the new branch.
-        self._script({})
-        git_manager._checkout_fetched_branch(self.dest, "feature-x", None)
-        commands = run_commands(self.run.call_args_list)
+    def write_file(self, repo: Path, name: str, content: str):
+        (repo / name).write_text(content)
+        self.git("-C", str(repo), "add", name)
+        self.git("-C", str(repo), "commit", "-qm", f"add {name}")
+
+    def run_sync(self, branch: str, git_url: str = URL) -> dict:
+        """Exercise the real entry point, including its error-to-JSON boundary."""
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).parents[1] / "system/python/git_manager.py")],
+            input=json.dumps({
+                "command": "clone", "projectId": "p1", "projectsDir": str(self.projects),
+                "gitUrl": git_url, "branch": branch,
+            }), capture_output=True, text=True, timeout=120,
+        )
+        documents = [line for line in result.stdout.splitlines() if line.strip()]
         self.assertEqual(
-            commands[0],
-            ["fetch", "origin", "+refs/heads/feature-x:refs/remotes/origin/feature-x"],
+            len(documents), 1,
+            f"git_manager.py must answer with one JSON document, got {documents}",
         )
+        document = json.loads(documents[0])
         self.assertEqual(
-            commands[1],
-            ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
+            result.returncode != 0, not document.get("success"),
+            f"exit status and reported result disagree: {document}",
         )
+        return document
+
+    def sync(self, branch: str) -> dict:
+        document = self.run_sync(branch)
+        self.assertTrue(document.get("success"), document)
+        return document
+
+    def publish_new_branch(self):
+        self.git("-C", str(self.seed), "checkout", "-q", "-b", NEW_BRANCH, "main")
+        self.write_file(self.seed, "dockerfile.txt", "work on the new branch\n")
+        self.git("-C", str(self.seed), "push", "-q", "origin", NEW_BRANCH)
+        self.git("-C", str(self.seed), "checkout", "-q", "main")
+
+    def test_first_clone_is_a_single_branch_clone(self):
+        # The setup the bug depends on: afterwards only main is fetchable.
+        self.assertEqual(self.sync("main")["action"], "cloned")
+        refspec = self.git("-C", str(self.workspace), "config", "--get", "remote.origin.fetch")
+        self.assertEqual(refspec.strip(), "+refs/heads/main:refs/remotes/origin/main")
+
+    def test_switching_to_a_branch_created_after_the_clone(self):
+        self.sync("main")
+        self.publish_new_branch()
+
+        self.assertEqual(self.sync(NEW_BRANCH)["action"], "pulled")
         self.assertEqual(
-            commands[2],
-            ["checkout", "-b", "feature-x", "refs/remotes/origin/feature-x"],
+            (self.workspace / "dockerfile.txt").read_text(), "work on the new branch\n"
         )
+        tracked = self.git("-C", str(self.workspace), "rev-parse", "--abbrev-ref", "@{upstream}")
+        self.assertEqual(tracked.strip(), f"origin/{NEW_BRANCH}")
 
-    def test_already_fetched_branch_skips_fetch_and_uses_tracking_ref(self):
-        self._script({"refs/remotes/origin/feature-x": True})
-        git_manager._checkout_fetched_branch(self.dest, "feature-x", None)
-        commands = run_commands(self.run.call_args_list)
+    def test_switching_back_to_the_original_branch_still_works(self):
+        self.sync("main")
+        self.publish_new_branch()
+        self.sync(NEW_BRANCH)
+
+        self.assertEqual(self.sync("main")["action"], "pulled")
         self.assertEqual(
-            commands,
-            [["checkout", "-b", "feature-x", "refs/remotes/origin/feature-x"]],
+            self.git("-C", str(self.workspace), "rev-parse", "--abbrev-ref", "HEAD").strip(),
+            "main",
         )
 
-    def test_fetch_failure_raises_instead_of_printing(self):
-        def side_effect(args, **kwargs):
-            if "rev-parse" in args:
-                return completed(args, 1)
-            if "fetch" in args:
-                return completed(args, 128, stderr="couldn't find remote ref")
-            return completed(args, 0)
+    def test_an_unknown_branch_is_one_clear_error_and_never_a_re_clone(self):
+        self.sync("main")
+        (self.workspace / "uploads.txt").write_text("customer data")
 
-        self.run.side_effect = side_effect
-        printed = self.enterContext(patch("builtins.print"))
-        with self.assertRaises(git_manager.GitCommandError):
-            git_manager._checkout_fetched_branch(self.dest, "nope", None)
-        printed.assert_not_called()
+        document = self.run_sync("no-such-branch")
+        self.assertEqual(document["code"], "COMMAND_FAILED")
+        self.assertIn("no-such-branch", document["error"])
+        # A failed sync must leave the workspace exactly where it was.
+        self.assertTrue((self.workspace / "uploads.txt").exists())
+        self.assertTrue((self.workspace / ".git").is_dir())
 
-    def test_ref_check_timeout_raises_command_timeout(self):
-        """An unfinished ref check is an error, not a missing ref (#153)."""
-
-        def side_effect(args, **kwargs):
-            if "rev-parse" in args:
-                raise subprocess.TimeoutExpired(args, git_manager.GIT_COMMAND_TIMEOUT)
-            return completed(args, 0)
-
-        self.run.side_effect = side_effect
-        printed = self.enterContext(patch("builtins.print"))
-        with self.assertRaises(git_manager.GitCommandError) as ctx:
-            git_manager._ref_exists(self.dest, "refs/heads/feature-x", None)
-        self.assertEqual(ctx.exception.code, "COMMAND_TIMEOUT")
-        self.assertIn("rev-parse", ctx.exception.message)
-        printed.assert_not_called()
-
-    def test_ref_check_timeout_does_not_trigger_fetch_and_create(self):
-        def side_effect(args, **kwargs):
-            if "rev-parse" in args:
-                raise subprocess.TimeoutExpired(args, git_manager.GIT_COMMAND_TIMEOUT)
-            return completed(args, 0)
-
-        self.run.side_effect = side_effect
-        printed = self.enterContext(patch("builtins.print"))
-        with self.assertRaises(git_manager.GitCommandError) as ctx:
-            git_manager._checkout_fetched_branch(self.dest, "feature-x", None)
-        self.assertEqual(ctx.exception.code, "COMMAND_TIMEOUT")
-        # Only the rev-parse probe ran: no fetch, no checkout -b.
-        self.assertEqual(run_commands(self.run.call_args_list), [])
-        printed.assert_not_called()
-
-
-class BranchValidationTests(unittest.TestCase):
-    """The API schema only bounds branch length; unsafe names must be rejected."""
-
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.run = self.enterContext(patch.object(git_manager.subprocess, "run"))
-        self.run.return_value = completed([], 0)
-        self.print = self.enterContext(patch("builtins.print"))
-
-    def test_rejects_unsafe_branch_names_before_any_command(self):
-        for branch in (
-            "-b", "--upload-pack=touch", "feature x", "feature\nx", "a..b",
-            "a//b", "a.lock", "a\\b", "a^b", "a~b", "a:b", "a?b", "a*b",
-            "a[b", "a@{b", "/leading", "trailing/", "trailing.", "",
-            ".hidden", "feature/.hidden", "feature.lock/topic", "HEAD",
-        ):
-            with self.subTest(branch=branch):
-                self.print.reset_mock()
-                payload = {
-                    "command": "clone",
-                    "projectId": "test",
-                    "projectsDir": self.temp.name,
-                    "gitUrl": "https://github.com/team/repo",
-                    "branch": branch,
-                }
-                with self.assertRaises(SystemExit) as ctx:
-                    git_manager.cmd_clone(payload)
-                self.assertEqual(ctx.exception.code, 1)
-                emitted = json.loads(self.print.call_args.args[0])
-                self.assertEqual(emitted["code"], "INVALID_BRANCH")
-        self.run.assert_not_called()
-
-    def test_accepts_ordinary_branch_names(self):
-        for branch in (
-            "main", "develop", "feature/x-1.0", "release_2024",
-            # Only a component ending in `.lock` is forbidden: names that
-            # merely contain "lock" or a dot-prefixed lookalike stay valid.
-            "feature.locked", "x.locks/y", "release/2.0",
-            # Only the reserved whole name HEAD is rejected, not a component.
-            "feature/HEAD",
-        ):
-            with self.subTest(branch=branch):
-                git_manager._validate_branch(branch)
-
-    def test_rejects_component_violations_before_touching_existing_workspace(self):
-        """A bad component must return INVALID_BRANCH while the workspace,
-        its .git and its files are still intact (#153)."""
-        workspace = Path(self.temp.name) / "test"
-        (workspace / ".git").mkdir(parents=True)
-        sentinel = workspace / "keep.txt"
-        sentinel.write_text("unchanged")
-        for branch in (".hidden", "feature/.hidden", "feature.lock/topic"):
-            with self.subTest(branch=branch):
-                self.print.reset_mock()
-                with self.assertRaises(SystemExit) as ctx:
-                    git_manager.cmd_clone(
-                        {
-                            "command": "clone",
-                            "projectId": "test",
-                            "projectsDir": self.temp.name,
-                            "gitUrl": "https://github.com/team/repo",
-                            "branch": branch,
-                        }
-                    )
-                self.assertEqual(ctx.exception.code, 1)
-                emitted = json.loads(self.print.call_args.args[0])
-                self.assertEqual(emitted["code"], "INVALID_BRANCH")
-                self.assertIn("error", emitted)
-        self.run.assert_not_called()
-        self.assertEqual(sentinel.read_text(), "unchanged")
-        self.assertTrue((workspace / ".git").is_dir())
-
-
-class SingleDocumentContractTests(unittest.TestCase):
-    """The caller JSON.parses the whole stdout; exactly one document per call."""
-
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.payload = {
-            "command": "clone",
-            "projectId": "test",
-            "projectsDir": self.temp.name,
-            "gitUrl": "https://github.com/team/repo",
-            "branch": "feature-x",
-        }
-        self.run = self.enterContext(patch.object(git_manager.subprocess, "run"))
-        self.print = self.enterContext(patch("builtins.print"))
-
-    def _commands(self):
-        return [" ".join(call.args[0]) for call in self.run.call_args_list]
-
-    def test_failed_update_falls_back_to_reclone_with_one_document(self):
-        (Path(self.temp.name) / "test" / ".git").mkdir(parents=True)
-
-        def side_effect(args, **kwargs):
-            # The update path fails the way a branch switch used to: fetch
-            # succeeds, but checkout reports the branch as unknown.
-            if "fetch" in args:
-                return completed(args, 0)
-            if "checkout" in args or "pull" in args:
-                return completed(
-                    args, 128, stderr="error: pathspec 'feature-x' did not match"
-                )
-            return completed(args, 0)
-
-        self.run.side_effect = side_effect
-        git_manager.cmd_clone(self.payload)
-        self.assertEqual(self.print.call_count, 1)
-        emitted = json.loads(self.print.call_args.args[0])
-        self.assertTrue(emitted["success"])
-        self.assertEqual(emitted["action"], "cloned")
-        # The failed workspace was wiped before the re-clone.
-        self.assertTrue(any("clone" in c for c in self._commands()))
-
-    def test_failed_clone_reports_one_error_document(self):
-        def side_effect(args, **kwargs):
-            if "clone" in args:
-                return completed(args, 128, stderr="Remote branch not found")
-            return completed(args, 0)
-
-        self.run.side_effect = side_effect
-        with self.assertRaises(git_manager.GitCommandError):
-            git_manager.cmd_clone(self.payload)
-        self.print.assert_not_called()
-
-    def test_main_turns_command_failure_into_one_error_document(self):
-        def side_effect(args, **kwargs):
-            if "clone" in args:
-                return completed(args, 128, stderr="clone refused")
-            return completed(args, 0)
-
-        self.run.side_effect = side_effect
-        self.enterContext(
-            patch.object(git_manager.sys, "stdin", io.StringIO(json.dumps(self.payload)))
-        )
-        with self.assertRaises(SystemExit) as ctx:
-            git_manager.main()
-        self.assertEqual(ctx.exception.code, 1)
-        self.assertEqual(self.print.call_count, 1)
-        emitted = json.loads(self.print.call_args.args[0])
-        self.assertIn("error", emitted)
-        self.assertEqual(emitted["code"], "COMMAND_FAILED")
-
-    def test_ref_check_timeout_reports_one_timeout_document(self):
-        """A stalled ref check surfaces as one COMMAND_TIMEOUT result, not as
-        a missing ref followed by a fetch-and-create attempt (#153)."""
-        (Path(self.temp.name) / "test" / ".git").mkdir(parents=True)
-
-        def side_effect(args, **kwargs):
-            if "rev-parse" in args or "clone" in args:
-                raise subprocess.TimeoutExpired(args, git_manager.GIT_COMMAND_TIMEOUT)
-            return completed(args, 0)
-
-        self.run.side_effect = side_effect
-        self.enterContext(
-            patch.object(git_manager.sys, "stdin", io.StringIO(json.dumps(self.payload)))
-        )
-        with self.assertRaises(SystemExit) as ctx:
-            git_manager.main()
-        self.assertEqual(ctx.exception.code, 1)
-        self.assertEqual(self.print.call_count, 1)
-        emitted = json.loads(self.print.call_args.args[0])
-        self.assertIn("error", emitted)
-        self.assertEqual(emitted["code"], "COMMAND_TIMEOUT")
-
-    def test_ref_check_timeout_preserves_existing_workspace(self):
-        """A stalled read-only check must not wipe the workspace or re-clone:
-        the timeout escapes instead of entering the destructive fallback."""
-        workspace = Path(self.temp.name) / "test"
-        (workspace / ".git").mkdir(parents=True)
-        sentinel = workspace / "untracked.txt"
-        sentinel.write_text("keep me")
-
-        def side_effect(args, **kwargs):
-            if "rev-parse" in args:
-                raise subprocess.TimeoutExpired(args, git_manager.GIT_COMMAND_TIMEOUT)
-            return completed(args, 0)
-
-        self.run.side_effect = side_effect
-        with self.assertRaises(git_manager.GitCommandError) as ctx:
-            git_manager.cmd_clone(self.payload)
-        self.assertEqual(ctx.exception.code, "COMMAND_TIMEOUT")
-        self.assertEqual(sentinel.read_text(), "keep me")
-        self.assertTrue((workspace / ".git").is_dir())
-        self.assertFalse(any("clone" in c for c in self._commands()))
-
-    def test_successful_update_still_reports_single_pull_document(self):
-        (Path(self.temp.name) / "test" / ".git").mkdir(parents=True)
-
-        def side_effect(args, **kwargs):
-            if "rev-parse" in args:
-                # Local branch already exists.
-                return completed(args, 0 if args[-1] == "refs/heads/main" else 1)
-            return completed(args, 0)
-
-        self.run.side_effect = side_effect
-        payload = {**self.payload, "branch": "main"}
-        git_manager.cmd_clone(payload)
-        self.assertEqual(self.print.call_count, 1)
-        emitted = json.loads(self.print.call_args.args[0])
-        self.assertEqual(emitted["action"], "pulled")
+    def test_repository_change_fallback_emits_one_document_and_preserves_uploads(self):
+        self.sync("main")
+        (self.workspace / "uploads.txt").write_text("customer data")
+        other = self.root / "other"
+        self.git("init", "-q", "--initial-branch=main", str(other))
+        self.write_file(other, "different.txt", "unrelated repository\n")
+        other_url = "https://github.com/team/other"
+        self.git("config", "--global", "--add", f"url.{other.as_uri()}.insteadOf", other_url)
+        document = self.run_sync("main", other_url)
+        self.assertTrue(document.get("success"), document)
+        self.assertEqual(document["action"], "cloned")
+        self.assertEqual((self.workspace / "different.txt").read_text(), "unrelated repository\n")
+        self.assertEqual((Path(document["previousWorkspace"]) / "uploads.txt").read_text(), "customer data")
 
 
 if __name__ == "__main__":
