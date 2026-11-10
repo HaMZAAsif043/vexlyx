@@ -1,3 +1,4 @@
+import { GitHubApiError } from "./client.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import { AuditLogService } from "../audit-log/service.js";
@@ -15,7 +16,7 @@ const RepositoryParamsSchema = z.object({ id: z.string().min(1), repositoryId: z
 const ManifestCallbackSchema = z.object({ code: z.string().min(1), state: z.string().min(1) });
 
 function handleGitHubError(error: unknown, reply: FastifyReply): void {
-  if (error instanceof GitHubError) {
+  if (error instanceof GitHubError || error instanceof GitHubApiError) {
     reply.status(error.statusCode).send({ error: error.message, code: error.code, details: {} });
     return;
   }
