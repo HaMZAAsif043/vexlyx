@@ -53,9 +53,9 @@ class GitCloneDataSafetyTests(unittest.TestCase):
         for verb in ("fetch", "checkout", "pull"):
             with self.subTest(verb=verb):
                 self.failing_verb = verb
-                with self.assertRaises(SystemExit):
+                with self.assertRaises(git_manager.GitCommandError) as caught:
                     git_manager.cmd_clone(self.payload)
-                self.assertEqual(self.last_output()["code"], "COMMAND_FAILED")
+                self.assertEqual(caught.exception.code, "COMMAND_FAILED")
                 self.assertEqual((self.workspace / "uploads.txt").read_text(), "customer data")
                 self.assertTrue((self.workspace / ".git").is_dir())
                 self.assertEqual([p.name for p in self.projects.iterdir()], ["test"])
@@ -87,7 +87,7 @@ class GitCloneDataSafetyTests(unittest.TestCase):
     def test_failed_clone_restores_the_previous_workspace(self):
         (self.workspace / ".git").rmdir()
         self.failing_verb = "clone"
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(git_manager.GitCommandError):
             git_manager.cmd_clone(self.payload)
         self.assertEqual((self.workspace / "uploads.txt").read_text(), "customer data")
         self.assertEqual([p.name for p in self.projects.iterdir()], ["test"])
