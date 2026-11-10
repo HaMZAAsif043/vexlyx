@@ -55,6 +55,9 @@ describe("GitHubClient outbound timeouts", () => {
     const timeoutError = Object.assign(new Error("The operation was aborted"), {
       name: "TimeoutError",
     });
+    const controller = new AbortController();
+    controller.abort(timeoutError);
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
     vi.stubGlobal("fetch", vi.fn(async () => { throw timeoutError; }));
 
     const client = new GitHubClient();
@@ -79,6 +82,9 @@ describe("GitHubClient outbound timeouts", () => {
 
   it("maps an aborted token exchange to GITHUB_API_TIMEOUT", async () => {
     const timeoutError = Object.assign(new Error("aborted"), { name: "TimeoutError" });
+    const controller = new AbortController();
+    controller.abort(timeoutError);
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
     vi.stubGlobal("fetch", vi.fn(async () => { throw timeoutError; }));
 
     const client = new GitHubClient();
@@ -86,4 +92,32 @@ describe("GitHubClient outbound timeouts", () => {
       GitHubApiError,
     );
   });
+});
+
+it("returns branches from subsequent pages", async () => {
+  vi.stubGlobal("fetch", vi.fn()
+    .mockResolvedValueOnce(jsonResponse([{ name: "first" }], { headers: { Link: '<https://api.github.com/repos/o/r/branches?page=2>; rel="next"' } }))
+    .mockResolvedValueOnce(jsonResponse([{ name: "later" }])));
+  expect((await new GitHubClient().listBranches("token", "o", "r")).map(branch => branch.name)).toEqual(["first", "later"]);
+});
+
+it("fails explicitly rather than authorizing from an incomplete installation list", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ installations: [] }, {
+    headers: { Link: '<https://api.github.com/user/installations?page=2>; rel="next"' },
+  })));
+  await expect(new GitHubClient().listUserInstallations("token")).rejects.toMatchObject({ code: "GITHUB_API_PAGINATION_LIMIT" });
+});
+
+it("maps a deadline reached while reading the response body", async () => {
+  const controller = new AbortController();
+  vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+  vi.stubGlobal("fetch", vi.fn(async () => ({
+    ok: true,
+    headers: new Headers(),
+    json: async () => {
+      controller.abort(new DOMException("Timed out", "TimeoutError"));
+      throw controller.signal.reason;
+    },
+  })));
+  await expect(new GitHubClient().getRepository("token", "o", "r")).rejects.toMatchObject({ code: "GITHUB_API_TIMEOUT", statusCode: 504 });
 });

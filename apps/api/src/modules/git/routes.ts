@@ -1,3 +1,4 @@
+import { GitHubApiError } from "../github/client.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { GitService, GitError } from "./service.js";
 import { ConnectRepoSchema } from "./schema.js";
@@ -10,7 +11,7 @@ import { AuditLogService } from "../audit-log/service.js";
 // ---------------------------------------------------------------------------
 
 function handleGitError(err: unknown, reply: FastifyReply): void {
-  if (err instanceof GitHubError) {
+  if (err instanceof GitHubError || err instanceof GitHubApiError) {
     reply.status(err.statusCode).send({ error: err.message, code: err.code, details: {} });
     return;
   }

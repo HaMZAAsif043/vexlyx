@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+vi.mock("../../utils/encryption.js", () => ({ decrypt: (value: string) => value }));
+
 vi.mock("../../config/env.js", () => ({
   env: {
     API_BASE_URL: "https://api.vexlyx.example",
@@ -7,6 +9,7 @@ vi.mock("../../config/env.js", () => ({
   },
 }));
 
+import { GitHubApiError } from "./client.js";
 import { GitHubService } from "./service.js";
 
 describe("GitHubService.createManifest", () => {
@@ -21,4 +24,11 @@ describe("GitHubService.createManifest", () => {
     expect(manifest.redirect_url).toBe("https://api.vexlyx.example/api/github/app/manifest/callback");
     expect(new URL(url).searchParams.get("state")).toMatch(/^[a-f0-9]{64}$/);
   });
+});
+
+it("preserves timeout errors during installation token minting", async () => {
+  const prisma = { gitHubApp: { findUnique: vi.fn(async () => ({ appId: 1n, encryptedPrivateKey: "unused" })) } };
+  const client = { createInstallationToken: vi.fn().mockRejectedValue(new GitHubApiError("Timed out", 504, "GITHUB_API_TIMEOUT")) };
+  const service = new GitHubService(prisma as never, {} as never, {} as never, client as never);
+  await expect(service.getInstallationToken(987654n)).rejects.toMatchObject({ code: "GITHUB_API_TIMEOUT", statusCode: 504 });
 });
