@@ -68,49 +68,37 @@ def respond(data: dict) -> None:
     print(json.dumps(data), flush=True)
 
 
-def get_certs_dir() -> Path:
-    candidates = [
-        Path.cwd() / "docker" / "traefik" / "certs",
-        Path.cwd().parent / "docker" / "traefik" / "certs",
-        Path.cwd().parent.parent / "docker" / "traefik" / "certs",
-    ]
-    for c in candidates:
-        if c.exists():
-            return c
-    target = Path.cwd() / "docker" / "traefik" / "certs"
-    target.mkdir(parents=True, exist_ok=True)
-    return target
+# ---------------------------------------------------------------------------
+# File Writing
+# ---------------------------------------------------------------------------
+
+# In the shipped stack the only thing that reads a key here is Traefik, and both
+# its container and the API that spawns this helper run as root, so 0600 costs
+# nothing (#195). A certificate is public, so it keeps 0644 and any other tooling
+# can still read it.
+PRIVATE_KEY_MODE = 0o600
+CERTIFICATE_MODE = 0o644
+# The API and Traefik run as root, so new and existing certificate directories
+# can remain private while both services continue to access them.
+CERTS_DIR_MODE = 0o700
 
 
-def clean_cert_hostname(hostname: str) -> str:
-    return hostname.replace("*.", "wildcard.").replace(":", "_").replace("/", "_")
+def atomic_write(path: Path, content: bytes, mode: int) -> None:
+    """Write through a temporary file in the same directory, set the mode on it,
+    then move it into place.
 
-
-def make_certs_dir_private(certs_dir: Path) -> None:
-    """Only root (the API and the Traefik container) may list this directory."""
-    try:
-        os.chmod(certs_dir, 0o700)
-    except OSError:
-        pass
-
-
-def write_secure_file(path: Path, content: str, mode: int) -> None:
-    """Write text with an explicit mode, e.g. 0600 for a private key.
-
-    `Path.write_text` creates the file with the process umask (usually
-    world-readable) and follows an existing symlink. The content goes to a
-    sibling temp file whose mode is set before `os.replace`, so the final file
-    is never visible with the wrong permissions and any existing symlink is
-    replaced instead of written through."""
+    The mode is applied before the content is reachable under its real name, so
+    a private key is never briefly world-readable on its way to 0600 — which a
+    `write_text()` followed by `chmod()` would have been. Same shape as
+    `mail_tls_manager.py:32`, which has written its keys this way all along.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}."
-    )
+    descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
+        with os.fdopen(descriptor, "wb") as temporary_file:
+            temporary_file.write(content)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
         os.chmod(temporary_name, mode)
         os.replace(temporary_name, path)
     except Exception:
@@ -119,6 +107,29 @@ def write_secure_file(path: Path, content: str, mode: int) -> None:
         except FileNotFoundError:
             pass
         raise
+
+
+def get_certs_dir() -> Path:
+    candidates = [
+        Path.cwd() / "docker" / "traefik" / "certs",
+        Path.cwd().parent / "docker" / "traefik" / "certs",
+        Path.cwd().parent.parent / "docker" / "traefik" / "certs",
+    ]
+    for c in candidates:
+        if c.exists():
+            os.chmod(c, CERTS_DIR_MODE)
+            return c
+    target = Path.cwd() / "docker" / "traefik" / "certs"
+    target.mkdir(parents=True, exist_ok=True, mode=CERTS_DIR_MODE)
+    return target
+
+
+def convenience_copy_name(hostname: str) -> str:
+    """The stem `generate_self_signed()` uses for the <host>.crt/.key pair it
+    writes next to a domain's own pair, and the stem a deletion has to look for.
+    One rule for both, because a drift between them would leave a private key
+    behind on the host after its certificate was deleted (#195)."""
+    return hostname.replace("*.", "wildcard.").replace(":", "_").replace("/", "_")
 
 
 def get_acme_file() -> Path:
@@ -143,8 +154,7 @@ def generate_self_signed(hostname: str, sans: list = None, days_valid: int = 90,
 
     sans = sans or []
     certs_dir = get_certs_dir()
-    make_certs_dir_private(certs_dir)
-    clean_host = clean_cert_hostname(hostname)
+    clean_host = convenience_copy_name(hostname)
 
     key = rsa.generate_private_key(
         public_exponent=65537,
@@ -201,14 +211,14 @@ def generate_self_signed(hostname: str, sans: list = None, days_valid: int = 90,
         cert_file = certs_dir / f"{clean_host}.crt"
         key_file = certs_dir / f"{clean_host}.key"
 
-    write_secure_file(cert_file, cert_pem, 0o644)
-    write_secure_file(key_file, key_pem, 0o600)
+    atomic_write(cert_file, cert_pem.encode("utf-8"), CERTIFICATE_MODE)
+    atomic_write(key_file, key_pem.encode("utf-8"), PRIVATE_KEY_MODE)
 
     # If domain_id was given, also write clean_host file as convenience
     if domain_id:
         try:
-            write_secure_file(certs_dir / f"{clean_host}.crt", cert_pem, 0o644)
-            write_secure_file(certs_dir / f"{clean_host}.key", key_pem, 0o600)
+            atomic_write(certs_dir / f"{clean_host}.crt", cert_pem.encode("utf-8"), CERTIFICATE_MODE)
+            atomic_write(certs_dir / f"{clean_host}.key", key_pem.encode("utf-8"), PRIVATE_KEY_MODE)
         except Exception:
             pass
 
@@ -367,31 +377,23 @@ def read_acme_storage() -> dict:
 # Save & Delete Custom Certificates
 # ---------------------------------------------------------------------------
 
-def save_custom_certificate(
-    domain_id: str,
-    cert_pem: str,
-    key_pem: str,
-    hostname: str | None = None,
-) -> dict:
+def save_custom_certificate(domain_id: str, cert_pem: str, key_pem: str, hostname: str = None) -> dict:
     check = validate_key_pair(cert_pem, key_pem)
     if not check.get("success"):
         return check
 
     certs_dir = get_certs_dir()
-    make_certs_dir_private(certs_dir)
     cert_file = certs_dir / f"domain-{domain_id}.crt"
     key_file = certs_dir / f"domain-{domain_id}.key"
 
     try:
-        write_secure_file(cert_file, cert_pem.strip(), 0o644)
-        write_secure_file(key_file, key_pem.strip(), 0o600)
+        atomic_write(cert_file, cert_pem.strip().encode("utf-8"), CERTIFICATE_MODE)
+        atomic_write(key_file, key_pem.strip().encode("utf-8"), PRIVATE_KEY_MODE)
 
-        # Keep the convenience copies in step with the uploaded pair so an
-        # earlier self-signed private key does not linger next to it.
         if hostname:
-            clean_host = clean_cert_hostname(hostname)
-            write_secure_file(certs_dir / f"{clean_host}.crt", cert_pem.strip(), 0o644)
-            write_secure_file(certs_dir / f"{clean_host}.key", key_pem.strip(), 0o600)
+            clean_host = convenience_copy_name(hostname)
+            atomic_write(certs_dir / f"{clean_host}.crt", cert_pem.strip().encode("utf-8"), CERTIFICATE_MODE)
+            atomic_write(certs_dir / f"{clean_host}.key", key_pem.strip().encode("utf-8"), PRIVATE_KEY_MODE)
 
         parsed = parse_cert_pem(cert_pem)
         return {
@@ -404,21 +406,23 @@ def save_custom_certificate(
         return {"success": False, "error": f"Failed to save certificate files: {str(e)}"}
 
 
-def delete_custom_certificate(domain_id: str, hostname: str | None = None) -> dict:
+def delete_custom_certificate(domain_id: str, hostname: str = None) -> dict:
     certs_dir = get_certs_dir()
-    targets = [
-        certs_dir / f"domain-{domain_id}.crt",
-        certs_dir / f"domain-{domain_id}.key",
-    ]
-    if hostname:
-        clean_host = clean_cert_hostname(hostname)
-        targets += [
-            certs_dir / f"{clean_host}.crt",
-            certs_dir / f"{clean_host}.key",
-        ]
+    cert_file = certs_dir / f"domain-{domain_id}.crt"
+    key_file = certs_dir / f"domain-{domain_id}.key"
+
+    # Read the pair before unlinking it: the convenience copies are matched
+    # against this content, so a <host>.crt/.key that is not a copy of *this*
+    # certificate is left alone.
+    content = {}
+    for f in (cert_file, key_file):
+        try:
+            content[f] = f.read_bytes()
+        except OSError:
+            content[f] = None
 
     deleted = False
-    for f in targets:
+    for f in [cert_file, key_file]:
         if f.exists():
             try:
                 f.unlink()
@@ -426,7 +430,31 @@ def delete_custom_certificate(domain_id: str, hostname: str | None = None) -> di
             except Exception:
                 pass
 
-    return {"success": True, "deleted": deleted}
+    # `generate_self_signed()` also writes <clean_host>.crt/.key as a convenience
+    # copy, and until now nothing ever removed them (#195). Two guards: the
+    # caller has to say which hostname it is deleting, because those names come
+    # from the hostname and a caller that predates this change sends none; and
+    # the copy has to match the file being deleted, because without a domain id
+    # `generate_self_signed()` writes those very names as its primary output and
+    # something else may own what is here.
+    copies_removed = []
+    if hostname:
+        clean_host = convenience_copy_name(hostname)
+        for source, copy in (
+            (cert_file, certs_dir / f"{clean_host}.crt"),
+            (key_file, certs_dir / f"{clean_host}.key"),
+        ):
+            if content[source] is None or not copy.exists():
+                continue
+            try:
+                if copy.read_bytes() != content[source]:
+                    continue
+                copy.unlink()
+                copies_removed.append(str(copy))
+            except Exception:
+                pass
+
+    return {"success": True, "deleted": deleted, "copiesRemoved": copies_removed}
 
 
 # ---------------------------------------------------------------------------

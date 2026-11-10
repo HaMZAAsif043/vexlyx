@@ -35,6 +35,7 @@ import { useTimezone } from "@/hooks/useSystemSettings";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { GitSettings } from "@/components/projects/GitSettings";
 import { BuildPanel } from "@/components/projects/BuildPanel";
+import { BuildSettingsPanel } from "@/components/projects/BuildSettingsPanel";
 import { ContainerControls } from "@/components/projects/ContainerControls";
 import { EnvVarEditor } from "@/components/projects/EnvVarEditor";
 import { WordPressPanel } from "@/components/projects/WordPressPanel";
@@ -346,6 +347,7 @@ export default function ProjectDetailPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="divide-y divide-border">
+                <InfoRow label="Install Command" value={project.installCmd ?? "—"} />
                 <InfoRow label="Build Command" value={project.buildCmd ?? "—"} />
                 <InfoRow label="Start Command" value={project.startCmd ?? "—"} />
                 <InfoRow label="Port" value={project.port?.toString() ?? "—"} />
@@ -373,6 +375,13 @@ export default function ProjectDetailPage() {
           <ContainerControls
             project={project}
             onProjectUpdate={fetchProject}
+          />
+
+          {/* Per-project build command and port overrides */}
+          <BuildSettingsPanel
+            project={project}
+            onProjectUpdate={fetchProject}
+            onDeployTrigger={() => setDeployTriggerCount((c) => c + 1)}
           />
 
           {/* Build & deployment panel */}

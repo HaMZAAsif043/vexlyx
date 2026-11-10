@@ -128,7 +128,14 @@ async function runSslManager(
     : process.env.PYTHONPATH;
 
   return new Promise((res, rej) => {
-    const child = spawn(pythonExe, [scriptPath, command, JSON.stringify(payload)], {
+    // The payload carries the uploaded private key for `save_custom`, so it
+    // goes to the helper on stdin and never into argv, where any local process
+    // could read it out of `ps` or `/proc/<pid>/cmdline` for as long as the
+    // helper runs (#190). `ssl_manager.py`'s `main()` already reads
+    // `{"command", "payload"}` from stdin when given no argument, and the
+    // spawn already opens a stdin pipe; argv stays supported for the CLI and
+    // the system-layer tests.
+    const child = spawn(pythonExe, [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,
@@ -190,6 +197,14 @@ async function runSslManager(
     child.on("error", (err) => {
       rej(new DomainError(`Failed to spawn ssl_manager.py: ${err.message}`, "SSL_SPAWN_ERROR", 500));
     });
+
+    // A helper that dies before reading (missing interpreter, import error)
+    // closes the pipe, and an unhandled 'error' on a writable is what turns
+    // that into a crashed API process. The `close` handler above already
+    // reports the real failure.
+    child.stdin.on("error", () => undefined);
+    child.stdin.write(JSON.stringify({ command, payload }));
+    child.stdin.end();
   });
 }
 
@@ -490,9 +505,9 @@ export class SslService {
     // Call Python ssl_manager.py to validate pair and save files
     const saveRes = await runSslManager("save_custom", {
       domainId: domain.id,
-      hostname: domain.hostname,
       certificate: input.certificate,
       privateKey: input.privateKey,
+      hostname: domain.hostname,
     });
 
     const parsed = saveRes.certificate ?? {};
@@ -724,11 +739,10 @@ export class SslService {
     }
 
     if (domain.certificate) {
-      // Clean up files via ssl_manager.py
-      await runSslManager("delete_cert", {
-        domainId: domain.id,
-        hostname: domain.hostname,
-      });
+      // Clean up files via ssl_manager.py. The hostname goes with it so the
+      // helper can recognise the <host>.crt/.key convenience copies
+      // generate_self_signed() left next to this domain's own pair (#195).
+      await runSslManager("delete_cert", { domainId: domain.id, hostname: domain.hostname });
 
       // Delete certificate database record
       await this.prisma.certificate.delete({

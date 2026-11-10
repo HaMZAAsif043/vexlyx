@@ -367,7 +367,7 @@ http:
   /**
    * Removes Traefik dynamic router configuration file for a domain.
    */
-  public removeTraefikRouter(domainId: string, removeCertificates = true): void {
+  public removeTraefikRouter(domainId: string, removeCertificates = true, hostname?: string): void {
     const configPath = getTraefikConfigFile(domainId);
     if (fs.existsSync(configPath)) {
       try {
@@ -389,13 +389,24 @@ http:
         path.resolve(process.cwd(), "../../docker/traefik/certs"),
       ];
       for (const dir of candidates) {
-        const certFile = path.join(dir, `domain-${domainId}.crt`);
-        const keyFile = path.join(dir, `domain-${domainId}.key`);
-        if (fs.existsSync(certFile)) fs.unlinkSync(certFile);
-        if (fs.existsSync(keyFile)) fs.unlinkSync(keyFile);
+        for (const extension of ["crt", "key"]) {
+          const ownedFile = path.join(dir, `domain-${domainId}.${extension}`);
+          if (!fs.existsSync(ownedFile)) continue;
+          if (hostname) {
+            const stem = hostname.replace("*.", "wildcard.").replace(/[:/]/g, "_");
+            const copy = path.join(dir, `${stem}.${extension}`);
+            // A wildcard's convenience filename can collide with a literal
+            // hostname. Only remove copies containing this domain's material.
+            if (fs.existsSync(copy) && fs.readFileSync(copy).equals(fs.readFileSync(ownedFile))) {
+              fs.unlinkSync(copy);
+            }
+          }
+          fs.unlinkSync(ownedFile);
+        }
       }
-    } catch {
-      // Ignore
+    } catch (err) {
+      this.logger?.error({ err, domainId }, "Failed to remove domain certificate files");
+      throw new DomainError("Certificate cleanup failed; retry deleting the domain", "CERTIFICATE_CLEANUP_FAILED", 503);
     }
   }
 
@@ -831,16 +842,24 @@ http:
     }
 
     // Clean up dynamic Traefik file for child subdomains
-    const subdomains = await this.prisma.domain.findMany({
-      where: { parentId: domain.id },
-      select: { id: true },
-    });
-    for (const sub of subdomains) {
-      this.removeTraefikRouter(sub.id);
+    let parents = [domain.id];
+    const seen = new Set(parents);
+    while (parents.length > 0) {
+      const subdomains = await this.prisma.domain.findMany({
+        where: { parentId: { in: parents } },
+        select: { id: true, hostname: true },
+      });
+      parents = [];
+      for (const sub of subdomains) {
+        if (seen.has(sub.id)) continue;
+        seen.add(sub.id);
+        this.removeTraefikRouter(sub.id, true, sub.hostname);
+        parents.push(sub.id);
+      }
     }
 
     // Clean up dynamic Traefik file for main domain
-    this.removeTraefikRouter(domain.id);
+    this.removeTraefikRouter(domain.id, true, domain.hostname);
 
     // Clean up CoreDNS zone file on disk
     const cleanHost = domain.hostname.startsWith("*.") ? domain.hostname.slice(2) : domain.hostname;

@@ -31,10 +31,10 @@ This document is the **single source of truth** for all Vexlyx features.
 | Phase 2: Multi-Runtime Support | 🟢 COMPLETED | 100% (8/8) |
 | Phase 3: Domain & DNS | 🟢 COMPLETED | 100% (5/5) |
 | Phase 4: Email Server | 🟢 COMPLETED | 100% (8/8) |
-| Phase 5: System & Administration | 🟡 IN PROGRESS | 88% (28/32) |
+| Phase 5: System & Administration | 🟡 IN PROGRESS | 85% (29/34) |
 | Phase 6: Ecosystem & Launch | 🟡 IN PROGRESS | 67% (2/3) |
 
-**Overall Completion:** 93% (66/71 features)
+**Overall Completion:** 92% (67/73 features)
 
 ---
 
@@ -435,7 +435,7 @@ Integrate Nixpacks for zero-configuration builds. Auto-detect framework from sou
 - [x] `nixpacks build` generates Docker image
 - [x] Build logs stored and polled progressively by frontend (Socket.io streaming in F1.6)
 - [x] Build queue managed via BullMQ and Redis
-- [x] Support for custom build commands override
+- [x] Support for custom build commands override (Build Settings panel in F5.34)
 
 **Test Plan:**
 1. Node.js project → Nixpacks detects, builds successfully
@@ -2490,14 +2490,14 @@ Connecting a repository today is manual and per project (F1.3, F2.7): the user p
 **Description:**
 Users can create PostgreSQL and MySQL databases (F2.6) but have no key-value store: an app that needs a cache, a session store or a job queue (BullMQ, Sidekiq, Celery, Laravel queues) has to bundle its own Redis in its project or go without. This feature lets a user create a **Redis instance** from the dashboard: a dedicated, password-protected Redis container with a memory limit that their projects reach over the internal Docker network, with a ready-to-paste connection URL. It is a standalone feature with its own module, table, manager script, quota and UI, and does not depend on any other database feature.
 
-**Why a container per instance (not a shared server):** Redis has no real multi-tenancy. Logical databases (0-15) share one memory pool, one CPU thread and one set of dangerous commands (`FLUSHALL`, `CONFIG`, `KEYS`, `DEBUG`), and one tenant can evict or wipe another's keys. PostgreSQL and MySQL are shared because a per-database user is a real isolation boundary there; for Redis the boundary is the container. The panel's own `vexlyx-redis` (sessions, BullMQ queues, rate limits, `allkeys-lru` eviction) must **never** be used for tenant data.
+**Why a container per instance (not a shared server):** Redis has no real multi-tenancy. Logical databases (0-15) share one memory pool, one CPU thread and one set of dangerous commands (`FLUSHALL`, `CONFIG`, `KEYS`, `DEBUG`), and one tenant can evict or wipe another's keys. PostgreSQL and MySQL are shared because a per-database user is a real isolation boundary there; for Redis the boundary is the container. The panel's own `vexlyx-redis` (sessions, BullMQ queues, task locks and one-shot tokens; `noeviction` under a 256 MB cap) must **never** be used for tenant data.
 
 **Competitor research (2026):**
 - **Coolify**: one-click Redis (and the Redis-compatible Dragonfly and KeyDB) as a standalone container with its own volume; default port 6379. Database-aware scheduled backups exist for PostgreSQL, MySQL, MariaDB, MongoDB and ClickHouse but, per its docs, not for the Redis family, which only get persistent storage. It also states a one-click database is not a managed cluster (no replication or failover). ([Coolify: choose a database](https://coolify.io/docs/databases/choose-a-database), [Coolify: backups](https://coolify.io/docs/knowledge-base/databases/backups))
 - **Dokploy**: Redis is created like any other database service with a name, password and image, a Docker volume at `/data`, optional memory and CPU limits and reservations, and an optional external port; its docs advise setting `maxmemory` and an eviction policy so Redis cannot consume the host's memory, and keeping databases on internal networks where possible. ([Dokploy databases](https://docs.dokploy.com/docs/core/databases), [Redis page (mirror)](https://www.mintlify.com/Dokploy/dokploy/databases/redis))
 - **cPanel / Plesk / HestiaCP**: no managed Redis for users out of the box (MySQL/MariaDB and PostgreSQL only); caching on those panels usually means a host-level Redis the user cannot manage themselves.
 - **Takeaway**: the PaaS tools treat Redis as "one container per instance with limits and an internal address", which is also the only safe model here. Where Vexlyx can differ: a hard per-instance memory cap by default, no public port unless explicitly opted in later, and quota and usage shown next to the user's other databases.
-- **Licensing note**: Redis moved to RSALv2/SSPL from 7.4 and added AGPLv3 with 8.0; Valkey is the BSD-licensed fork of Redis 7.2.4. The implementation must choose and document one pinned image line (for example a BSD-licensed Redis 7.2.x or Valkey) rather than pull `latest`. ([Redis licensing summary](https://www.infoq.com/news/2025/05/redis-agpl-license))
+- **Licensing note**: Redis moved to RSALv2/SSPL from 7.4 and added AGPLv3 with 8.0; Valkey is the BSD-licensed fork of Redis 7.2.4. The implementation must choose and document one pinned image line (for example a BSD-licensed Redis 7.2.x or Valkey) rather than pull `latest`. Measured on the QA panel 2026-11-05: the tag `redis:7-alpine` itself still floats inside that range — the running container reports `redis_version:7.4.11` — so pinning a patch release, not just a major, is what actually fixes this. ([Redis licensing summary](https://www.infoq.com/news/2025/05/redis-agpl-license))
 
 **Proposed plan (for whoever picks this up):**
 1. **Data model** (own migration, own table; does **not** extend `DatabaseType` or the `Database` model): `RedisInstance` (`id`, `userId`, `projectId?`, `name` unique per user, `containerName`, `imageTag`, `memoryLimitMb`, `evictionPolicy`, `persistence` NONE/RDB/AOF, `passwordEncrypted` (AES-256-GCM via `utils/encryption.ts`), `status` CREATING/RUNNING/STOPPED/ERROR/DELETED, timestamps).
@@ -2517,7 +2517,7 @@ Users can create PostgreSQL and MySQL databases (F2.6) but have no key-value sto
 - Passwords on command lines leak through `ps` and Docker inspect; pass them through a file or environment source that is not logged.
 - Container-name collisions across users (the F5.21 "bare service name" bug class): always use a unique, Compose-independent container name.
 - Orphaned containers and volumes when a delete half-fails (the F5.21 teardown bug class): tear down both and log, without making the instance undeletable.
-- The image line has a licence decision attached; do not float on `latest`.
+- The image line has a licence decision attached; do not float on `latest`. The same applies to the panel's own service, which already floats: `docker-compose.yml:57` pins only the `redis:7-alpine` major, so every image rebuild moves the session store and the queues onto whatever 7.x is current, licence terms included. Deciding that is a separate change from this feature and needs the panel restarted.
 
 **Acceptance Criteria:**
 - [ ] A user can create, list, start, stop, restart and delete Redis instances from the dashboard and API, each running in its own container with a password
@@ -2712,6 +2712,83 @@ Vexlyx is self-hosted, so the maintainers have no way to know how many installs 
 - `apps/api/prisma/migrations/<timestamp>_add_telemetry_settings/migration.sql`
 - `apps/dashboard/src/components/settings/TelemetryCard.tsx`, `src/hooks/useTelemetry.ts`
 - `docs/dev/telemetry.md` and a public privacy page
+
+---
+
+### F5.33 — In-Panel Update Notifications
+**Status:** 🟢 COMPLETED
+
+**Description:**
+An administrator should not have to re-run the installer on a hunch to learn that a fix exists. The API compares `VEXLYX_VERSION` with the newest stable GitHub release, caches the result in Redis, and the dashboard shows admins a dismissible banner with links to the release notes and the upgrade guide. It is display-only — nothing is downloaded or installed automatically — and is deliberately separate from opt-in telemetry (F5.32), which stays off until an admin enables it.
+
+**Acceptance Criteria:**
+- [x] `GET /api/system/update` returns the current and latest versions, update availability, release URL, publish time, and whether the check ran or failed (ADMIN only; 401/403 otherwise)
+- [x] A successful check is cached for 6 hours, a failed one for 1 hour, and a GitHub outage never fails the request
+- [x] `UPDATE_CHECK_ENABLED=false` performs no outbound call; `UPDATE_CHECK_REPO` changes the source repository for forks
+- [x] Prerelease and draft releases are never offered; comparison handles the `v` prefix, build metadata and prerelease ordering
+- [x] The dashboard shows the banner to admins only, remembers dismissal per version, and links to the release notes and upgrade guide
+
+**Test Plan:**
+1. Publish a newer tag → an admin sees the banner within the cache window; a non-admin never does
+2. Dismiss the banner → it stays hidden for that version and reappears for the next release
+3. Block outbound access to `api.github.com` → the panel keeps working, the notice stays hidden, one warning is logged
+4. Set `UPDATE_CHECK_ENABLED=false` → no request to GitHub; the endpoint reports `checkEnabled: false`
+
+**Developer Docs:**
+- **Location:** `docs/dev/system-updates.md`
+- **Contents:** flow, caching/failure behaviour, version comparison rules, operator controls, how to test
+
+**Files:**
+- `apps/api/src/modules/system/update-service.ts` (and `update-service.test.ts`), `routes.ts`
+- `apps/api/src/utils/version.ts` (and `version.test.ts`)
+- `packages/shared/src/schemas/systemUpdate.ts`
+- `apps/dashboard/src/hooks/useSystemUpdate.ts`, `src/components/layout/UpdateBanner.tsx`
+
+---
+
+### F5.34 — Per-Project Build Settings in the Dashboard
+**Status:** 🟡 IN PROGRESS
+
+**Description:**
+A deploy that Nixpacks misreads has no way out from the panel. The columns and the `PUT /api/projects/:id` fields for `buildCmd`, `startCmd` and `port` already existed, but nothing in the dashboard exposed them, so a user whose repository needs `pnpm install --frozen-lockfile`, a monorepo `filter`, or a port other than the detected one had to delete the project or shell out to the API. Worse, `build_manager.py` accepted an install command and passed `--install-cmd` to Nixpacks, but the API never put `installCmd` in the payload, so the flag was dead code end to end.
+
+This feature gives a project a **Build Settings** card on the Deploy tab with the same shape Vercel and Dokploy use: one field per command, blank means auto-detection, a **Detect** button that runs `nixpacks plan` over the current source and shows what would be used, and an explicit reset back to auto. Detection stays in `build_manager.py` — the API only shuttles its answer, so the panel can never disagree with a real build.
+
+**Acceptance Criteria:**
+- [x] `Project.installCmd` column and migration, nullable, `null` meaning "derive it from the source"
+- [x] `installCmd` accepted by create/update and by `POST /build` as a one-off override (500-char cap, same as the other commands)
+- [x] The build worker resolves install → build → start as *this run → project setting → detection* and sends the result in the payload, so `--install-cmd` finally reaches Nixpacks
+- [x] `derive_install_cmd()` in `build_manager.py` is shared by `cmd_plan` and `cmd_build`, so the plan and the build cannot drift
+- [x] `GET /api/projects/:id/build-plan` returns the detected framework and commands without building anything (owner-only, `400 PROJECT_NOT_CLONED` with no source)
+- [x] A Build Settings panel on the project Deploy tab: install/build/start/port fields pre-filled from the project, `Auto`/`Custom` badge per field, detected value shown as the placeholder, **Save**, **Save & Deploy**, and **Auto** to clear every override
+- [x] A field the user did not touch is left out of the write, so saving build commands cannot overwrite a port the Dockerfile panel synced from `EXPOSE`
+- [ ] Version selectors (Node, Python, PHP, Ruby) that emit `NIXPACKS_*_VERSION` build-time variables per project
+- [ ] Nixpacks cache directory, `--config-path`, base image override and per-project build RAM limit
+- [ ] Registry credentials and build/start hooks (out of scope for slice 1 of #200)
+
+**Test Plan:**
+1. pnpm-lock repository, all fields blank → the build log names no install command and Nixpacks picks `pnpm install`
+2. **Detect** → the Install field placeholder shows the command derived from the lockfile
+3. Type `pnpm install --frozen-lockfile`, **Save & Deploy** → the log opens with `[vexlyx] Install command: pnpm install --frozen-lockfile` and `nixpacks build` receives `--install-cmd`
+4. **Auto** → every badge returns to `Auto`, and the next deploy is stored with `installCmd: null`
+5. Save only a build command on a Dockerfile project whose port came from `EXPOSE` → the stored port is unchanged
+6. Another user's project id → `403` on `PUT`, `GET /build-plan` and `POST /build`, and nothing is spawned
+7. Project with no source on disk → `400 PROJECT_NOT_CLONED` with a message pointing at git, File Manager or WordPress
+8. Command longer than 500 characters → rejected by validation before anything is written
+
+**Developer Docs:**
+- **Location:** `docs/dev/build-system.md`
+- **Contents:** override resolution order, the plan/build payload shapes, the detection endpoint, the panel's save rules, how to test
+
+**Files:**
+- `apps/api/prisma/migrations/<timestamp>_add_project_install_cmd/migration.sql`
+- `apps/api/src/modules/projects/service.ts`, `apps/api/src/modules/build/{routes,schema,service}.ts` (and `installCmd.test.ts`)
+- `apps/api/src/modules/webhooks/{service,github-app}.ts` (GitHub deploys carry the stored override)
+- `packages/shared/src/schemas/projects.ts`, `packages/shared/src/types/index.ts` (`BuildPlan`)
+- `system/python/build_manager.py` (`derive_install_cmd()`) and `tests/test_build_install_command.py`
+- `apps/dashboard/src/components/projects/BuildSettingsPanel.tsx` (and `.test.tsx`), `src/app/(panel)/projects/[id]/page.tsx`
+
+Tracked in #200.
 
 ---
 
