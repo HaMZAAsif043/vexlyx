@@ -1033,7 +1033,7 @@ export class MailService {
   ): Promise<TestEmailResultResponse> {
     const senderDomain = input.from.split("@").pop()!.toLowerCase();
     const ownedDomains = await this.prisma.domain.findMany({
-      where: { userId },
+      where: { userId, status: "ACTIVE" },
       select: { hostname: true },
     });
 

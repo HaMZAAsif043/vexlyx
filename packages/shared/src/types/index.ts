@@ -69,6 +69,7 @@ export type Project = {
   status: ProjectStatus;
   gitUrl: string | null;
   branch: string;
+  installCmd: string | null;
   buildCmd: string | null;
   startCmd: string | null;
   port: number | null;
@@ -96,6 +97,18 @@ export type PaginatedProjects = {
     total: number;
     totalPages: number;
   };
+};
+
+/**
+ * What Nixpacks' plan derives from a project's current source. `null` means the
+ * plan proposed nothing, so a blank override stays with Nixpacks' own default.
+ */
+export type BuildPlan = {
+  framework: string;
+  detectedType: string | null;
+  installCmd: string | null;
+  buildCmd: string | null;
+  startCmd: string | null;
 };
 
 /** Status of a single deployment attempt — mirrors the Prisma DeploymentStatus enum */

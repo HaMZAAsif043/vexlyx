@@ -55,6 +55,7 @@ interface DockerManagerLine {
   hostPort?: number;
   hostname?: string;
   containerStatus?: string;
+  containerHealth?: string | null;
   logs?: string;
   error?: string;
   code?: string;
@@ -64,6 +65,13 @@ export interface DeployResult {
   containerId: string;
   hostPort: number;
   hostname: string;
+}
+
+/** Docker's own verdict; null when the image declares no HEALTHCHECK at all. */
+export interface ContainerStatusResult {
+  containerStatus: string;
+  containerHealth: string | null;
+  containerId: string | null;
 }
 
 export function runDockerDeploy(
@@ -323,7 +331,7 @@ function runDockerManagerCommand(
 export function runDockerStatus(
   projectDir: string,
   projectType: string,
-): Promise<{ containerStatus: string; containerId: string | null }> {
+): Promise<ContainerStatusResult> {
   return new Promise((resolveP, rejectP) => {
     const scriptPath = getDockerManagerScriptPath();
     const payload = JSON.stringify({ command: "status", projectDir, projectType });
@@ -385,6 +393,7 @@ export function runDockerStatus(
 
       resolveP({
         containerStatus: parsed.containerStatus ?? "unknown",
+        containerHealth: parsed.containerHealth ?? null,
         containerId: parsed.containerId ?? null,
       });
     });
@@ -657,12 +666,12 @@ export class DeployService {
   async getContainerStatus(
     userId: string,
     projectId: string,
-  ): Promise<{ containerStatus: string; containerId: string | null }> {
+  ): Promise<ContainerStatusResult> {
     const project = await this.findOwnedProject(userId, projectId);
     const projectDir = resolve(env.PROJECTS_DIR, projectId);
 
     if (!existsSync(projectDir)) {
-      return { containerStatus: "not_found", containerId: null };
+      return { containerStatus: "not_found", containerHealth: null, containerId: null };
     }
 
     const status = await runDockerStatus(projectDir, project.type);

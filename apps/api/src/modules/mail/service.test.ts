@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { spawn } from "node:child_process";
 import type { AuditLogService } from "../audit-log/service.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { reconcileMailState, MailStateSyncError } from "./state-sync.js";
@@ -10,6 +11,9 @@ process.env.SESSION_SECRET ??=
 vi.mock("./state-sync.js", async (original) => ({
   ...(await original<typeof import("./state-sync.js")>()),
   reconcileMailState: vi.fn(),
+}));
+vi.mock("node:child_process", () => ({
+  spawn: vi.fn(() => { throw new Error("mail helper must not be invoked"); }),
 }));
 const { MailService, senderBelongsToDomains, synchronizeMailState } = await import("./service.js");
 const { MailboxService } = await import("../mailboxes/service.js");
@@ -199,8 +203,25 @@ describe("test email sender ownership (#194)", () => {
       }),
     ).rejects.toMatchObject({ code: "SENDER_NOT_OWNED", statusCode: 403 });
     expect(prisma.domain.findMany).toHaveBeenCalledWith({
-      where: { userId: "u1" },
+      where: { userId: "u1", status: "ACTIVE" },
       select: { hostname: true },
     });
+  });
+
+  it.each(["PENDING", "ERROR"])("rejects a %s sender domain before invoking the mail helper", async (status) => {
+    const findMany = vi.fn(async ({ where }: { where: { userId: string; status?: string } }) =>
+      where.userId === "u1" && (!where.status || where.status === status)
+        ? [{ hostname: "bank.example" }]
+        : [],
+    );
+    const prisma = { domain: { findMany } } as unknown as PrismaClient;
+    await expect(new MailService(prisma).sendTestEmail("u1", {
+      from: "ceo@bank.example", to: "victim@example.net", subject: "Test",
+      body: "Test", port: 587, useTls: true,
+    })).rejects.toMatchObject({ code: "SENDER_NOT_OWNED", statusCode: 403 });
+    expect(findMany).toHaveBeenCalledWith({
+      where: { userId: "u1", status: "ACTIVE" }, select: { hostname: true },
+    });
+    expect(spawn).not.toHaveBeenCalled();
   });
 });

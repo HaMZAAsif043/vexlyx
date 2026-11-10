@@ -57,6 +57,7 @@ import { RegistrarRecordsTable } from "@/components/mail/RegistrarRecordsTable";
 import { useMail } from "@/hooks/useMail";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
+import { defaultTestMailSender } from "@/lib/test-mail-sender";
 import { refreshIconClassName } from "@/hooks/useRefreshAnimation";
 import type {
   SendTestEmailInput,
@@ -290,15 +291,7 @@ export default function MailPage() {
             onClick={() => {
               setTestResult(null);
               setTestForm((prev) => {
-                // The sender must be on a domain the user owns, so the static
-                // placeholder is replaced by a real address when one exists.
-                const senderDomain = prev.from.split("@").pop()?.toLowerCase() ?? "";
-                const isOwned = domains.some((d) => {
-                  const host = d.hostname.toLowerCase().replace(/^\*\./, "");
-                  return senderDomain === host || senderDomain.endsWith(`.${host}`);
-                });
-                if (isOwned || domains.length === 0) return prev;
-                return { ...prev, from: `no-reply@${domains[0].hostname}` };
+                return { ...prev, from: defaultTestMailSender(prev.from, domains) };
               });
               setIsTestEmailOpen(true);
             }}

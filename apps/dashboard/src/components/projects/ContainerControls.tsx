@@ -69,6 +69,11 @@ export function ContainerControls({ project, onProjectUpdate }: ContainerControl
   const [removeDialogOpen, setRemoveDialogOpen] = useState(false);
 
   const containerStatus = status?.containerStatus ?? project.containerStatus ?? "not_deployed";
+  // `.State.Status` only says the process is up; Docker's own probe is the signal
+  // that the app is actually answering (#202).
+  const containerHealth = status?.containerHealth ?? null;
+  const isUnhealthy = containerHealth === "unhealthy";
+  const isHealthStarting = containerHealth === "starting";
   const isRunning = containerStatus === "running";
   const isExited = containerStatus === "exited" || containerStatus === "stopped";
   const hasContainer = Boolean(project.containerId) || isRunning || isExited;
@@ -88,6 +93,28 @@ export function ContainerControls({ project, onProjectUpdate }: ContainerControl
   };
 
   const statusBadge = () => {
+    if (isRunning && isUnhealthy) {
+      return (
+        <Badge
+          variant="outline"
+          className="border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-400 text-xs font-medium"
+        >
+          <span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-rose-500" />
+          Unhealthy
+        </Badge>
+      );
+    }
+    if (isRunning && isHealthStarting) {
+      return (
+        <Badge
+          variant="outline"
+          className="border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-400 text-xs font-medium"
+        >
+          <span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+          Waiting for healthcheck
+        </Badge>
+      );
+    }
     switch (containerStatus) {
       case "running":
         return (
@@ -228,6 +255,19 @@ export function ContainerControls({ project, onProjectUpdate }: ContainerControl
       <Separator />
 
       <CardContent className="pt-4 space-y-4">
+        {isUnhealthy && (
+          <div
+            id="container-health-hint"
+            className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-600 dark:text-rose-400"
+          >
+            <span className="font-medium">Healthcheck failing.</span> The container is up but does
+            not pass its own probe: either the app is not listening where Traefik routes to — which
+            shows as a 502 — or the probe itself does not work in this image. Open Runtime Logs and
+            check the address the app prints on startup; binding 127.0.0.1 instead of $HOST is the
+            usual cause.
+          </div>
+        )}
+
         {/* Container info summary */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="rounded-lg border border-border bg-card p-3">
