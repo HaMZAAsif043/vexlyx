@@ -199,6 +199,11 @@ describe("build job install command", () => {
     writeFileSync(join(projectsDir, PROJECT_ID, "package.json"), "{}");
   });
 
+  it("refuses automatic runtime changes that would detach configured Docker data", async () => {
+    await expect(runJob(job, storedProject({ type: "DOCKER", volumePaths: ["/data"] }))).rejects.toThrow("persistent Docker mounts");
+    expect(buildPayloads).toHaveLength(0);
+  });
+
   it("puts this run's override in the payload sent to build_manager.py", async () => {
     await expect(runJob(job, storedProject())).rejects.toThrow(
       "stopped by test",

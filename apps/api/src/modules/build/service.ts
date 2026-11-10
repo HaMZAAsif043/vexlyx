@@ -536,6 +536,8 @@ export function createBuildProcessor(
           : planResult.framework.charAt(0).toUpperCase() + planResult.framework.slice(1);
       await appendLog(`[vexlyx] Detected framework: ${displayFramework}`);
 
+      if (project.volumePaths?.length && planResult.detectedType && planResult.detectedType !== "DOCKER") throw new Error("This project has persistent Docker mounts. Keep the Docker runtime or remove the volume paths before changing runtimes.");
+
       // Auto-align project type if framework is detected and differs from current setting
       let effectiveProjectType = project.type;
       if (

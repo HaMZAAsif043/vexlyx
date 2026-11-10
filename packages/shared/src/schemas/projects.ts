@@ -51,7 +51,7 @@ const gitUrlSchema = z.string().regex(
 );
 
 export const VolumePathsSchema = z.array(z.string().max(255).regex(
-  /^\/(?:[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)(?:\/[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)*$/,
+  /^\/(?:[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)(?:\/[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)*(?![\s\S])/,
   "Use an absolute container directory without spaces, traversal or mount options",
 )).max(20).refine(paths => new Set(paths).size === paths.length, "Volume paths must be unique")
   .refine(paths => !paths.some((path, index) => paths.some((other, otherIndex) => index !== otherIndex && path.startsWith(`${other}/`))), "Volume paths must not overlap");
