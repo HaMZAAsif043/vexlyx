@@ -130,3 +130,12 @@ describe("GitHub App installation lifecycle", () => {
     });
   });
 });
+
+it("does not unsuspend on a permissions-only event", async () => {
+  const initial = { status: "SUSPENDED", suspendedAt: new Date("2026-01-01T00:00:00Z"), disconnectedAt: null };
+  const { installation, prisma, deliver } = await setup(initial);
+  await deliver("new_permissions_accepted");
+  expect(installation).toEqual(initial);
+  expect(prisma.gitHubInstallation.updateMany).not.toHaveBeenCalled();
+  expect(prisma.project.updateMany).not.toHaveBeenCalled();
+});
