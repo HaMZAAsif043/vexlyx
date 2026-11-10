@@ -161,6 +161,18 @@ class FirstExposedPortTests(unittest.TestCase):
         )
         self.assertEqual(docker_manager.first_exposed_port(d), 80)
 
+    def test_arithmetic_left_shift_does_not_open_heredoc(self):
+        for expression in ("echo $((1 << 2))", "((n <<= 1))", "echo $(((1 << 2) + 3))"):
+            with self.subTest(expression=expression):
+                d = self.make_dir(f"FROM alpine\nRUN {expression}\nEXPOSE 8080\n")
+                self.assertEqual(docker_manager.first_exposed_port(d), 8080)
+
+    def test_real_heredoc_after_arithmetic_still_opens(self):
+        d = self.make_dir(
+            "FROM alpine\nRUN echo $((1 << 2)); cat <<EOF\nEXPOSE 9000\nEOF\nEXPOSE 8080\n"
+        )
+        self.assertEqual(docker_manager.first_exposed_port(d), 8080)
+
     def test_herestring_marker_does_not_open_heredoc(self):
         # '<<<' is a here-string: its value stays on the line, so no body
         # follows and nothing should be skipped.

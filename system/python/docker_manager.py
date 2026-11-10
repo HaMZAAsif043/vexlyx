@@ -581,6 +581,17 @@ def _scan_heredoc_delims(args: str) -> list[str]:
             continue
         if ch == "#" and (i == 0 or args[i - 1].isspace()):
             break  # rest of the line is a shell comment
+        if args.startswith("$((", i) or args.startswith("((", i):
+            # Left shifts inside shell arithmetic are not heredoc openers.
+            i += 3 if args.startswith("$((", i) else 2
+            depth = 2
+            while i < n and depth:
+                if args[i] == "(":
+                    depth += 1
+                elif args[i] == ")":
+                    depth -= 1
+                i += 1
+            continue
         if ch == "<":
             if args.startswith("<<<", i):
                 i += 3  # here-string: its value stays on this line, no body
