@@ -1,11 +1,19 @@
 import type { FastifyInstance } from "fastify";
 import { SystemService } from "./service.js";
+import { SystemUpdateService } from "./update-service.js";
 import { UpdateSystemSettingsSchema } from "@vexlyx/shared";
 import { rescheduleBackupJob } from "../backups/scheduler.js";
 import { rescheduleAllTasks } from "../scheduled-tasks/scheduler.js";
 
 export async function systemRoutes(app: FastifyInstance) {
   const service = new SystemService(app.prisma);
+  const updateService = new SystemUpdateService(app.redis, app.log);
+
+  // GET /api/system/update — newest stable release vs. the running version
+  // (F5.33). ADMIN-only: only a server administrator can act on it.
+  app.get("/update", { preHandler: [app.requireRole("ADMIN")] }, async () => {
+    return updateService.getUpdateInfo();
+  });
 
   // GET /api/system/dns-info — public IP + required DNS records (F5.9),
   // surfaced by the Settings page (F5.11) as a post-install reference.

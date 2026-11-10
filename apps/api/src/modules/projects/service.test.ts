@@ -146,3 +146,130 @@ describe("project repository changes", () => {
     expect(prisma.project.update).not.toHaveBeenCalled();
   });
 });
+
+describe("project build overrides (F5.34)", () => {
+  const stored = {
+    id: "p1",
+    userId: "u1",
+    deletedAt: null,
+    gitUrl: null,
+    installCmd: null,
+    buildCmd: null,
+    startCmd: null,
+    port: null,
+  };
+  const prisma = {
+    project: {
+      findUnique: vi.fn(),
+      findUniqueOrThrow: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      updateMany: vi.fn(),
+    },
+  };
+  const auditLog = { log: vi.fn() };
+  const service = new ProjectService(
+    prisma as unknown as PrismaClient,
+    auditLog as unknown as AuditLogService,
+    {} as FastifyBaseLogger,
+  );
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    prisma.project.findUnique.mockResolvedValue(stored);
+    prisma.project.findUniqueOrThrow.mockResolvedValue(stored);
+    prisma.project.create.mockResolvedValue(stored);
+    prisma.project.update.mockResolvedValue(stored);
+    prisma.project.updateMany.mockResolvedValue({ count: 1 });
+  });
+
+  /** The `data` object of the single prisma.project.update call. */
+  function writtenData(): Record<string, unknown> {
+    return prisma.project.update.mock.calls[0]![0].data;
+  }
+
+  it("accepts an install command on create and on update", () => {
+    expect(
+      CreateProjectSchema.safeParse({
+        name: "ideact",
+        type: "NEXTJS",
+        installCmd: "pnpm install --frozen-lockfile",
+      }).success,
+    ).toBe(true);
+    expect(
+      UpdateProjectSchema.safeParse({ installCmd: "pnpm install" }).success,
+    ).toBe(true);
+  });
+
+  it("rejects an install command longer than the limit the other commands use", () => {
+    const tooLong = "x".repeat(501);
+    expect(
+      UpdateProjectSchema.safeParse({ installCmd: tooLong }).success,
+    ).toBe(false);
+    expect(
+      CreateProjectSchema.safeParse({
+        name: "ideact",
+        type: "NEXTJS",
+        installCmd: tooLong,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("writes every override the request sent", async () => {
+    await service.update("u1", "p1", {
+      installCmd: "pnpm install",
+      buildCmd: "pnpm run build",
+      startCmd: "pnpm start",
+      port: 3000,
+    });
+
+    expect(writtenData()).toMatchObject({
+      installCmd: "pnpm install",
+      buildCmd: "pnpm run build",
+      startCmd: "pnpm start",
+      port: 3000,
+    });
+  });
+
+  it("stores null for an override the user cleared, so detection takes over", async () => {
+    await service.update("u1", "p1", { installCmd: null, port: null });
+
+    expect(writtenData()).toMatchObject({ installCmd: null, port: null });
+  });
+
+  it("leaves a command the request did not mention untouched", async () => {
+    await service.update("u1", "p1", { installCmd: "pnpm install" });
+
+    expect(writtenData()).not.toHaveProperty("buildCmd");
+    expect(writtenData()).not.toHaveProperty("startCmd");
+    expect(writtenData()).not.toHaveProperty("port");
+  });
+
+  it("reads the stored install command when a project is fetched", async () => {
+    await service.getById("u1", "p1");
+
+    expect(prisma.project.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({ installCmd: true }),
+      }),
+    );
+  });
+
+  it("stores a create request's install command instead of dropping it", async () => {
+    // The name is free: create() looks the project up by (userId, name) first.
+    prisma.project.findUnique.mockResolvedValueOnce(null);
+
+    await service.create("u1", {
+      name: "ideact",
+      type: "NEXTJS",
+      branch: "main",
+      installCmd: "pnpm install",
+    } as never);
+
+    expect(prisma.project.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ installCmd: "pnpm install" }),
+      }),
+    );
+  });
+});
