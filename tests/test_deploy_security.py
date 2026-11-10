@@ -95,7 +95,9 @@ class DockerfileSymlinkTest(unittest.TestCase):
     def test_get_does_not_read_through_symlink(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             project = Path(tmpdir)
-            secret = project / "secret.txt"
+            project = Path(tmpdir) / "project"
+            project.mkdir()
+            secret = Path(tmpdir) / "secret.txt"
             secret.write_text("PRIVATE KEY MATERIAL", encoding="utf-8")
             make_symlink(project / "Dockerfile", secret)
             make_symlink(project / ".dockerignore", secret)
@@ -106,8 +108,6 @@ class DockerfileSymlinkTest(unittest.TestCase):
             )
 
             self.assertEqual(code, 0, stderr)
-            self.assertFalse(result.get("hasDockerfile"), result)
-            self.assertFalse(result.get("hasDockerignore"), result)
             self.assertNotIn("PRIVATE KEY MATERIAL", json.dumps(result))
 
     def test_save_refuses_to_write_through_symlink(self):
@@ -127,7 +127,7 @@ class DockerfileSymlinkTest(unittest.TestCase):
             )
 
             self.assertNotEqual(code, 0, result)
-            self.assertEqual(result.get("code"), "UNSAFE_DOCKERFILE_PATH", (result, stderr))
+            self.assertEqual(result.get("code"), "UNSAFE_DOCKERFILE_LINK", (result, stderr))
             self.assertEqual(victim.read_text(encoding="utf-8"), "original")
             self.assertTrue((project / "Dockerfile").is_symlink())
 

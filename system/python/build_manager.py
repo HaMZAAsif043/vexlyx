@@ -72,6 +72,66 @@ def require_field(payload: dict, field: str) -> str:
     return value  # type: ignore[return-value]  — fail() exits
 
 
+# ---------------------------------------------------------------------------
+# Symlink-safe project file IO (#193)
+#
+# A project directory is a repository checkout and git preserves symlinks, so
+# `Dockerfile` can be a link anywhere this root container can reach — and the
+# whole host checkout is bind-mounted here at the same path. Following such a
+# link turns a panel read into host file disclosure and a panel save into a
+# root overwrite of the panel's own code.
+# ---------------------------------------------------------------------------
+
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+
+
+class UnsafePathError(Exception):
+    """A project path is a symlink or resolves outside its own workspace."""
+
+
+def _stays_in(root: Path, target: Path) -> bool:
+    # Both sides resolved, so an install reached through a symlinked parent is
+    # not read as an escape.
+    real_root = os.path.realpath(root)
+    real_target = os.path.realpath(target)
+    return real_target == real_root or real_target.startswith(real_root + os.sep)
+
+
+def read_project_text(project_dir: Path, path: Path) -> str | None:
+    """Return the file's text only when its real path stays in the workspace.
+
+    An escaping link reads as absent rather than raising — the read paths then
+    report no file, which is the same answer they give for a missing one."""
+    try:
+        real = os.path.realpath(path)
+        if not _stays_in(project_dir, Path(real)) or not os.path.isfile(real):
+            return None
+        with open(real, "r", encoding="utf-8", errors="replace") as handle:
+            return handle.read()
+    except OSError:
+        return None
+
+
+def write_project_file(project_dir: Path, path: Path, content: str) -> None:
+    """Write a panel-owned file, never through a link at its own name.
+
+    O_TRUNC on the opened descriptor keeps the inode: a container bind-mounts
+    single generated files by path, so a new inode would not reach it."""
+    if path.is_symlink():
+        raise UnsafePathError(f"{path} is a symbolic link; refusing to write through it")
+    if not _stays_in(project_dir, path.parent):
+        raise UnsafePathError(f"{path} resolves outside the project directory")
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | _O_NOFOLLOW, 0o644)
+    except OSError as exc:
+        # Also covers the link swapped in between the check and the open.
+        raise UnsafePathError(
+            f"{path} could not be opened for writing without following links: {exc.strerror}"
+        ) from exc
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(content)
+
+
 def get_nixpacks_binary() -> str:
     """Find nixpacks in PATH or common install directories."""
     binary = shutil.which("nixpacks")
@@ -235,43 +295,9 @@ def find_dockerfile(project_dir: Path) -> Path | None:
     candidates = ["Dockerfile", "dockerfile", "Dockerfile.prod", "Dockerfile.app"]
     for candidate in candidates:
         p = project_dir / candidate
-        # A cloned repository can contain Dockerfile as a symlink; reading or
-        # writing through it as root would reach any file the helper can open.
-        if p.is_symlink():
-            continue
         if p.is_file():
             return p
     return None
-
-
-_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
-
-
-def read_project_file(path: Path) -> str:
-    """Read a file inside a project directory without following symlinks."""
-    # O_NOFOLLOW is missing on some platforms, so check the path as well.
-    if path.is_symlink():
-        return ""
-    try:
-        fd = os.open(path, os.O_RDONLY | _NOFOLLOW)
-    except OSError:
-        return ""
-    try:
-        with os.fdopen(fd, "r", encoding="utf-8", errors="replace") as fh:
-            return fh.read()
-    except OSError:
-        return ""
-
-
-def write_project_file(path: Path, content: str) -> None:
-    """Write a file inside a project directory without following symlinks.
-
-    Raises OSError, including ELOOP when the path is already a symlink."""
-    if path.is_symlink():
-        raise OSError(f"refusing to write through a symbolic link: {path}")
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | _NOFOLLOW, 0o644)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(content)
 
 
 def parse_dockerfile_info(dockerfile_path: Path | None) -> dict:
@@ -295,7 +321,7 @@ def parse_dockerfile_info(dockerfile_path: Path | None) -> dict:
             "envKeys": [],
         }
 
-    content = read_project_file(dockerfile_path)
+    content = read_project_text(dockerfile_path.parent, dockerfile_path) or ""
 
     base_image = None
     exposed_ports: list[int] = []
@@ -1046,6 +1072,33 @@ def detect_framework_and_commands(project_dir: Path, plan: dict) -> tuple[str, s
     return (str(framework), build_cmd, start_cmd, detected_type)
 
 
+def derive_install_cmd(project_dir: Path, detected_type: str | None) -> str | None:
+    """
+    Propose the Nixpacks install command for a project from its lockfiles.
+
+    Shared by cmd_plan, so the dashboard can show what auto-detection picks,
+    and by cmd_build, where an explicit payload override wins and this only
+    fills the gap. Returning None leaves Nixpacks' own provider default in
+    charge, which is the correct answer for a plain npm project.
+    """
+    # Python builds need a venv plus setuptools pinned below 70 — the image's
+    # default toolchain breaks older requirements files without it.
+    if detected_type == "PYTHON":
+        if (project_dir / "requirements.txt").is_file():
+            return "python -m venv --copies /opt/venv && . /opt/venv/bin/activate && pip install 'setuptools<70' && pip install -r requirements.txt"
+        if (project_dir / "pyproject.toml").is_file():
+            return "python -m venv --copies /opt/venv && . /opt/venv/bin/activate && pip install 'setuptools<70' && pip install ."
+        return None
+
+    if (project_dir / "bun.lockb").is_file() or (project_dir / "bun.lock").is_file():
+        return "bun install"
+    if (project_dir / "pnpm-lock.yaml").is_file():
+        return "pnpm install"
+    if (project_dir / "yarn.lock").is_file():
+        return "yarn install"
+    return None
+
+
 def cmd_plan(payload: dict) -> None:
     """
     Detect the framework and proposed build command for a project directory.
@@ -1055,11 +1108,11 @@ def cmd_plan(payload: dict) -> None:
       envVars    — optional dict of environment variables
 
     Returns a single JSON object:
-      { framework: string, buildCmd: string | null, startCmd: string | null, detectedType: string | null }
+      { framework: string, buildCmd: string | null, startCmd: string | null,
+        installCmd: string | null, detectedType: string | null }
     """
     project_dir = require_field(payload, "projectDir")
     env_vars = payload.get("envVars")
-    nixpacks_bin = get_nixpacks_binary()
     project_path = Path(project_dir)
 
     if not project_path.is_dir():
@@ -1074,6 +1127,9 @@ def cmd_plan(payload: dict) -> None:
         df_info = parse_dockerfile_info(dockerfile_p)
         respond({
             "framework": "dockerfile",
+            # A Dockerfile owns its own dependency step; Nixpacks is never
+            # invoked, so there is no install command to propose.
+            "installCmd": None,
             "buildCmd": None,
             "startCmd": None,
             "detectedType": "DOCKER",
@@ -1085,6 +1141,10 @@ def cmd_plan(payload: dict) -> None:
             "cmd": df_info.get("cmd"),
         })
         return
+
+    # Resolved only after the Dockerfile branch has returned: a project that owns
+    # its Dockerfile never calls nixpacks and must not need it installed (#222).
+    nixpacks_bin = get_nixpacks_binary()
 
     cmd = [nixpacks_bin, "plan", project_dir, "--format", "json"]
 
@@ -1139,6 +1199,7 @@ def cmd_plan(payload: dict) -> None:
 
     respond({
         "framework": framework,
+        "installCmd": derive_install_cmd(project_path, detected_type),
         "buildCmd": build_cmd,
         "startCmd": start_cmd,
         "detectedType": detected_type,
@@ -1152,6 +1213,7 @@ def cmd_build(payload: dict) -> None:
     Payload fields:
       projectDir — absolute path to the cloned project source
       imageName  — Docker image name/tag (e.g. vexlyx-<projectId>)
+      installCmd — optional install command override (passed via --install-cmd)
       buildCmd   — optional build command override (passed via --build-cmd)
       startCmd   — optional start command override (passed via --start-cmd)
       cacheKey   — optional cache key for incremental builds (passed via --cache-key)
@@ -1262,18 +1324,8 @@ def cmd_build(payload: dict) -> None:
         log_line("[vexlyx] No composer.json found — created a minimal one so Nixpacks can build this PHP project")
 
     # For Python projects, ensure setuptools<70 is installed into venv
-    if detected_type == "PYTHON" and not install_cmd:
-        if (project_path / "requirements.txt").is_file():
-            install_cmd = "python -m venv --copies /opt/venv && . /opt/venv/bin/activate && pip install 'setuptools<70' && pip install -r requirements.txt"
-        elif (project_path / "pyproject.toml").is_file():
-            install_cmd = "python -m venv --copies /opt/venv && . /opt/venv/bin/activate && pip install 'setuptools<70' && pip install ."
-    elif not install_cmd:
-        if (project_path / "bun.lockb").is_file() or (project_path / "bun.lock").is_file():
-            install_cmd = "bun install"
-        elif (project_path / "pnpm-lock.yaml").is_file():
-            install_cmd = "pnpm install"
-        elif (project_path / "yarn.lock").is_file():
-            install_cmd = "yarn install"
+    if not install_cmd:
+        install_cmd = derive_install_cmd(project_path, detected_type)
 
     cmd = [nixpacks_bin, "build", project_dir, "--name", image_name]
 
@@ -1553,18 +1605,18 @@ def cmd_dockerfile_get(payload: dict) -> None:
 
     df_content = ""
     if dockerfile_p:
-        df_content = read_project_file(dockerfile_p)
+        df_content = read_project_text(target_path, dockerfile_p) or ""
 
     di_content = ""
-    if dockerignore_p.is_file() and not dockerignore_p.is_symlink():
-        di_content = read_project_file(dockerignore_p)
+    if dockerignore_p.is_file():
+        di_content = read_project_text(target_path, dockerignore_p) or ""
 
     df_info = parse_dockerfile_info(dockerfile_p) if dockerfile_p else {}
 
     respond({
         "success": True,
         "hasDockerfile": bool(dockerfile_p and dockerfile_p.is_file()),
-        "hasDockerignore": dockerignore_p.is_file() and not dockerignore_p.is_symlink(),
+        "hasDockerignore": dockerignore_p.is_file(),
         "dockerfile": df_content,
         "dockerignore": di_content,
         "filename": dockerfile_p.name if dockerfile_p else "Dockerfile",
@@ -1591,17 +1643,17 @@ def cmd_dockerfile_save(payload: dict) -> None:
     dockerfile_p = target_path / "Dockerfile"
     dockerignore_p = target_path / ".dockerignore"
 
-    try:
-        if dockerfile_content is not None:
-            write_project_file(dockerfile_p, dockerfile_content)
+    if dockerfile_content is not None:
+        try:
+            write_project_file(target_path, dockerfile_p, dockerfile_content)
+        except UnsafePathError as exc:
+            fail(str(exc), "UNSAFE_DOCKERFILE_LINK")
 
-        if dockerignore_content is not None:
-            write_project_file(dockerignore_p, dockerignore_content)
-    except OSError as exc:
-        fail(
-            f"Refusing to write through a symbolic link or unwritable path: {exc}",
-            "UNSAFE_DOCKERFILE_PATH",
-        )
+    if dockerignore_content is not None:
+        try:
+            write_project_file(target_path, dockerignore_p, dockerignore_content)
+        except UnsafePathError as exc:
+            fail(str(exc), "UNSAFE_DOCKERIGNORE_LINK")
 
     df_info = parse_dockerfile_info(dockerfile_p)
 

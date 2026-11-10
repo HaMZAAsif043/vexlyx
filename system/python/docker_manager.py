@@ -36,10 +36,13 @@ import os
 import re
 import shutil
 import signal
+import socket
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 
@@ -113,9 +116,18 @@ def assert_deploy_dir_is_not_a_symlink(compose_dir: Path) -> None:
         )
 
 
+# The hostname lands in the compose file inside a double-quoted YAML label, as
+# the Traefik rule Host(`value`). A backtick there closes that rule and opens
+# another, and a quote or newline closes the label and starts a new one, so a
+# deploy could otherwise claim a hostname the panel never granted it, or point
+# a router at another project's container (#192). The set below is about rule
+# safety, not hostname syntax: it drops every character the rule or the YAML
+# needs, `/` included so a value cannot read as a path either. `apps/api`
+# validates the shape (DeployBodySchema) before this is reached; this is the
+# check that stands on its own, because this is the process writing the file.
 ROUTE_HOSTNAME_RE = re.compile(
     r"^(?:\*\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
-    r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])$"
+    r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
 )
 
 
@@ -123,10 +135,82 @@ def validate_route_hostname(hostname: str) -> str:
     """The Traefik labels are built by string substitution, so a hostname that
     contains rule syntax (backticks, parentheses, pipes) would close the
     Host(...) matcher and append rules that match other tenants' requests."""
-    value = (hostname or "").strip().lower()
+    if not isinstance(hostname, str):
+        fail("Hostname must be a string", "INVALID_HOSTNAME")
+    value = hostname.lower()
     if len(value) > 253 or not ROUTE_HOSTNAME_RE.fullmatch(value):
         fail(f"Invalid hostname for the Traefik route: {hostname!r}", "INVALID_HOSTNAME")
     return value
+
+
+
+_SAFE_HOSTNAME = re.compile(r"[A-Za-z0-9._*-]{1,253}")
+
+
+def assert_hostname_is_rule_safe(hostname: str) -> None:
+    validate_route_hostname(hostname)
+
+
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+
+
+def write_generated_file(dest: Path, content: str) -> None:
+    """Write a generated deploy/ file as root without following a link at its
+    own name (#193): the deploy directory check above does not cover `Dockerfile`
+    or `nginx.conf` left as links, and the whole host checkout is bind-mounted
+    here at the same path, so writing through one overwrites an arbitrary host
+    file as root. O_TRUNC keeps the inode, because a running site bind-mounts
+    its nginx.conf as a single file."""
+    if dest.is_symlink():
+        fail(
+            f"{dest} is a symbolic link; refusing to write the generated file through it",
+            "UNSAFE_DEPLOY_FILE",
+        )
+    parent_fd = None
+    try:
+        if os.name == "posix":
+            parent_fd = os.open(dest.parent, os.O_RDONLY | os.O_DIRECTORY | _O_NOFOLLOW)
+            fd = os.open(dest.name, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | _O_NOFOLLOW,
+                         0o644, dir_fd=parent_fd)
+        else:
+            assert_deploy_dir_is_not_a_symlink(dest.parent)
+            fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | _O_NOFOLLOW, 0o644)
+    except OSError as exc:
+        # Also covers a link swapped in between the check and the open.
+        fail(
+            f"Cannot open {dest} for writing without following links: {exc.strerror}",
+            "UNSAFE_DEPLOY_FILE",
+        )
+    finally:
+        if parent_fd is not None:
+            os.close(parent_fd)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(content)
+
+
+def spawn_with_safe_cwd(*args, **kwargs):
+    """Pin Compose's working directory before spawning, rather than letting
+    a directory exchange redirect the client to an untrusted compose file.
+    The child inherits the descriptor used by its /proc/self/fd cwd path.
+    """
+    cwd = kwargs.get("cwd")
+    launcher = kwargs.pop("_launcher", None) or subprocess.Popen
+    directory_fd = None
+    try:
+        if cwd is not None and Path(cwd).name == "deploy":
+            if sys.platform.startswith("linux"):
+                try:
+                    directory_fd = os.open(cwd, os.O_RDONLY | os.O_DIRECTORY | _O_NOFOLLOW)
+                except OSError as exc:
+                    fail(f"Cannot open Compose directory safely: {exc}", "UNSAFE_DEPLOY_DIR")
+                kwargs["cwd"] = f"/proc/self/fd/{directory_fd}"
+                kwargs["pass_fds"] = (*kwargs.get("pass_fds", ()), directory_fd)
+            else:
+                assert_deploy_dir_is_not_a_symlink(Path(cwd))
+        return launcher(*args, **kwargs)
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
 
 
 def _chown_directory_no_follow(path: Path, uid: int, gid: int) -> None:
@@ -247,7 +331,7 @@ def run_bounded(
     if input_data is not None:
         kwargs["stdin"] = subprocess.PIPE
 
-    with subprocess.Popen(cmd, **_group_popen_kwargs(), **kwargs) as proc:
+    with spawn_with_safe_cwd(cmd, **_group_popen_kwargs(), **kwargs) as proc:
         try:
             stdout, stderr = proc.communicate(input_data, timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -360,7 +444,7 @@ def run_compose(
             errors="replace",
         )
 
-    proc = subprocess.Popen(
+    proc = spawn_with_safe_cwd(
         cmd,
         **_group_popen_kwargs(),
         cwd=compose_dir,
@@ -508,26 +592,6 @@ def build_env_block(env_vars: dict[str, str], indent: int = 6) -> str:
     return "\n".join(lines)
 
 
-def write_deployed_file(path: Path, content: str) -> None:
-    """Write a file in deploy/ without following a symlink.
-
-    The project directory around deploy/ is writable by the deployed
-    application, which can plant `docker-compose.yml` or `nginx.conf` as a
-    link to a root-owned file."""
-    try:
-        if path.is_symlink():
-            raise OSError("path is a symbolic link")
-        fd = os.open(
-            path,
-            os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
-            0o644,
-        )
-    except OSError as exc:
-        fail(f"Refusing to write {path} (symbolic link?): {exc}", "UNSAFE_DEPLOY_FILE")
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(content)
-
-
 def generate_compose_file(
     compose_dir: Path,
     template_path: Path,
@@ -540,6 +604,7 @@ def generate_compose_file(
     env_vars: dict[str, str],
     extra_placeholders: dict[str, str] | None = None,
 ) -> None:
+    assert_hostname_is_rule_safe(hostname)
     template = template_path.read_text(encoding="utf-8")
     env_block = build_env_block(env_vars)
     content = (
@@ -555,7 +620,7 @@ def generate_compose_file(
     for key, value in (extra_placeholders or {}).items():
         content = content.replace(f"{{{{{key}}}}}", value)
     compose_dir.mkdir(parents=True, exist_ok=True)
-    write_deployed_file(compose_dir / "docker-compose.yml", content)
+    write_generated_file(compose_dir / "docker-compose.yml", content)
 
 
 def generate_nginx_conf(
@@ -571,7 +636,7 @@ def generate_nginx_conf(
     content = render_nginx_conf(template_path, placeholders)
     compose_dir.mkdir(parents=True, exist_ok=True)
     dest = compose_dir / "nginx.conf"
-    write_deployed_file(dest, content)
+    write_generated_file(dest, content)
     return dest
 
 
@@ -609,7 +674,7 @@ def refresh_nginx_conf_for(project_dir: Path, project_type: str, project_id: str
     rendered = render_nginx_conf(get_nginx_templates_dir() / template, placeholders)
     if conf.read_text(encoding="utf-8") == rendered:
         return "unchanged"
-    write_deployed_file(conf, rendered)
+    write_generated_file(conf, rendered)
     return "updated"
 
 
@@ -672,6 +737,113 @@ def app_container_id(compose_dir: str, docker_bin: str, project_type: str = "NOD
 
 
 # ---------------------------------------------------------------------------
+# Post-deploy routable reachability check (#202)
+# ---------------------------------------------------------------------------
+
+ROUTABLE_PROBE_ATTEMPTS = 3
+ROUTABLE_PROBE_TIMEOUT_SECONDS = 3.0
+ROUTABLE_PROBE_RETRY_DELAY_SECONDS = 1.5
+
+
+def host_gateway_address(route_file: str = "/proc/net/route") -> str | None:
+    """
+    The host's address on this container's bridge, where a published port answers.
+
+    The probe has to run from somewhere with a route to the project container, and
+    this script is not: it runs inside the API container, which is deliberately kept
+    off APPS_NETWORK so panel services cannot reach customer workloads. Sockets from
+    here to a project's APPS_NETWORK address are dropped between the bridges.
+    """
+    try:
+        lines = Path(route_file).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for fields in (line.split() for line in lines[1:]):
+        if len(fields) < 3 or fields[1] != "00000000" or fields[2] == "00000000":
+            continue
+        try:
+            # /proc/net/route writes every address as little-endian hex.
+            return socket.inet_ntoa(struct.pack("<L", int(fields[2], 16)))
+        except (OSError, ValueError):
+            return None
+    return None
+
+
+def container_declares_healthcheck(docker_bin: str, container_id: str) -> bool:
+    """True when the image ships a HEALTHCHECK, in which case Docker is already
+    grading the container and the panel's health badge (#202) reports the verdict."""
+    if not container_id:
+        return False
+    result = run_bounded(
+        QUICK_TIMEOUT,
+        [
+            docker_bin,
+            "inspect",
+            "--format",
+            "{{if .Config.Healthcheck}}1{{else}}0{{end}}",
+            container_id,
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    return result.returncode == 0 and result.stdout.strip() == "1"
+
+
+def port_is_listening(address: str, port: int, timeout: float) -> bool:
+    """One TCP connect attempt. Nothing inside the image is required, which is
+    what makes this usable on a Dockerfile project's arbitrary base image."""
+    try:
+        with socket.create_connection((address, port), timeout):
+            return True
+    except OSError:
+        return False
+
+
+def probe_published_port(host_port: int) -> tuple[str | None, bool | None]:
+    """
+    Ask the app the question the router asks, from a namespace that can ask it.
+
+    The kernel forwards the container's published port to its routable address, so a
+    loopback-only bind refuses the connection while a correct one answers -- the exact
+    distinction #202 was filed about. Retries cover an app still binding its port when
+    the container first comes up.
+
+    Returns (gateway, answered), or (None, None) when there is nothing to probe.
+    """
+    if not host_port:
+        return None, None
+    address = host_gateway_address()
+    if not address:
+        return None, None
+    for attempt in range(ROUTABLE_PROBE_ATTEMPTS):
+        if port_is_listening(address, host_port, ROUTABLE_PROBE_TIMEOUT_SECONDS):
+            return address, True
+        if attempt + 1 < ROUTABLE_PROBE_ATTEMPTS:
+            time.sleep(ROUTABLE_PROBE_RETRY_DELAY_SECONDS)
+    return address, False
+
+
+def routable_check_log(
+    address: str | None, reachable: bool | None, host_port: int, hostname: str
+) -> str:
+    if address is None:
+        return "Routable check skipped: no host gateway to probe through from this container"
+    if reachable:
+        return (
+            f"Routable check {address}:{host_port} answered — this container accepts "
+            "connections from outside its own loopback"
+        )
+    return (
+        f"WARNING: nothing answers on {address}:{host_port}, the port Vexlyx published for this "
+        f"container, which the kernel forwards to the same address Traefik routes to. The app is "
+        f"most likely bound to 127.0.0.1, which answers neither, so {hostname} will return 502 "
+        "even while the container keeps running; bind it to $HOSTNAME or 0.0.0.0 instead."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
 
@@ -722,7 +894,7 @@ def cmd_deploy(payload: dict) -> None:
 
     # Resolve hostname
     slug = slugify(project_name)
-    hostname = validate_route_hostname(payload.get("domain") or f"{slug}.{base_domain}")
+    hostname = payload.get("domain") or f"{slug}.{base_domain}"
 
     # Sanitize service name (Traefik router names must be alphanumeric + hyphens)
     service_name = slugify(project_id[:12])
@@ -818,6 +990,13 @@ def cmd_deploy(payload: dict) -> None:
     container_id = get_container_id(str(compose_dir), docker_bin, project_type) or ""
     log_line(f"[vexlyx] Container started: id={container_id[:12] if container_id else 'unknown'}")
 
+    # An image that declares no HEALTHCHECK leaves Docker with nothing to grade, so
+    # a container that binds only 127.0.0.1 deploys as a silent 502. Probe the port
+    # Vexlyx published for it instead, and say so in the log the user reads (#202).
+    if container_id and not container_declares_healthcheck(docker_bin, container_id):
+        address, reachable = probe_published_port(host_port)
+        log_line(f"[vexlyx] {routable_check_log(address, reachable, host_port, hostname)}")
+
     respond({
         "done": True,
         "containerId": container_id,
@@ -847,8 +1026,9 @@ def cmd_stop(payload: dict) -> None:
     run_compose(compose_dir, ["stop"], docker_bin)
     # Verify every service, including sidecars, before a caller can overwrite files.
     try:
-        containers = subprocess.run(
+        containers = spawn_with_safe_cwd(
             [docker_bin, "compose", "ps", "--all", "--quiet"],
+            _launcher=subprocess.run,
             cwd=compose_dir, capture_output=True, text=True, timeout=30,
         )
         if containers.returncode != 0:
@@ -954,24 +1134,43 @@ def cmd_status(payload: dict) -> None:
     compose_dir = str(Path(project_dir) / "deploy")
 
     if not Path(compose_dir).is_dir():
-        respond({"containerStatus": "not_found", "containerId": None})
+        respond({"containerStatus": "not_found", "containerHealth": None, "containerId": None})
         return
 
     container_id = get_container_id(compose_dir, docker_bin, project_type)
     if not container_id:
-        respond({"containerStatus": "not_found", "containerId": None})
+        respond({"containerStatus": "not_found", "containerHealth": None, "containerId": None})
         return
 
+    # Both fields in one inspect: .State.Status alone calls a failing-healthcheck
+    # container a healthy deployment (#202).
     result = run_bounded(
         QUICK_TIMEOUT,
-        [docker_bin, "inspect", "--format", "{{.State.Status}}", container_id],
+        [
+            docker_bin,
+            "inspect",
+            "--format",
+            "{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}",
+            container_id,
+        ],
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
     )
-    status = result.stdout.strip() if result.returncode == 0 else "unknown"
-    respond({"containerStatus": status, "containerId": container_id})
+    if result.returncode != 0:
+        respond({"containerStatus": "unknown", "containerHealth": None, "containerId": container_id})
+        return
+
+    status, _, health = result.stdout.strip().partition("|")
+    respond(
+        {
+            "containerStatus": status.strip() or "unknown",
+            # An empty health means the image has no HEALTHCHECK, not that a probe failed.
+            "containerHealth": health.strip() or None,
+            "containerId": container_id,
+        }
+    )
 
 
 def cmd_logs(payload: dict) -> None:
@@ -1184,7 +1383,7 @@ def cmd_logs_follow(payload: dict) -> None:
         fail("No runtime logs available. Container has not been deployed yet.", "DEPLOY_DIR_NOT_FOUND")
         return
 
-    proc = subprocess.Popen(
+    proc = spawn_with_safe_cwd(
         [docker_bin, "compose", "logs", "--follow", f"--tail={tail}", "--no-log-prefix", primary_service_name(project_type, compose_dir)],
         cwd=compose_dir,
         stdout=subprocess.PIPE,
