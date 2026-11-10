@@ -128,8 +128,13 @@ async function runSslManager(
     : process.env.PYTHONPATH;
 
   return new Promise((res, rej) => {
-    // The request carries a private key; it goes over stdin so it never shows
-    // up in the helper's command line (visible to `ps` and /proc).
+    // The payload carries the uploaded private key for `save_custom`, so it
+    // goes to the helper on stdin and never into argv, where any local process
+    // could read it out of `ps` or `/proc/<pid>/cmdline` for as long as the
+    // helper runs (#190). `ssl_manager.py`'s `main()` already reads
+    // `{"command", "payload"}` from stdin when given no argument, and the
+    // spawn already opens a stdin pipe; argv stays supported for the CLI and
+    // the system-layer tests.
     const child = spawn(pythonExe, [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
       env: {
@@ -193,6 +198,14 @@ async function runSslManager(
       rej(new DomainError(`Failed to spawn ssl_manager.py: ${err.message}`, "SSL_SPAWN_ERROR", 500));
     });
 
+    // A helper that dies before reading (missing interpreter, import error)
+    // closes the pipe, and an unhandled 'error' on a writable is what turns
+    // that into a crashed API process. The `close` handler above already
+    // reports the real failure.
+    child.stdin.on("error", () => {
+      rej(new DomainError("Failed to send request to SSL manager", "SSL_MANAGER_STDIN_ERROR", 500));
+      child.kill();
+    });
     child.stdin.write(JSON.stringify({ command, payload }));
     child.stdin.end();
   });
@@ -728,8 +741,10 @@ export class SslService {
     }
 
     if (domain.certificate) {
-      // Clean up files via ssl_manager.py
-      await runSslManager("delete_cert", { domainId: domain.id });
+      // Clean up files via ssl_manager.py. The hostname goes with it so the
+      // helper can recognise the <host>.crt/.key convenience copies
+      // generate_self_signed() left next to this domain's own pair (#195).
+      await runSslManager("delete_cert", { domainId: domain.id, hostname: domain.hostname });
 
       // Delete certificate database record
       await this.prisma.certificate.delete({
