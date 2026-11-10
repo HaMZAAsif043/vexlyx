@@ -11,6 +11,7 @@ const project: Project = {
   status: "ACTIVE",
   gitUrl: "https://github.com/example/app",
   branch: "main",
+  installCmd: null,
   buildCmd: null,
   startCmd: null,
   port: null,

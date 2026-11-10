@@ -76,22 +76,64 @@ jobs:
       - run: python3 -m unittest discover -s tests -p test_restore_stop_safety.py
       - run: python3 -m unittest discover -s tests -p test_git_url_policy.py
       - run: python3 -m unittest discover -s tests -p test_git_clone_data_safety.py
+      # Runs the real git binary against a local repository, so it needs no
+      # network and no docker; git is preinstalled on the runner.
+      - run: python3 -m unittest discover -s tests -p test_git_branch_switch.py
       - run: python3 -m unittest discover -s tests -p test_installer_release_channel.py
+      - run: python3 -m unittest discover -s tests -p test_installer_repo_url.py
       # cryptography is what postfix_manager.py generates DKIM keys with (the
       # API image and the installer install it the same way); without it the
       # test would skip itself.
       - run: pip3 install cryptography
       - run: python3 -m unittest discover -s tests -p test_dkim_first_check.py
+      # The helper is now fed its request on stdin so a private key never has
+      # to be an argument; needs cryptography for the throwaway key pair, which
+      # the line above already installed.
+      - run: python3 -m unittest discover -s tests -p test_ssl_manager_stdin.py
+      # The private-key file modes are the subject of #195. The mode assertions
+      # in this suite skip off POSIX, so this is the runner where they actually
+      # run; it drives the real helper in a temporary directory.
+      - run: python3 -m unittest discover -s tests -p test_ssl_key_file_modes.py
       - run: python3 -m unittest discover -s tests -p test_installer_nixpacks.py
       - run: python3 -m unittest discover -s tests -p test_dockerfile_build_nixpacks_absent.py
+      # Same ordering guard for the detect step; mocks the resolver and the
+      # subprocess layer, so it spawns nothing.
+      - run: python3 -m unittest discover -s tests -p test_dockerfile_plan_nixpacks_absent.py
       - run: python3 -m unittest discover -s system/python -p test_docker_expose_port.py
       - run: python3 -m unittest discover -s tests -p test_nginx_conf_refresh.py
+      # Drives the real compose generator with crafted hostnames; needs nothing
+      # but the repo checkout.
+      - run: python3 -m unittest discover -s tests -p test_deploy_hostname_guard.py
+      # Symlinked Dockerfile / deploy files: plants real links, so it needs the
+      # Linux runner (it self-skips where symlink() is not permitted).
+      - run: python3 -m unittest discover -s tests -p test_symlink_safe_project_files.py
       - run: python3 -m unittest discover -s tests -p test_nginx_served_paths.py
       - run: python3 -m unittest discover -s tests -p test_installer_traefik_config.py
       - run: python3 -m unittest discover -s tests -p test_installer_runtime.py
       - run: python3 -m unittest discover -s tests -p test_php_docroot_ownership.py
       - run: python3 -m unittest discover -s tests -p test_installer_panel_recreate.py
       - run: python3 -m unittest discover -s tests -p test_network_isolation.py
+      # the post-deploy probe reaches the container's bridge address, but the
+      # tests only bind a local socket, so they need no docker daemon.
+      - run: python3 -m unittest discover -s tests -p test_post_deploy_routable_probe.py
+      # The suites below existed but were named nowhere, so they had never run
+      # in CI (#226). Each was executed on a Linux checkout of main before being
+      # added here: 66 tests, no docker daemon, no network, no live panel.
+      - run: python3 -m unittest discover -s tests -p test_backup_database_restore.py
+      - run: python3 -m unittest discover -s tests -p test_build_install_command.py
+      - run: python3 -m unittest discover -s tests -p test_compose_healthcheck_target.py
+      - run: python3 -m unittest discover -s tests -p test_container_health_status.py
+      - run: python3 -m unittest discover -s tests -p test_github_app_git_credentials.py
+      - run: python3 -m unittest discover -s tests -p test_installer_output.py
+      - run: python3 -m unittest discover -s tests -p test_mail_tls.py
+      - run: python3 -m unittest discover -s tests -p test_postfix_map_rebuild.py
+      - run: python3 -m unittest discover -s tests -p test_ssl_management.py
+      - run: python3 -m unittest discover -s tests -p test_subprocess_timeouts.py
+      - run: python3 -m unittest discover -s tests -p test_ci_suite_coverage.py
+      # Fails when a tests/test_*.py is neither named above nor listed with a
+      # reason in tests/ci-excluded-suites.txt, or when a named suite is one
+      # unittest discover collects nothing from.
+      - run: python3 tests/check_ci_suite_coverage.py
 
   build:
     runs-on: ubuntu-latest

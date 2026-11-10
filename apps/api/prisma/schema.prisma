@@ -300,6 +300,9 @@ model Project {
   status            ProjectStatus @default(CREATING)
   gitUrl            String?       @map("git_url")
   branch            String        @default("main")
+  /// Per-project override for Nixpacks' `--install-cmd`. Null falls back to the
+  /// command build_manager.py derives from the repository's lockfiles.
+  installCmd        String?       @map("install_cmd")
   buildCmd          String?       @map("build_cmd")
   startCmd          String?       @map("start_cmd")
   port              Int?

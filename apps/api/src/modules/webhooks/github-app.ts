@@ -60,7 +60,7 @@ export function registerGitHubAppWebhook(
             githubInstallation: { installationId: BigInt(installationId), status: "CONNECTED" },
             deletedAt: null,
           },
-          select: { id: true, userId: true, branch: true, buildCmd: true },
+          select: { id: true, userId: true, branch: true, installCmd: true, buildCmd: true },
         });
         const matching = projects.filter((project) => project.branch === branch);
         const commitHash = payload.head_commit?.id ?? payload.after ?? null;
@@ -78,6 +78,7 @@ export function registerGitHubAppWebhook(
               userId: project.userId,
               projectDir: resolve(env.PROJECTS_DIR, project.id),
               imageName: `${env.NIXPACKS_IMAGE_PREFIX}-${project.id}`,
+              installCmd: project.installCmd,
               buildCmd: project.buildCmd,
             },
           });
