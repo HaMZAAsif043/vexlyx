@@ -202,7 +202,10 @@ async function runSslManager(
     // closes the pipe, and an unhandled 'error' on a writable is what turns
     // that into a crashed API process. The `close` handler above already
     // reports the real failure.
-    child.stdin.on("error", () => undefined);
+    child.stdin.on("error", () => {
+      rej(new DomainError("Failed to send request to SSL manager", "SSL_MANAGER_STDIN_ERROR", 500));
+      child.kill();
+    });
     child.stdin.write(JSON.stringify({ command, payload }));
     child.stdin.end();
   });

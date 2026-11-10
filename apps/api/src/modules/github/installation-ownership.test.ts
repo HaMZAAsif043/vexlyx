@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { Redis } from "ioredis";
 import type { AuditLogService } from "../audit-log/service.js";
-import type { GitHubClient } from "./client.js";
+import { GitHubClient } from "./client.js";
 
 vi.mock("../../config/env.js", () => ({ env: {} }));
 vi.mock("../../utils/encryption.js", () => ({
@@ -154,4 +154,20 @@ describe("GitHub installation ownership", () => {
     });
     expect(upsert).not.toHaveBeenCalled();
   });
+});
+
+it("authorizes an installation returned on page two by the real client", async () => {
+  const fixture = setup();
+  fixture.client.listUserInstallations.mockImplementation(token => new GitHubClient().listUserInstallations(token));
+  vi.stubGlobal("fetch", vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ installations: Array.from({ length: 100 }, (_, id) => ({ id: id + 1000 })) }), {
+      headers: { Link: '<https://api.github.com/user/installations?page=2>; rel="next"' },
+    }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ installations: [{ id: 100 }] }))));
+  try {
+    await expect(fixture.link("user-1")).resolves.toMatchObject({ installationId: "100" });
+    expect(fixture.owner()).toBe("user-1");
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

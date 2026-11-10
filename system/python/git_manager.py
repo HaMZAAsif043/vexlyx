@@ -44,6 +44,68 @@ def require_field(payload: dict, field: str) -> str:
     return value  # type: ignore[return-value]  — fail() exits
 
 
+class GitCommandError(Exception):
+    """A git command failed.
+
+    Carries the message and error code the entry point turns into the response.
+    It is raised instead of writing an error document immediately so a caller
+    can fall back (a re-clone when switching to another repository) without
+    stdout already holding a first document: the script must write exactly one
+    JSON document per call (#153).
+    """
+
+    def __init__(self, message: str, code: str = "COMMAND_FAILED"):
+        super().__init__(message)
+        self.message = message
+        self.code = code
+
+
+def _validate_git_url(git_url: str) -> None:
+    """Enforce the same public-host policy as the shared API schemas before
+    network access or workspace deletion, including URLs persisted previously."""
+    if not re.fullmatch(
+        r"(?:https://(?:github\.com|gitlab\.com|bitbucket\.org)/|git@(?:github\.com|gitlab\.com|bitbucket\.org):)"
+        r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+", git_url,
+    ):
+        fail("Unsupported Git repository URL", "INVALID_GIT_URL")
+
+
+# Characters git itself refuses inside a ref name. Whitespace and control
+# bytes would also split or corrupt the fetch refspec built by
+# _checkout_fetched_branch, and a leading dash is parsed as a git option
+# rather than a name (#153).
+_UNSAFE_BRANCH = re.compile(r"[\x00-\x20\x7f~^:?*\[\\]|@{")
+
+
+def _validate_branch(branch: str) -> None:
+    """Reject branch names git could not use or that could be reinterpreted as
+    options or refspec syntax downstream; the API schema only bounds length.
+
+    git's rules apply to every slash-separated component, not just the whole
+    name: no component may be empty, start with `.` or end with `.lock`, so
+    `.hidden`, `feature/.hidden` and `feature.lock/topic` are all rejected the
+    same way `feature.lock` would be — git refuses them, and letting them
+    through would move an existing workspace aside before the clone also failed.
+    """
+    if (
+        not isinstance(branch, str)
+        or not branch
+        or branch.startswith(("-", "/"))
+        # '@' expands to HEAD in revision syntax downstream, and
+        # `git check-ref-format --branch HEAD` refuses the reserved name.
+        or branch in ("@", "HEAD")
+        or ".." in branch
+        or "@{" in branch
+        or "//" in branch
+        or branch.endswith(("/", ".", ".lock"))
+        or _UNSAFE_BRANCH.search(branch)
+    ):
+        fail("Unsupported branch name", "INVALID_BRANCH")
+    for component in branch.split("/"):
+        if not component or component.startswith(".") or component.endswith(".lock"):
+            fail("Unsupported branch name", "INVALID_BRANCH")
+
+
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
@@ -64,12 +126,9 @@ def cmd_clone(payload: dict) -> None:
     git_url = require_field(payload, "gitUrl")
     # Enforce the same public-host policy as the shared API schemas before
     # network access or workspace deletion, including URLs persisted previously.
-    if not re.fullmatch(
-        r"(?:https://(?:github\.com|gitlab\.com|bitbucket\.org)/|git@(?:github\.com|gitlab\.com|bitbucket\.org):)"
-        r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+", git_url,
-    ):
-        fail("Unsupported Git repository URL", "INVALID_GIT_URL")
+    _validate_git_url(git_url)
     branch = payload.get("branch", "main")
+    _validate_branch(branch)
     projects_dir = require_field(payload, "projectsDir")
     ssh_key_path = payload.get("sshPrivateKeyPath")
     access_token = payload.get("accessToken")
@@ -89,11 +148,17 @@ def cmd_clone(payload: dict) -> None:
             _run(["git", "-C", str(dest), "config", "remote.origin.fetch",
                   "+refs/heads/*:refs/remotes/origin/*"], env=env)
             _run(["git", "-C", str(dest), "fetch", "origin"], env=env)
-            _run(["git", "-C", str(dest), "checkout", branch], env=env)
+            _checkout_fetched_branch(dest, branch, env)
             _run(["git", "-C", str(dest), "pull", "origin", branch], env=env)
             respond({"success": True, "path": str(dest), "action": "pulled"})
             return
-        except SystemExit:
+        except GitCommandError as exc:
+            # A timeout is not evidence the repository is broken: the stalled
+            # command may have been a read-only ref probe, and the workspace
+            # can still be perfectly valid, so let the timeout surface instead
+            # of re-cloning over it (#153).
+            if exc.code == "COMMAND_TIMEOUT":
+                raise
             # Security-critical: a failed pull (network, auth, local changes) must never
             # trigger a re-clone, because that replaces the workspace and loses every
             # file git does not track. Only an explicit switch to another repository
@@ -111,7 +176,8 @@ def cmd_clone(payload: dict) -> None:
             ["git", "clone", "--branch", branch, "--single-branch", git_url, str(dest)],
             env=env,
         )
-    except SystemExit:
+    except GitCommandError:
+        # Clean up partial failed directory
         shutil.rmtree(dest, ignore_errors=True)
         if kept_aside is not None:
             kept_aside.rename(dest)
@@ -220,7 +286,13 @@ GIT_COMMAND_TIMEOUT = 900
 
 
 def _run(args: list[str], env: dict | None = None) -> None:
-    """Run a subprocess, capturing combined output, failing on non-zero exit."""
+    """Run a subprocess, capturing combined output, raising on failure.
+
+    Raises GitCommandError instead of writing an error document and exiting:
+    cmd_clone falls back to a re-clone only when switching repositories, and
+    printing the error before that fallback would put two JSON documents on
+    stdout, which the API caller cannot parse (#153).
+    """
     if args[0] == "git":
         # Redirects must not escape the validated host boundary.
         args = [args[0], "-c", "http.followRedirects=false", *args[1:]]
@@ -234,14 +306,74 @@ def _run(args: list[str], env: dict | None = None) -> None:
         )
     except subprocess.TimeoutExpired:
         # A stalled remote must not hold the build worker forever (#52).
-        fail(
+        raise GitCommandError(
             f"Command timed out after {GIT_COMMAND_TIMEOUT}s: {' '.join(args)}",
             "COMMAND_TIMEOUT",
-        )
-        return
+        ) from None
     if result.returncode != 0:
         error_output = (result.stderr or result.stdout or "").strip()
-        fail(f"Command failed: {' '.join(args)}\n{error_output}", "COMMAND_FAILED")
+        raise GitCommandError(
+            f"Command failed: {' '.join(args)}\n{error_output}", "COMMAND_FAILED"
+        )
+
+
+def _ref_exists(dest: Path, ref: str, env: dict | None = None) -> bool:
+    """Check whether a ref resolves in the repository.
+
+    Raises GitCommandError on a timeout rather than reporting False: a check
+    that never finished is not a missing ref, and treating it as one would
+    send the caller down the fetch-and-create path for a branch that may well
+    exist (#153).
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(dest), "rev-parse", "--verify", "--quiet", ref],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=GIT_COMMAND_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        raise GitCommandError(
+            f"Command timed out after {GIT_COMMAND_TIMEOUT}s: "
+            f"git -C {dest} rev-parse --verify --quiet {ref}",
+            "COMMAND_TIMEOUT",
+        ) from None
+    return result.returncode == 0
+
+
+def _checkout_fetched_branch(dest: Path, branch: str, env: dict | None = None) -> None:
+    """Check out `branch`, including branches created after the initial clone.
+
+    A `git clone --single-branch` pins `remote.origin.fetch` to the cloned
+    branch, so `git fetch origin` never creates `refs/remotes/origin/<branch>`
+    for any other branch and a plain `git checkout <branch>` fails with
+    "pathspec ... did not match" (#153). Fetch the branch into its
+    remote-tracking ref explicitly, then create the local branch from that ref
+    instead of relying on DWIM checkout.
+    """
+    if _ref_exists(dest, f"refs/heads/{branch}", env):
+        _run(["git", "-C", str(dest), "checkout", branch], env=env)
+        return
+    if not _ref_exists(dest, f"refs/remotes/origin/{branch}", env):
+        # Explicit refspec: the pinned single-branch refspec would otherwise
+        # send this fetch to FETCH_HEAD only, leaving checkout unable to see it.
+        _run(
+            [
+                "git", "-C", str(dest), "fetch", "origin",
+                f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
+            ],
+            env=env,
+        )
+        # Restore the wildcard refspec so later syncs fetch every branch.
+        _run(
+            ["git", "-C", str(dest), "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
+            env=env,
+        )
+    _run(
+        ["git", "-C", str(dest), "checkout", "-b", branch, f"refs/remotes/origin/{branch}"],
+        env=env,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +405,12 @@ def main() -> None:
         )
         return
 
-    COMMANDS[command](payload)
+    try:
+        COMMANDS[command](payload)
+    except GitCommandError as exc:
+        # Single failure document for the whole call: _run() raises instead of
+        # printing, so nothing has been written to stdout yet (#153).
+        fail(exc.message, exc.code)
 
 
 if __name__ == "__main__":

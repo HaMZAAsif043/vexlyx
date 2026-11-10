@@ -245,6 +245,7 @@ export class GitHubService {
     try {
       return await getGitHubInstallationToken(this.prisma, installationId, this.client);
     } catch (error) {
+      if (error instanceof GitHubApiError && error.code !== "GITHUB_API_ERROR") throw new GitHubError(error.message, error.code, error.statusCode);
       if (error instanceof GitHubApiError) throw new GitHubError("Unable to authenticate the GitHub installation", "GITHUB_INSTALLATION_AUTH_FAILED", error.statusCode);
       throw error;
     }
