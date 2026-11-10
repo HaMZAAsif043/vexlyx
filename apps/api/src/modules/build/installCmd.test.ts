@@ -114,6 +114,7 @@ function prismaMock(project: Record<string, unknown>) {
   return {
     project: {
       findUnique: vi.fn().mockResolvedValue(project),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       update: vi.fn().mockResolvedValue({}),
     },
     deployment: {
@@ -250,6 +251,44 @@ describe("build job install command", () => {
     ).rejects.toThrow("stopped by test");
 
     expect(buildPayloads[0]!.installCmd).toBeNull();
+  });
+});
+
+describe("advanced build controls", () => {
+  const job = { deploymentId: "d1", projectId: PROJECT_ID, userId: USER_ID, projectDir: join(projectsDir, PROJECT_ID), imageName: "vexlyx-p1", buildCmd: "npm run build" };
+  it("uses the selected monorepo source and bypasses cache when disabled", async () => {
+    const source = join(projectsDir, PROJECT_ID, "apps", "web");
+    mkdirSync(source, { recursive: true });
+    writeFileSync(join(source, "package.json"), "{}");
+    await expect(runJob(job, storedProject({ baseDirectory: "apps/web", buildCacheEnabled: false, buildCacheEpoch: 3 }))).rejects.toThrow("stopped by test");
+    expect(buildPayloads[0]).toMatchObject({ projectDir: source, noCache: true, cacheKey: "vexlyx-p1-3" });
+  });
+  it("resets cache without modifying another project's configuration", async () => {
+    const prisma = prismaMock(storedProject());
+    const service = new BuildService(prisma as unknown as PrismaClient);
+    await service.clearBuildCache(USER_ID, PROJECT_ID);
+    expect(prisma.project.update).toHaveBeenCalledWith({ where: { id: PROJECT_ID }, data: { buildCacheEpoch: { increment: 1 }, buildCacheResetPending: true } });
+  });
+  it("refuses a foreign owner's cache reset", async () => {
+    const prisma = prismaMock(storedProject({ userId: "foreign" }));
+    await expect(new BuildService(prisma as unknown as PrismaClient).clearBuildCache(USER_ID, PROJECT_ID)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(prisma.project.update).not.toHaveBeenCalled();
+  });
+  it("forwards memory, source and a one-shot reset through a successful build", async () => {
+    const captured: Record<string, unknown>[] = [];
+    spawnMock.mockImplementation(() => fakeChild(raw => {
+      const payload = JSON.parse(raw);
+      captured.push(payload);
+      if (payload.command === "plan") return { stdout: JSON.stringify(PLAN), code: 0 };
+      if (payload.command === "build") return { stdout: JSON.stringify({ done: true }) + "\n", code: 0 };
+      return { stdout: JSON.stringify({ done: true, containerId: "container", hostPort: 8999, hostname: "test.example.com" }) + "\n", code: 0 };
+    }));
+    mkdirSync(job.projectDir, { recursive: true });
+    const prisma = prismaMock(storedProject({ memoryLimit: "2g", buildCacheResetPending: true, buildCacheEpoch: 4 }));
+    await createBuildProcessor(prisma as unknown as PrismaClient, logger())({ id: "j1", name: "build", data: job as never });
+    expect(captured.find(payload => payload.command === "build")).toMatchObject({ noCache: true, cacheKey: "vexlyx-p1-4" });
+    expect(captured.find(payload => payload.command === "deploy")).toMatchObject({ memoryLimit: "2g", projectDir: job.projectDir });
+    expect(prisma.project.updateMany).toHaveBeenCalledWith({ where: { id: PROJECT_ID, buildCacheEpoch: 4 }, data: { buildCacheResetPending: false } });
   });
 });
 

@@ -302,6 +302,11 @@ model Project {
   branch            String        @default("main")
   /// Per-project override for Nixpacks' `--install-cmd`. Null falls back to the
   /// command build_manager.py derives from the repository's lockfiles.
+  baseDirectory     String?       @map("base_directory")
+  memoryLimit       String?       @map("memory_limit")
+  buildCacheEnabled Boolean       @default(true) @map("build_cache_enabled")
+  buildCacheEpoch   Int           @default(0) @map("build_cache_epoch")
+  buildCacheResetPending Boolean  @default(false) @map("build_cache_reset_pending")
   installCmd        String?       @map("install_cmd")
   buildCmd          String?       @map("build_cmd")
   startCmd          String?       @map("start_cmd")

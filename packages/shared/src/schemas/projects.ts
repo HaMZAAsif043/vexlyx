@@ -50,11 +50,19 @@ const gitUrlSchema = z.string().regex(
   "Must be a GitHub, GitLab, or Bitbucket repository URL (HTTPS or git@host:path format)",
 );
 
+const baseDirectorySchema = z.string().max(255).regex(/^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*(?![\s\S])/)
+  .refine(path => path.split("/").every(part => ![".", "..", ".git", "deploy", ".nixpacks"].includes(part)), "Use a relative source directory without traversal or generated directories");
+const memoryLimitSchema = z.string().regex(/^[1-9]\d{0,5}[mg](?![\s\S])/)
+  .refine(value => Number(value.slice(0, -1)) * (value.endsWith("g") ? 1024 : 1) <= 65536, "Memory limit must be at most 64g");
+
 export const CreateProjectSchema = z.object({
   name: projectNameSchema,
   type: ProjectTypeSchema,
   gitUrl: gitUrlSchema.optional().or(z.literal("")),
   branch: z.string().min(1).max(255).default("main"),
+  baseDirectory: baseDirectorySchema.optional(),
+  memoryLimit: memoryLimitSchema.optional(),
+  buildCacheEnabled: z.boolean().optional(),
   installCmd: z.string().max(500).optional(),
   buildCmd: z.string().max(500).optional(),
   startCmd: z.string().max(500).optional(),
@@ -73,6 +81,9 @@ export const UpdateProjectSchema = z.object({
   branch: z.string().min(1).max(255).optional(),
   // An explicit null clears a stored override and returns the field to
   // auto-detection, which `undefined` (leave untouched) cannot express.
+  baseDirectory: baseDirectorySchema.nullish(),
+  memoryLimit: memoryLimitSchema.nullish(),
+  buildCacheEnabled: z.boolean().optional(),
   installCmd: z.string().max(500).nullish(),
   buildCmd: z.string().max(500).nullish(),
   startCmd: z.string().max(500).nullish(),

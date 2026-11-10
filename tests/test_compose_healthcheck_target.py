@@ -134,3 +134,14 @@ class ProbeShapeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WordPressBaseDirectoryTests(unittest.TestCase):
+    def test_wordpress_mounts_the_selected_source_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            deploy = Path(directory) / "deploy"
+            content_root = (Path(directory) / "apps" / "blog" / "wp-content").as_posix()
+            docker_manager.generate_compose_file(deploy, TEMPLATES / "wordpress.yml", "wordpress:php8.3-fpm-alpine", "test", "test.example.com", 8999, 80, "512m", {}, {"wp_content_root": content_root})
+            text = (deploy / "docker-compose.yml").read_text()
+            self.assertEqual(text.count(content_root + ":/var/www/html/wp-content"), 2)
+            self.assertNotIn("../wp-content", text)

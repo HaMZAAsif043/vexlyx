@@ -1,4 +1,5 @@
-﻿import type { FastifyInstance, FastifyReply } from "fastify";
+import { SourceDirectoryError } from "../build/sourceDirectory.js";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { DeployService, DeployError } from "./service.js";
 import { DeployBodySchema, ContainerActionBodySchema, LogsQuerySchema } from "./schema.js";
 
@@ -7,7 +8,7 @@ import { DeployBodySchema, ContainerActionBodySchema, LogsQuerySchema } from "./
 // ---------------------------------------------------------------------------
 
 function handleDeployError(err: unknown, reply: FastifyReply): void {
-  if (err instanceof DeployError) {
+  if (err instanceof DeployError || err instanceof SourceDirectoryError) {
     reply.status(err.statusCode).send({
       error: err.message,
       code: err.code,

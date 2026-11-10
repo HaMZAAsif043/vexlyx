@@ -69,6 +69,9 @@ export type Project = {
   status: ProjectStatus;
   gitUrl: string | null;
   branch: string;
+  baseDirectory?: string | null;
+  memoryLimit?: string | null;
+  buildCacheEnabled?: boolean;
   installCmd: string | null;
   buildCmd: string | null;
   startCmd: string | null;

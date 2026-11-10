@@ -273,3 +273,10 @@ describe("project build overrides (F5.34)", () => {
     );
   });
 });
+
+it("validates base-directory and memory controls at the API boundary", () => {
+  for (const baseDirectory of ["../other", "/etc", "apps/../web", "deploy", "web\n"]) expect(UpdateProjectSchema.safeParse({ baseDirectory }).success).toBe(false);
+  for (const memoryLimit of ["0g", "65g", "1g\n", "1g\"\nvolumes:", "host"]) expect(UpdateProjectSchema.safeParse({ memoryLimit }).success).toBe(false);
+  expect(UpdateProjectSchema.parse({ baseDirectory: "apps/web", memoryLimit: "1g", buildCacheEnabled: false })).toEqual({ baseDirectory: "apps/web", memoryLimit: "1g", buildCacheEnabled: false });
+  expect(UpdateProjectSchema.parse({ baseDirectory: null, memoryLimit: null })).toEqual({ baseDirectory: null, memoryLimit: null });
+});

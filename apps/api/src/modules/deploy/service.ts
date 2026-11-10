@@ -1,3 +1,4 @@
+import { resolveSourceDirectory } from "../build/sourceDirectory.js";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -511,6 +512,7 @@ export class DeployService {
       );
     }
 
+    const sourceDir = resolveSourceDirectory(projectDir, project.baseDirectory);
     let imageName = `${env.NIXPACKS_IMAGE_PREFIX}-${projectId}`;
     let staticRoot: string | undefined;
 
@@ -519,7 +521,7 @@ export class DeployService {
     if (project.type === "STATIC" || project.type === "REACT") {
       imageName = "nginx:alpine";
       if (project.buildCmd) {
-        const staticOutputDir = resolve(projectDir, "deploy", "static-output");
+        const staticOutputDir = resolve(sourceDir, "deploy", "static-output");
         if (!existsSync(staticOutputDir)) {
           throw new DeployError(
             "This project has a build command but hasn't been built yet. Trigger a build first.",
@@ -529,7 +531,7 @@ export class DeployService {
         }
         staticRoot = staticOutputDir;
       } else {
-        staticRoot = projectDir;
+        staticRoot = sourceDir;
       }
     }
 
@@ -538,8 +540,10 @@ export class DeployService {
     // Nixpacks image involved.
     if (project.type === "PHP" && !project.buildCmd) {
       imageName = env.PHP_FPM_IMAGE;
-      staticRoot = projectDir;
+      staticRoot = sourceDir;
     }
+
+    if (project.type === "WORDPRESS") staticRoot = sourceDir;
 
     // Fetch and decrypt project environment variables. Done before the status
     // flips to CREATING so an undecryptable secret fails the request cleanly
@@ -568,7 +572,7 @@ export class DeployService {
       imageName,
       projectType: project.type,
       baseDomain: env.BASE_DOMAIN,
-      memoryLimit: env.DEPLOY_MEMORY_LIMIT,
+      memoryLimit: project.memoryLimit ?? env.DEPLOY_MEMORY_LIMIT,
       portRangeStart: env.DEPLOY_PORT_RANGE_START,
       portRangeEnd: env.DEPLOY_PORT_RANGE_END,
       containerPort: project.port,
@@ -717,6 +721,8 @@ export class DeployService {
         userId: true,
         port: true,
         gitUrl: true,
+        baseDirectory: true,
+        memoryLimit: true,
         buildCmd: true,
         deletedAt: true,
       },

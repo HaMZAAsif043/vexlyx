@@ -1,3 +1,4 @@
+import { resolveSourceDirectory } from "./sourceDirectory.js";
 import { spawn } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -163,6 +164,7 @@ interface BuildImageOptions {
   buildCmd: string | null;
   startCmd?: string | null;
   cacheKey?: string | null;
+  noCache?: boolean;
   envVars?: Record<string, string>;
 }
 
@@ -180,6 +182,7 @@ function runBuildImage(
       buildCmd: options.buildCmd,
       startCmd: options.startCmd,
       cacheKey: options.cacheKey,
+      noCache: options.noCache,
       envVars: options.envVars,
     });
 
@@ -438,6 +441,11 @@ export function createBuildProcessor(
           name: true,
           type: true,
           port: true,
+          baseDirectory: true,
+          memoryLimit: true,
+          buildCacheEnabled: true,
+          buildCacheEpoch: true,
+          buildCacheResetPending: true,
           installCmd: true,
           startCmd: true,
           gitUrl: true,
@@ -482,6 +490,9 @@ export function createBuildProcessor(
         }
       }
 
+      const sourceDir = resolveSourceDirectory(projectDir, project.baseDirectory);
+      await appendLog(`[vexlyx] Build source: ${project.baseDirectory ?? "."}`);
+
       // Fetch and decrypt project environment variables early
       const envService = new EnvService(prisma);
       const envVars = await envService.getDecryptedMap(projectId);
@@ -490,7 +501,7 @@ export function createBuildProcessor(
       await appendLog("[vexlyx] Detecting framework with nixpacks plan…");
       let planResult: PlanResult;
       try {
-        planResult = await runBuildPlan(projectDir, envVars);
+        planResult = await runBuildPlan(sourceDir, envVars);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         await appendLog(`[vexlyx:error] Framework detection failed: ${msg}`);
@@ -590,13 +601,14 @@ export function createBuildProcessor(
       if (isStaticNoBuild) {
         await appendLog("[vexlyx] Static site with no build command — skipping Nixpacks build");
         deployImageName = "nginx:alpine";
-        staticRoot = projectDir;
+        staticRoot = sourceDir;
       } else if (isWordPress) {
+        staticRoot = sourceDir;
         await appendLog("[vexlyx] WordPress project — skipping Nixpacks build, using official WordPress image");
       } else if (isPhpNoBuild) {
         await appendLog("[vexlyx] PHP project with no build command — skipping Nixpacks build");
         deployImageName = env.PHP_FPM_IMAGE;
-        staticRoot = projectDir;
+        staticRoot = sourceDir;
       } else {
         const cleanupSettings = await cleanupService.getSettings().catch(() => null);
         if (cleanupSettings?.pruneAfterRedeploy) {
@@ -607,16 +619,18 @@ export function createBuildProcessor(
         await appendLog("[vexlyx] Building Docker image with Nixpacks…");
         await runBuildImage(
           {
-            projectDir,
+            projectDir: sourceDir,
             imageName,
             installCmd: effectiveInstallCmd,
             buildCmd: effectiveBuildCmd,
             startCmd: project.startCmd ?? planResult.startCmd,
-            cacheKey: `vexlyx-${projectId}`,
+            cacheKey: `vexlyx-${projectId}-${project.buildCacheEpoch ?? 0}`,
+            noCache: project.buildCacheEnabled === false || project.buildCacheResetPending === true,
             envVars,
           },
           appendLog,
         );
+        if (project.buildCacheResetPending) await prisma.project.updateMany({ where: { id: projectId, buildCacheEpoch: project.buildCacheEpoch }, data: { buildCacheResetPending: false } });
         await appendLog("[vexlyx] Build complete ✓");
 
         if (
@@ -624,7 +638,7 @@ export function createBuildProcessor(
           effectiveBuildCmd
         ) {
           await appendLog("[vexlyx] Extracting static build output…");
-          const extractResult = await runExtractStaticOutput({ projectDir, imageName }, appendLog);
+          const extractResult = await runExtractStaticOutput({ projectDir: sourceDir, imageName }, appendLog);
           staticRoot = extractResult.staticOutputDir;
           deployImageName = "nginx:alpine";
           await appendLog("[vexlyx] Static build output extracted ✓");
@@ -646,7 +660,7 @@ export function createBuildProcessor(
           imageName: deployImageName,
           projectType: effectiveProjectType,
           baseDomain: env.BASE_DOMAIN,
-          memoryLimit: env.DEPLOY_MEMORY_LIMIT,
+          memoryLimit: project.memoryLimit ?? env.DEPLOY_MEMORY_LIMIT,
           portRangeStart: env.DEPLOY_PORT_RANGE_START,
           portRangeEnd: env.DEPLOY_PORT_RANGE_END,
           containerPort: project.port,
@@ -805,7 +819,7 @@ export class BuildService {
    * only shuttles its answer, so the two can never drift apart.
    */
   async getBuildPlan(userId: string, projectId: string): Promise<BuildPlan> {
-    await this.findOwnedProject(userId, projectId);
+    const project = await this.findOwnedProject(userId, projectId);
 
     const projectDir = resolve(env.PROJECTS_DIR, projectId);
     if (!existsSync(projectDir) || readdirSync(projectDir).length === 0) {
@@ -819,7 +833,7 @@ export class BuildService {
     const envService = new EnvService(this.prisma);
     const envVars = await envService.getDecryptedMap(projectId);
 
-    const plan = await runBuildPlan(projectDir, envVars);
+    const plan = await runBuildPlan(resolveSourceDirectory(projectDir, project.baseDirectory), envVars);
 
     return {
       framework: plan.framework,
@@ -828,6 +842,12 @@ export class BuildService {
       buildCmd: plan.buildCmd,
       startCmd: plan.startCmd,
     };
+  }
+
+  async clearBuildCache(userId: string, projectId: string) {
+    await this.findOwnedProject(userId, projectId);
+    await this.prisma.project.update({ where: { id: projectId }, data: { buildCacheEpoch: { increment: 1 }, buildCacheResetPending: true } });
+    return { message: "Build cache reset. The next build will run without cached layers." };
   }
 
   async getDeployment(
@@ -908,6 +928,7 @@ export class BuildService {
         id: true,
         userId: true,
         gitUrl: true,
+        baseDirectory: true,
         installCmd: true,
         buildCmd: true,
         deletedAt: true,

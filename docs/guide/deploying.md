@@ -149,3 +149,14 @@ be locally.
 - [Troubleshooting](/guide/troubleshooting#deploys-and-builds) — build/deploy problems and what to
   check first.
 - [Databases](/reference/database-provisioning) — provision a database for your project.
+
+
+### Advanced build settings
+
+The project Deploy tab exposes runtime version selectors for Nixpacks. They write the same `NIXPACKS_NODE_VERSION`, `NIXPACKS_PYTHON_VERSION` and `NIXPACKS_PHP_VERSION` entries as Environment Variables. **Auto** deletes that override and returns to existing environment/repository detection. Other environment entries and command overrides are left unchanged. Custom Dockerfiles select their own runtimes.
+
+**Base directory** is a relative application directory such as `apps/web`. Detection, image builds and static extraction use it; Git still synchronizes the whole repository and deployment metadata stays in the project root. Paths outside the project, traversal, and generated/internal directories are rejected. Clearing the setting returns to the repository root. For WordPress, the selected directory's `wp-content` is mounted.
+
+**Container memory limit** accepts values such as `512m` or `1g`, up to `64g`. Blank uses the server's `DEPLOY_MEMORY_LIMIT`. This controls running containers, not the build process.
+
+Disable **Enable build cache** to pass `--no-cache` to Nixpacks or Docker builds. **Clear build cache** assigns this project a new cache namespace and makes its next successful image build bypass cached layers. A failed build keeps the reset pending. It does not prune shared Docker cache or reclaim disk from other projects. See [Nixpacks cache options](https://nixpacks.com/docs/configuration/caching).

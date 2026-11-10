@@ -2762,8 +2762,10 @@ This feature gives a project a **Build Settings** card on the Deploy tab with th
 - [x] `GET /api/projects/:id/build-plan` returns the detected framework and commands without building anything (owner-only, `400 PROJECT_NOT_CLONED` with no source)
 - [x] A Build Settings panel on the project Deploy tab: install/build/start/port fields pre-filled from the project, `Auto`/`Custom` badge per field, detected value shown as the placeholder, **Save**, **Save & Deploy**, and **Auto** to clear every override
 - [x] A field the user did not touch is left out of the write, so saving build commands cannot overwrite a port the Dockerfile panel synced from `EXPOSE`
-- [ ] Version selectors (Node, Python, PHP, Ruby) that emit `NIXPACKS_*_VERSION` build-time variables per project
-- [ ] Nixpacks cache directory, `--config-path`, base image override and per-project build RAM limit
+- [x] Node, Python and PHP version selectors that write the project `NIXPACKS_*_VERSION` environment overrides (#200)
+- [x] Per-project base directory, container memory limit, build-cache toggle and cache reset (#200)
+- [ ] Ruby version selector
+- [ ] Custom Nixpacks cache directory, `--config-path`, base image override and separate build-process RAM limit
 - [ ] Registry credentials and build/start hooks (out of scope for slice 1 of #200)
 
 **Test Plan:**

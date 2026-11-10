@@ -1,3 +1,4 @@
+import { SourceDirectoryError } from "./sourceDirectory.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { BuildService, BuildError, createBuildProcessor, BUILD_QUEUE_NAME } from "./service.js";
 import { createQueue, createWorker } from "../../config/queue.js";
@@ -9,7 +10,7 @@ import type { BuildJobData } from "./schema.js";
 // ---------------------------------------------------------------------------
 
 function handleBuildError(err: unknown, reply: FastifyReply): void {
-  if (err instanceof BuildError) {
+  if (err instanceof BuildError || err instanceof SourceDirectoryError) {
     reply.status(err.statusCode).send({
       error: err.message,
       code: err.code,
@@ -36,6 +37,13 @@ export async function buildRoutes(app: FastifyInstance) {
     app,
   );
   app.registerQueue(buildQueue, buildWorker);
+
+  app.post("/:id/build-cache/clear", { preHandler: [app.requireAuth] }, async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      return await service.clearBuildCache(request.userId!, id);
+    } catch (error) { handleBuildError(error, reply); }
+  });
 
   // Helper — enqueue a build job
   const enqueueJob = async (data: BuildJobData) => {

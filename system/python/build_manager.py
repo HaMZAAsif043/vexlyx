@@ -1228,6 +1228,7 @@ def cmd_build(payload: dict) -> None:
     build_cmd = payload.get("buildCmd")
     start_cmd = payload.get("startCmd")
     cache_key = payload.get("cacheKey")
+    no_cache = payload.get("noCache") is True
     env_vars = payload.get("envVars")
 
     # nixpacks is only needed on the nixpacks build path below. Resolving it
@@ -1257,6 +1258,9 @@ def cmd_build(payload: dict) -> None:
             "-f",
             str(dockerfile_p.resolve()),
         ]
+
+        if no_cache:
+            docker_build_args.append("--no-cache")
 
         if isinstance(env_vars, dict):
             for k, v in env_vars.items():
@@ -1329,6 +1333,8 @@ def cmd_build(payload: dict) -> None:
 
     cmd = [nixpacks_bin, "build", project_dir, "--name", image_name]
 
+    if no_cache:
+        cmd.append("--no-cache")
     if cache_key:
         cmd += ["--cache-key", str(cache_key)]
 

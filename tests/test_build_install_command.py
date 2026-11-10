@@ -190,6 +190,20 @@ class BuildForwardsInstallCommandTests(unittest.TestCase):
         cmd = self.run_build(self.node_project(), {})
         self.assertNotIn("--install-cmd", cmd)
 
+    def test_cache_disabled_reaches_nixpacks(self):
+        cmd = self.run_build(self.node_project(), {"noCache": True, "cacheKey": "isolated-key"})
+        self.assertIn("--no-cache", cmd)
+        self.assertEqual(self.flag_value(cmd, "--cache-key"), "isolated-key")
+
+    def test_cache_defaults_to_enabled(self):
+        self.assertNotIn("--no-cache", self.run_build(self.node_project(), {}))
+
+    def test_cache_disabled_reaches_custom_dockerfile(self):
+        root = self.node_project()
+        (root / "Dockerfile").write_text("FROM alpine\n")
+        with patch.object(build_manager, "get_docker_binary", return_value="docker"):
+            self.assertIn("--no-cache", self.run_build(root, {"noCache": True}))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
