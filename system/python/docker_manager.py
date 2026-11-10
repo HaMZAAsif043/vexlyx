@@ -543,6 +543,26 @@ def build_env_block(env_vars: dict[str, str], indent: int = 6) -> str:
     return "\n".join(lines)
 
 
+def named_volume_placeholders(project_id: str, paths: list[str]) -> dict[str, str]:
+    if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths) or len(paths) > 20 or len(set(paths)) != len(paths):
+        fail("Invalid volume paths", "INVALID_VOLUME_PATHS")
+    for path in paths:
+        if not isinstance(path, str) or len(path) > 255 or not re.fullmatch(r"/(?:[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)(?:/[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)*", path):
+            fail("Invalid container volume path", "INVALID_VOLUME_PATHS")
+        if any(other != path and path.startswith(other + "/") for other in paths):
+            fail("Overlapping volume paths", "INVALID_VOLUME_PATHS")
+    if not paths:
+        return {"volume_mounts": "", "volume_definitions": ""}
+    mounts = ["    volumes:"]
+    definitions = ["volumes:"]
+    for path in paths:
+        key = "data_" + hashlib.sha256(path.encode()).hexdigest()[:16]
+        name = "vexlyx-data-" + hashlib.sha256(project_id.encode()).hexdigest()[:24] + "-" + key
+        mounts.append("      - " + json.dumps({"type": "volume", "source": key, "target": path}))
+        definitions.extend([f"  {key}:", "    name: " + json.dumps(name), "    labels:", "      vexlyx.project: " + json.dumps(project_id)])
+    return {"volume_mounts": "\n".join(mounts), "volume_definitions": "\n".join(definitions)}
+
+
 def generate_compose_file(
     compose_dir: Path,
     template_path: Path,
@@ -568,6 +588,8 @@ def generate_compose_file(
         .replace("{{memory_limit}}", memory_limit)
         .replace("{{env_block}}", env_block)
     )
+    content = content.replace("{{volume_mounts}}", (extra_placeholders or {}).get("volume_mounts", ""))
+    content = content.replace("{{volume_definitions}}", (extra_placeholders or {}).get("volume_definitions", ""))
     for key, value in (extra_placeholders or {}).items():
         content = content.replace(f"{{{{{key}}}}}", value)
     compose_dir.mkdir(parents=True, exist_ok=True)
@@ -869,7 +891,7 @@ def cmd_deploy(payload: dict) -> None:
 
     compose_dir = Path(project_dir) / "deploy"
     assert_deploy_dir_is_not_a_symlink(compose_dir)
-    extra_placeholders: dict[str, str] = {}
+    extra_placeholders: dict[str, str] = named_volume_placeholders(project_id, payload.get("volumePaths", [])) if project_type.upper() == "DOCKER" else {}
     project_type_upper = project_type.upper()
     extra_placeholders["deploy_dir"] = compose_dir.resolve().as_posix()
 
@@ -1069,11 +1091,24 @@ def cmd_remove(payload: dict) -> None:
     project_dir = require_field(payload, "projectDir")
     docker_bin = get_docker_binary()
     compose_dir = str(Path(project_dir) / "deploy")
-    if not Path(compose_dir).is_dir():
-        respond({"done": True})
-        return
-    log_line("[vexlyx] Removing container (down --volumes --remove-orphans)…")
-    run_compose(compose_dir, ["down", "--volumes", "--remove-orphans"], docker_bin)
+    keep_data = payload.get("command") == "remove-container"
+    if Path(compose_dir).is_dir():
+        args = ["down", "--remove-orphans"]
+        if not keep_data:
+            args.append("--volumes")
+        log_line("[vexlyx] Removing container" + ("; keeping named data" if keep_data else " and data"))
+        run_compose(compose_dir, args, docker_bin)
+    if not keep_data:
+        # Include paths removed from settings: their retained volumes are still
+        # owned by this exact project, never by a global prune operation.
+        result = subprocess.run([docker_bin, "volume", "ls", "--quiet", "--filter", "label=vexlyx.project=" + Path(project_dir).name], capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            fail("Could not list project data volumes", "VOLUME_CLEANUP_FAILED")
+        volumes = result.stdout.split()
+        if volumes:
+            result = subprocess.run([docker_bin, "volume", "rm", *volumes], capture_output=True, text=True, timeout=120)
+            if result.returncode != 0:
+                fail("Could not remove project data volumes", "VOLUME_CLEANUP_FAILED")
     respond({"done": True})
 
 
@@ -1719,6 +1754,7 @@ COMMANDS = {
     "stop_by_project": cmd_stop_by_project,
     "restart": cmd_restart,
     "remove": cmd_remove,
+    "remove-container": cmd_remove,
     "status": cmd_status,
     "logs": cmd_logs,
     "logs_follow": cmd_logs_follow,

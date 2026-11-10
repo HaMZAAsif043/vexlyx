@@ -56,7 +56,7 @@ export async function deployRoutes(app: FastifyInstance) {
       try {
         const { id, action } = request.params as {
           id: string;
-          action: "start" | "stop" | "restart" | "remove";
+          action: "start" | "stop" | "restart" | "remove" | "remove-container";
         };
         ContainerActionBodySchema.parse({ action });
         const result = await service.containerAction(request.userId!, id, action);

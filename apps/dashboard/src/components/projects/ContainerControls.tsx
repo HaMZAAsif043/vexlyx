@@ -78,7 +78,7 @@ export function ContainerControls({ project, onProjectUpdate }: ContainerControl
   const isExited = containerStatus === "exited" || containerStatus === "stopped";
   const hasContainer = Boolean(project.containerId) || isRunning || isExited;
 
-  const handleAction = async (action: "start" | "stop" | "restart" | "remove") => {
+  const handleAction = async (action: "start" | "stop" | "restart" | "remove" | "remove-container") => {
     try {
       await executeAction(action);
       toast.success(`Container ${action} succeeded`);
@@ -88,7 +88,7 @@ export function ContainerControls({ project, onProjectUpdate }: ContainerControl
       const msg = err instanceof Error ? err.message : "Action failed";
       toast.error(`Failed to ${action} container: ${msg}`);
     } finally {
-      if (action === "remove") setRemoveDialogOpen(false);
+      if (action === "remove" || action === "remove-container") setRemoveDialogOpen(false);
     }
   };
 
@@ -324,7 +324,7 @@ export function ContainerControls({ project, onProjectUpdate }: ContainerControl
           <DialogHeader>
             <DialogTitle>Remove container for &ldquo;{project.name}&rdquo;?</DialogTitle>
             <DialogDescription>
-              This will stop the running container and remove associated volumes. Your source code
+              Removing data permanently deletes volumes in the current deployment. Keeping data preserves declared named volumes; image-declared anonymous volumes need a backup before removal. Your source code
               and deployment history will remain intact.
             </DialogDescription>
           </DialogHeader>
@@ -336,13 +336,14 @@ export function ContainerControls({ project, onProjectUpdate }: ContainerControl
             >
               Cancel
             </Button>
+            {project.type === "DOCKER" && (project.volumePaths?.length ?? 0) > 0 && <Button disabled={isExecuting} onClick={() => void handleAction("remove-container")}>Remove container, keep named data</Button>}
             <Button
               variant="destructive"
               onClick={() => void handleAction("remove")}
               disabled={isExecuting}
             >
               {isExecuting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Remove Container
+              Remove container and data
             </Button>
           </DialogFooter>
         </DialogContent>

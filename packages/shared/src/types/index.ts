@@ -69,6 +69,7 @@ export type Project = {
   status: ProjectStatus;
   gitUrl: string | null;
   branch: string;
+  volumePaths?: string[];
   installCmd: string | null;
   buildCmd: string | null;
   startCmd: string | null;

@@ -50,11 +50,18 @@ const gitUrlSchema = z.string().regex(
   "Must be a GitHub, GitLab, or Bitbucket repository URL (HTTPS or git@host:path format)",
 );
 
+export const VolumePathsSchema = z.array(z.string().max(255).regex(
+  /^\/(?:[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)(?:\/[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)*$/,
+  "Use an absolute container directory without spaces, traversal or mount options",
+)).max(20).refine(paths => new Set(paths).size === paths.length, "Volume paths must be unique")
+  .refine(paths => !paths.some((path, index) => paths.some((other, otherIndex) => index !== otherIndex && path.startsWith(`${other}/`))), "Volume paths must not overlap");
+
 export const CreateProjectSchema = z.object({
   name: projectNameSchema,
   type: ProjectTypeSchema,
   gitUrl: gitUrlSchema.optional().or(z.literal("")),
   branch: z.string().min(1).max(255).default("main"),
+  volumePaths: VolumePathsSchema.optional(),
   installCmd: z.string().max(500).optional(),
   buildCmd: z.string().max(500).optional(),
   startCmd: z.string().max(500).optional(),
@@ -73,6 +80,7 @@ export const UpdateProjectSchema = z.object({
   branch: z.string().min(1).max(255).optional(),
   // An explicit null clears a stored override and returns the field to
   // auto-detection, which `undefined` (leave untouched) cannot express.
+  volumePaths: VolumePathsSchema.optional(),
   installCmd: z.string().max(500).nullish(),
   buildCmd: z.string().max(500).nullish(),
   startCmd: z.string().max(500).nullish(),

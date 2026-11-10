@@ -120,6 +120,9 @@ jobs:
       # added here: 66 tests, no docker daemon, no network, no live panel.
       - run: python3 -m unittest discover -s tests -p test_backup_database_restore.py
       - run: python3 -m unittest discover -s tests -p test_build_install_command.py
+      - run: python3 -m unittest discover -s tests -p test_project_volumes.py
+        env:
+          VEXLYX_DOCKER_TESTS: "1"
       - run: python3 -m unittest discover -s tests -p test_compose_healthcheck_target.py
       - run: python3 -m unittest discover -s tests -p test_container_health_status.py
       - run: python3 -m unittest discover -s tests -p test_github_app_git_credentials.py

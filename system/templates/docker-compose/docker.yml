@@ -8,6 +8,7 @@ services:
   app:
     image: "{{image_name}}"
     restart: unless-stopped
+{{volume_mounts}}
     environment:
       PORT: "{{container_port}}"
       HOST: "0.0.0.0"
@@ -27,6 +28,7 @@ services:
       - "traefik.http.routers.{{service_name}}-secure.tls.certresolver=letsencrypt"
       - "traefik.http.services.{{service_name}}.loadbalancer.server.port={{container_port}}"
 
+{{volume_definitions}}
 networks:
   default:
     external: true

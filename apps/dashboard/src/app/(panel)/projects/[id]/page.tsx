@@ -35,6 +35,7 @@ import { useTimezone } from "@/hooks/useSystemSettings";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { GitSettings } from "@/components/projects/GitSettings";
 import { BuildPanel } from "@/components/projects/BuildPanel";
+import { VolumeSettingsPanel } from "@/components/projects/VolumeSettingsPanel";
 import { BuildSettingsPanel } from "@/components/projects/BuildSettingsPanel";
 import { ContainerControls } from "@/components/projects/ContainerControls";
 import { EnvVarEditor } from "@/components/projects/EnvVarEditor";
@@ -383,6 +384,8 @@ export default function ProjectDetailPage() {
             onProjectUpdate={fetchProject}
             onDeployTrigger={() => setDeployTriggerCount((c) => c + 1)}
           />
+
+          <VolumeSettingsPanel key={`volumes-${project.id}`} project={project} onProjectUpdate={fetchProject} />
 
           {/* Build & deployment panel */}
           <BuildPanel

@@ -243,3 +243,12 @@ pnpm typecheck
 pnpm lint
 pnpm build
 ```
+
+
+### Named persistent volumes
+
+Docker projects expose **Persistent Docker data** in project settings. Enter absolute container directories, one per line. These create project-private named volumes whose names remain stable when paths are reordered or the container is rebuilt. New image contents do not overwrite stored data; use an application entrypoint to refresh baked-in files while preserving uploads.
+
+Adding a named mount over an existing anonymous mount creates a separate volume and does not migrate uploads. Back up and migrate data before changing paths. Removing a path detaches its data without deleting it. **Remove container, keep named data** preserves named volumes for the next deploy. Image-declared anonymous volumes require a backup before container removal. **Remove container and data** deletes current volumes and retained named volumes labelled for this project, including paths removed from settings. Deleting a project also removes its data. There is no global volume prune.
+
+The API accepts `volumePaths: ["/var/lib/app"]` on Docker project create/update. The default empty list preserves existing image-declared volume behaviour. Existing volumes are never automatically refreshed or migrated.

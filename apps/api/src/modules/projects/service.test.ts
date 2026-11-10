@@ -273,3 +273,12 @@ describe("project build overrides (F5.34)", () => {
     );
   });
 });
+
+describe("project volume validation", () => {
+  it.each([["/"], ["/a/../data"], ["/data:ro"], ["/data", "/data/uploads"]])("rejects unsafe mount paths %j", (...volumePaths) => {
+    expect(UpdateProjectSchema.safeParse({ volumePaths }).success).toBe(false);
+  });
+  it("accepts isolated named-data paths", () => {
+    expect(UpdateProjectSchema.parse({ volumePaths: ["/data", "/uploads"] })).toEqual({ volumePaths: ["/data", "/uploads"] });
+  });
+});

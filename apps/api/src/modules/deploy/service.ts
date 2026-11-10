@@ -82,6 +82,7 @@ export function runDockerDeploy(
     imageName: string;
     projectType: string;
     baseDomain: string;
+    volumePaths?: string[];
     memoryLimit: string;
     portRangeStart: number;
     portRangeEnd: number;
@@ -214,7 +215,7 @@ export function runDockerDeploy(
 }
 
 export function runDockerAction(
-  action: "start" | "stop" | "restart" | "remove",
+  action: "start" | "stop" | "restart" | "remove" | "remove-container",
   projectDir: string,
   onLog?: (line: string) => Promise<void> | void,
 ): Promise<void> {
@@ -568,6 +569,7 @@ export class DeployService {
       imageName,
       projectType: project.type,
       baseDomain: env.BASE_DOMAIN,
+      volumePaths: project.volumePaths,
       memoryLimit: env.DEPLOY_MEMORY_LIMIT,
       portRangeStart: env.DEPLOY_PORT_RANGE_START,
       portRangeEnd: env.DEPLOY_PORT_RANGE_END,
@@ -602,7 +604,7 @@ export class DeployService {
   async containerAction(
     userId: string,
     projectId: string,
-    action: "start" | "stop" | "restart" | "remove",
+    action: "start" | "stop" | "restart" | "remove" | "remove-container",
   ): Promise<{ message: string; containerStatus: string }> {
     await this.findOwnedProject(userId, projectId);
     const projectDir = resolve(env.PROJECTS_DIR, projectId);
@@ -630,13 +632,14 @@ export class DeployService {
         nextContainerStatus = "exited";
         nextProjectStatus = "STOPPED";
         break;
+      case "remove-container":
       case "remove":
         nextContainerStatus = "removed";
         nextProjectStatus = "STOPPED";
         break;
     }
 
-    if (action === "remove") {
+    if (action === "remove" || action === "remove-container") {
       await this.prisma.project.update({
         where: { id: projectId },
         data: {
@@ -717,6 +720,7 @@ export class DeployService {
         userId: true,
         port: true,
         gitUrl: true,
+        volumePaths: true,
         buildCmd: true,
         deletedAt: true,
       },

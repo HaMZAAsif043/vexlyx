@@ -28,6 +28,7 @@ export type {
 export {
   ProjectTypeSchema,
   ProjectStatusSchema,
+  VolumePathsSchema,
   CreateProjectSchema,
   UpdateProjectSchema,
   ProjectListQuerySchema,

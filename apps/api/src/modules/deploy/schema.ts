@@ -19,7 +19,7 @@ export const DeployBodySchema = z.object({
 export type DeployBody = z.infer<typeof DeployBodySchema>;
 
 export const ContainerActionBodySchema = z.object({
-  action: z.enum(["start", "stop", "restart", "remove"]),
+  action: z.enum(["start", "stop", "restart", "remove", "remove-container"]),
 });
 
 export type ContainerActionBody = z.infer<typeof ContainerActionBodySchema>;

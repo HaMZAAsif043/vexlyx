@@ -18,7 +18,7 @@ export function useContainerAction(projectId: string) {
 
   const executeAction = useCallback(
     async (
-      action: "start" | "stop" | "restart" | "remove",
+      action: "start" | "stop" | "restart" | "remove" | "remove-container",
     ): Promise<{ message: string; containerStatus: string }> => {
       setIsExecuting(true);
       try {

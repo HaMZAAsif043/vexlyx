@@ -36,6 +36,7 @@ const PROJECT_SELECT = {
   status: true,
   gitUrl: true,
   branch: true,
+  volumePaths: true,
   installCmd: true,
   buildCmd: true,
   startCmd: true,
@@ -144,6 +145,7 @@ export class ProjectService {
   }
 
   async create(userId: string, data: CreateProjectInput) {
+    if (data.volumePaths?.length && data.type !== "DOCKER") throw new ProjectError("Named volumes require a Docker project", "VOLUMES_DOCKER_ONLY", 422);
     await assertUnderQuota(
       this.prisma,
       userId,
@@ -186,6 +188,7 @@ export class ProjectService {
           status: "ACTIVE",
           gitUrl: data.gitUrl || null,
           branch: data.branch,
+          volumePaths: data.volumePaths ?? [],
           installCmd: data.installCmd ?? null,
           buildCmd: data.buildCmd ?? null,
           startCmd: data.startCmd ?? null,
@@ -220,6 +223,7 @@ export class ProjectService {
   async update(userId: string, projectId: string, data: UpdateProjectInput) {
     // Verify ownership first
     const project = await this.getById(userId, projectId);
+    if (data.volumePaths?.length && project.type !== "DOCKER") throw new ProjectError("Named volumes require a Docker project", "VOLUMES_DOCKER_ONLY", 422);
 
     // If name is changing, check it won't collide with another project
     if (data.name) {
@@ -257,6 +261,7 @@ export class ProjectService {
           githubDisconnectReason: null,
         }),
         ...(data.branch !== undefined && { branch: data.branch }),
+        ...(data.volumePaths !== undefined && { volumePaths: data.volumePaths }),
         ...(data.installCmd !== undefined && { installCmd: data.installCmd }),
         ...(data.buildCmd !== undefined && { buildCmd: data.buildCmd }),
         ...(data.startCmd !== undefined && { startCmd: data.startCmd }),

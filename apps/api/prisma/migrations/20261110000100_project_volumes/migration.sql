@@ -1,0 +1,1 @@
+ALTER TABLE "projects" ADD COLUMN "volume_paths" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
