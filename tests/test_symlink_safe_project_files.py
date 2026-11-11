@@ -250,5 +250,24 @@ class GeneratedDeployFileTest(unittest.TestCase):
         self.assertEqual(conf.stat().st_ino, before)
 
 
+@unittest.skipUnless(sys.platform.startswith("linux"), "requires Linux descriptor cwd")
+class RealDirectoryExchangeTests(unittest.TestCase):
+    def test_generation_and_execution_share_one_directory_descriptor(self):
+        with tempfile.TemporaryDirectory() as root:
+            deploy = Path(root) / "deploy"
+            deploy.mkdir()
+            with docker_manager.pinned_deploy_directory(deploy):
+                docker_manager.write_generated_file(deploy / "docker-compose.yml", "trusted")
+                deploy.rename(Path(root) / "old-deploy")
+                deploy.mkdir()
+                (deploy / "docker-compose.yml").write_text("attacker")
+                docker_manager.write_generated_file(deploy / "nginx.conf", "trusted-conf")
+                proc = docker_manager.spawn_with_safe_cwd([sys.executable, "-c", "from pathlib import Path; print(Path('docker-compose.yml').read_text())"], cwd=str(deploy), stdout=subprocess.PIPE, text=True)
+                out, _ = proc.communicate(timeout=10)
+                self.assertEqual(out.strip(), "trusted")
+                self.assertEqual((Path(root) / "old-deploy" / "nginx.conf").read_text(), "trusted-conf")
+                self.assertFalse((deploy / "nginx.conf").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

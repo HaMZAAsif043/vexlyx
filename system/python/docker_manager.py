@@ -30,6 +30,8 @@ Never run this script as root.
 Requires Docker CLI (docker compose v2) to be installed and available in PATH.
 """
 
+from contextlib import contextmanager
+
 import hashlib
 import json
 import os
@@ -154,6 +156,26 @@ def assert_hostname_is_rule_safe(hostname: str) -> None:
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
 
+_PINNED_DEPLOY_DIRS: dict[str, int] = {}
+
+
+@contextmanager
+def pinned_deploy_directory(directory: Path):
+    directory.mkdir(parents=True, exist_ok=True)
+    assert_deploy_dir_is_not_a_symlink(directory)
+    if not sys.platform.startswith("linux"):
+        yield
+        return
+    key = os.path.abspath(directory)
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | _O_NOFOLLOW)
+    _PINNED_DEPLOY_DIRS[key] = fd
+    try:
+        yield
+    finally:
+        _PINNED_DEPLOY_DIRS.pop(key, None)
+        os.close(fd)
+
+
 def write_generated_file(dest: Path, content: str) -> None:
     """Write a generated deploy/ file as root without following a link at its
     own name (#193): the deploy directory check above does not cover `Dockerfile`
@@ -169,7 +191,8 @@ def write_generated_file(dest: Path, content: str) -> None:
     parent_fd = None
     try:
         if os.name == "posix":
-            parent_fd = os.open(dest.parent, os.O_RDONLY | os.O_DIRECTORY | _O_NOFOLLOW)
+            pinned = _PINNED_DEPLOY_DIRS.get(os.path.abspath(dest.parent))
+            parent_fd = os.dup(pinned) if pinned is not None else os.open(dest.parent, os.O_RDONLY | os.O_DIRECTORY | _O_NOFOLLOW)
             fd = os.open(dest.name, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | _O_NOFOLLOW,
                          0o644, dir_fd=parent_fd)
         else:
@@ -200,7 +223,8 @@ def spawn_with_safe_cwd(*args, **kwargs):
         if cwd is not None and Path(cwd).name == "deploy":
             if sys.platform.startswith("linux"):
                 try:
-                    directory_fd = os.open(cwd, os.O_RDONLY | os.O_DIRECTORY | _O_NOFOLLOW)
+                    pinned = _PINNED_DEPLOY_DIRS.get(os.path.abspath(cwd))
+                    directory_fd = os.dup(pinned) if pinned is not None else os.open(cwd, os.O_RDONLY | os.O_DIRECTORY | _O_NOFOLLOW)
                 except OSError as exc:
                     fail(f"Cannot open Compose directory safely: {exc}", "UNSAFE_DEPLOY_DIR")
                 kwargs["cwd"] = f"/proc/self/fd/{directory_fd}"
@@ -849,6 +873,12 @@ def routable_check_log(
 
 
 def cmd_deploy(payload: dict) -> None:
+    directory = Path(require_field(payload, "projectDir")) / "deploy"
+    with pinned_deploy_directory(directory):
+        _cmd_deploy(payload)
+
+
+def _cmd_deploy(payload: dict) -> None:
     """
     Generate a docker-compose.yml for the project and start the container.
 
