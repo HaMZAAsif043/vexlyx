@@ -29,18 +29,25 @@ interface CachedToken {
 }
 
 const installationTokens = new Map<string, CachedToken>();
+let installationTokenGeneration = 0;
 
 export async function getGitHubInstallationToken(
   prisma: PrismaClient,
   installationId: bigint,
   client = new GitHubClient(),
 ): Promise<string> {
-  const key = installationId.toString();
-  const cached = installationTokens.get(key);
-  if (cached && cached.expiresAt > Date.now() + 300_000) return cached.token;
   const app = await prisma.gitHubApp.findUnique({ where: { id: APP_ID } });
   if (!app) throw new GitHubError("GitHub App is not configured", "GITHUB_APP_NOT_CONFIGURED", 409);
+  const identity = `${app.appId}:${app.encryptedPrivateKey}`;
+  const key = `${identity}:${installationId}`;
+  const generation = installationTokenGeneration;
+  const cached = installationTokens.get(key);
+  if (cached && cached.expiresAt > Date.now() + 300_000) return cached.token;
   const result = await client.createInstallationToken(app.appId, decrypt(app.encryptedPrivateKey), installationId);
+  const current = await prisma.gitHubApp.findUnique({ where: { id: APP_ID } });
+  if (generation !== installationTokenGeneration || !current || `${current.appId}:${current.encryptedPrivateKey}` !== identity) {
+    throw new GitHubError("GitHub App changed while authenticating; reconnect the installation", "GITHUB_APP_CHANGED", 409);
+  }
   installationTokens.set(key, { token: result.token, expiresAt: new Date(result.expires_at).getTime() });
   return result.token;
 }
@@ -178,7 +185,8 @@ export class GitHubService {
         data: { githubConnectionStatus: "DISCONNECTED", githubDisconnectReason: "Installation disconnected from Vexlyx" },
       }),
     ]);
-    installationTokens.delete(installation.installationId.toString());
+    installationTokenGeneration += 1;
+    for (const key of installationTokens.keys()) if (key.endsWith(`:${installation.installationId}`)) installationTokens.delete(key);
     await this.auditLog.log(userId, "github.installation_unlinked", { type: "GitHubInstallation", id }, { after: { accountLogin: installation.accountLogin } });
   }
 
@@ -245,6 +253,7 @@ export class GitHubService {
     try {
       return await getGitHubInstallationToken(this.prisma, installationId, this.client);
     } catch (error) {
+      if (error instanceof GitHubApiError && error.code !== "GITHUB_API_ERROR") throw new GitHubError(error.message, error.code, error.statusCode);
       if (error instanceof GitHubApiError) throw new GitHubError("Unable to authenticate the GitHub installation", "GITHUB_INSTALLATION_AUTH_FAILED", error.statusCode);
       throw error;
     }
@@ -289,6 +298,7 @@ export class GitHubService {
       }
       return saved;
     });
+    installationTokenGeneration += 1;
     installationTokens.clear();
     await this.auditLog.log(userId, existing ? "github.app_replaced" : "github.app_created", { type: "GitHubApp", id: APP_ID }, { after: { appId: app.appId.toString(), slug: app.slug } });
     return this.getAppStatus();

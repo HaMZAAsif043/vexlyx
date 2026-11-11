@@ -11,6 +11,7 @@ vi.mock("../../utils/encryption.js", () => ({
   encrypt: (value: string) => value,
 }));
 
+import { GitHubApiError } from "./client.js";
 import { GitHubService } from "./service.js";
 
 describe("GitHubService.createManifest", () => {
@@ -84,4 +85,11 @@ describe("GitHubService.configureApp", () => {
     expect(transaction.gitHubInstallation.updateMany).not.toHaveBeenCalled();
     expect(transaction.project.updateMany).not.toHaveBeenCalled();
   });
+});
+
+it("preserves timeout errors during installation token minting", async () => {
+  const prisma = { gitHubApp: { findUnique: vi.fn(async () => ({ appId: 1n, encryptedPrivateKey: "unused" })) } };
+  const client = { createInstallationToken: vi.fn().mockRejectedValue(new GitHubApiError("Timed out", 504, "GITHUB_API_TIMEOUT")) };
+  const service = new GitHubService(prisma as never, {} as never, {} as never, client as never);
+  await expect(service.getInstallationToken(987654n)).rejects.toMatchObject({ code: "GITHUB_API_TIMEOUT", statusCode: 504 });
 });
