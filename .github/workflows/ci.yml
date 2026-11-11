@@ -18,6 +18,20 @@ env:
   DATABASE_URL: postgresql://vexlyx:placeholder@localhost:5432/vexlyx_dev
 
 jobs:
+  mail-autoconfig-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @vexlyx/api db:generate
+      - run: pnpm --filter @vexlyx/shared build
+      - run: bash tests/mail-autoconfig/run.sh
   mail-state:
     runs-on: ubuntu-latest
     timeout-minutes: 15
