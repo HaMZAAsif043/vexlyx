@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import { resolve } from "node:path";
 import type { PrismaClient } from "@prisma/client";
@@ -70,16 +69,14 @@ export class ProjectService {
   // container pair with zero trace in the database (found live: two no-build
   // PHP projects both claiming the "app"/"web" Compose aliases on the shared
   // traefik-net, see docs/dev/no-build-php-hosting.md). Docker failures are
-  // logged but don't block the delete -- a project stuck on a broken
-  // container shouldn't become permanently undeletable.
+  // reported before detaching the record, so cleanup can be retried.
   private async teardownWorkspace(projectId: string): Promise<void> {
     const projectDir = resolve(env.PROJECTS_DIR, projectId);
-    if (!existsSync(projectDir)) return;
-
     try {
       await runDockerAction("remove", projectDir);
     } catch (err) {
       this.logger.error({ projectId, err }, "Failed to remove project containers during delete");
+      throw new ProjectError("Project data cleanup failed; retry deleting this project", "PROJECT_CLEANUP_FAILED", 503);
     }
 
     await fs.rm(projectDir, { recursive: true, force: true });
@@ -121,13 +118,13 @@ export class ProjectService {
     };
   }
 
-  async getById(userId: string, projectId: string) {
+  async getById(userId: string, projectId: string, includeDeleted = false) {
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
       select: { ...PROJECT_SELECT, deletedAt: true },
     });
 
-    if (!project || project.deletedAt !== null) {
+    if (!project || (!includeDeleted && project.deletedAt !== null)) {
       throw new ProjectError("Project not found", "PROJECT_NOT_FOUND", 404);
     }
 
@@ -314,7 +311,10 @@ export class ProjectService {
 
   async softDelete(userId: string, projectId: string) {
     // Verify ownership
-    const project = await this.getById(userId, projectId);
+    const project = await this.getById(userId, projectId, true);
+
+    await this.disableScheduledTasks(projectId);
+    await this.teardownWorkspace(projectId);
 
     await this.prisma.project.update({
       where: { id: projectId },
@@ -327,9 +327,6 @@ export class ProjectService {
     // F5.28: stop this project's scheduled tasks before the workspace is torn
     // down, so no task keeps firing (and emailing its owner) against a removed
     // container.
-    await this.disableScheduledTasks(projectId);
-
-    await this.teardownWorkspace(projectId);
 
     await this.auditLog.log(userId, "project.deleted", { type: "Project", id: projectId }, {
       before: { name: project.name, type: project.type },
