@@ -31,20 +31,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from mail_state import (MailStateError, state_root, state_lock, active_directory, read_lines, stage, publish, postfix_files, reconcile, run_service)
 
-# Add possible site-packages
-if sys.platform == "win32":
-    known_site_packages = [
-        Path.cwd() / "apps" / "api" / "Python" / "pythoncore-3.14-64" / "Lib" / "site-packages",
-        Path.cwd() / "Python" / "pythoncore-3.14-64" / "Lib" / "site-packages",
-        Path.cwd().parent / "apps" / "api" / "Python" / "pythoncore-3.14-64" / "Lib" / "site-packages",
-        Path.cwd().parent.parent / "apps" / "api" / "Python" / "pythoncore-3.14-64" / "Lib" / "site-packages",
-        Path(os.path.expandvars(r"%LOCALAPPDATA%\Python\pythoncore-3.14-64\Lib\site-packages")),
-        Path(os.path.expandvars(r"%USERPROFILE%\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages")),
-        Path(os.path.expandvars(r"%APPDATA%\Python\Python314\site-packages")),
-    ]
-    for sp in known_site_packages:
-        if sp.exists() and str(sp) not in sys.path:
-            sys.path.insert(0, str(sp))
+# Use the selected interpreter's own site-packages; do not import another runtime's packages.
 
 try:
     from cryptography.hazmat.backends import default_backend

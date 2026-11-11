@@ -1,7 +1,8 @@
+import { resolvePythonScript } from "../../utils/pythonScript.js";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
+
 import type { PrismaClient } from "@prisma/client";
 import { env } from "../../config/env.js";
 import { EnvService, EnvError } from "../env/service.js";
@@ -29,19 +30,7 @@ export class DeployError extends Error {
 // ---------------------------------------------------------------------------
 
 function getDockerManagerScriptPath(): string {
-  const currentDir = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    resolve(currentDir, "../../../../../system/python/docker_manager.py"),
-    resolve(currentDir, "../../../../system/python/docker_manager.py"),
-    resolve(process.cwd(), "../../system/python/docker_manager.py"),
-    resolve(process.cwd(), "system/python/docker_manager.py"),
-  ];
-
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
-  }
-
-  return candidates[0] ?? resolve(process.cwd(), "system/python/docker_manager.py");
+  return resolvePythonScript("docker_manager.py", import.meta.url);
 }
 
 // ---------------------------------------------------------------------------

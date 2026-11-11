@@ -1,11 +1,12 @@
+import { resolvePythonScript } from "../../utils/pythonScript.js";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, createReadStream } from "node:fs";
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
-import { resolve, dirname, join, basename } from "node:path";
+import { resolve, join, basename } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createWriteStream } from "node:fs";
-import { fileURLToPath } from "node:url";
+
 import type { PrismaClient } from "@prisma/client";
 import { env } from "../../config/env.js";
 import { EnvService } from "../env/service.js";
@@ -35,19 +36,7 @@ export class WordPressError extends Error {
 // ---------------------------------------------------------------------------
 
 function getBuildManagerScriptPath(): string {
-  const currentDir = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    resolve(currentDir, "../../../../../system/python/build_manager.py"),
-    resolve(currentDir, "../../../../system/python/build_manager.py"),
-    resolve(process.cwd(), "../../system/python/build_manager.py"),
-    resolve(process.cwd(), "system/python/build_manager.py"),
-  ];
-
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
-  }
-
-  return candidates[0] ?? resolve(process.cwd(), "system/python/build_manager.py");
+  return resolvePythonScript("build_manager.py", import.meta.url);
 }
 
 function runPythonCommand<T>(payload: Record<string, unknown>): Promise<T> {

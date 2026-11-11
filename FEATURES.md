@@ -1109,7 +1109,7 @@ Full DNS zone management for domains hosted on Vexlyx nameservers.
 - `packages/shared/src/schemas/dns.ts`
 - `docker/coredns/Corefile`
 - `docker/coredns/zones/.gitkeep`
-- `system/python/dns_manager.py`
+- DNS zone generation: `packages/shared/src/schemas/dns.ts` and `apps/api/src/modules/domains/dns-service.ts`
 - `apps/api/src/modules/domains/dns-service.ts`
 - `apps/dashboard/src/hooks/useDnsRecords.ts`
 - `apps/dashboard/src/app/(panel)/domains/[id]/dns/page.tsx`

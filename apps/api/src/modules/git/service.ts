@@ -1,8 +1,9 @@
+import { resolvePythonScript } from "../../utils/pythonScript.js";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+
+import { resolve } from "node:path";
+
 import type { PrismaClient } from "@prisma/client";
 import type { GitMetadata } from "@vexlyx/shared";
 import { env } from "../../config/env.js";
@@ -48,29 +49,7 @@ interface GitManagerResult {
 }
 
 function getGitManagerScriptPath(): string {
-  const currentDir = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    // 5 levels up from apps/api/src/modules/git/ (service.ts -> git -> modules -> src -> api -> apps -> Vexlyx)
-    resolve(currentDir, "../../../../../system/python/git_manager.py"),
-    // 4 levels up if compiled directly under apps/api/dist/modules/git/
-    resolve(currentDir, "../../../../system/python/git_manager.py"),
-    // Relative to apps/api (when CWD is apps/api)
-    resolve(process.cwd(), "../../system/python/git_manager.py"),
-    // Relative to monorepo root (when CWD is root)
-    resolve(process.cwd(), "system/python/git_manager.py"),
-  ];
-
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  const fallback = candidates[0];
-  if (fallback) {
-    return fallback;
-  }
-  return resolve(process.cwd(), "system/python/git_manager.py");
+  return resolvePythonScript("git_manager.py", import.meta.url);
 }
 
 export function runGitManager(payload: GitManagerPayload): Promise<GitManagerResult> {

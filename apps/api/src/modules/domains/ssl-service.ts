@@ -1,7 +1,6 @@
+import { resolvePythonScript } from "../../utils/pythonScript.js";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+
 import type { FastifyBaseLogger } from "fastify";
 import type { PrismaClient } from "@prisma/client";
 import type {
@@ -22,21 +21,7 @@ import { PYTHON_SCRIPT_TIMEOUT_MS, watchChildTimeout } from "../../utils/process
 // ---------------------------------------------------------------------------
 
 function getSslManagerScriptPath(): string {
-  const currentDir = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    resolve(currentDir, "../../../../../system/python/ssl_manager.py"),
-    resolve(currentDir, "../../../../system/python/ssl_manager.py"),
-    resolve(process.cwd(), "../../system/python/ssl_manager.py"),
-    resolve(process.cwd(), "system/python/ssl_manager.py"),
-  ];
-
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  return candidates[0] ?? resolve(process.cwd(), "system/python/ssl_manager.py");
+  return resolvePythonScript("ssl_manager.py", import.meta.url);
 }
 
 // ---------------------------------------------------------------------------
@@ -88,44 +73,12 @@ interface SslManagerResult {
   };
 }
 
-function getPythonExe(): string {
-  if (process.env.PYTHON_PATH && existsSync(process.env.PYTHON_PATH)) {
-    return process.env.PYTHON_PATH;
-  }
-  if (process.platform === "win32") {
-    const candidates = [
-      resolve(process.cwd(), "Python/pythoncore-3.14-64/python.exe"),
-      resolve(process.cwd(), "apps/api/Python/pythoncore-3.14-64/python.exe"),
-      resolve(process.cwd(), "../../apps/api/Python/pythoncore-3.14-64/python.exe"),
-      resolve(process.env.LOCALAPPDATA || "", "Python/pythoncore-3.14-64/python.exe"),
-      resolve(process.env.USERPROFILE || "", "AppData/Local/Python/pythoncore-3.14-64/python.exe"),
-    ];
-    for (const c of candidates) {
-      if (c && existsSync(c)) {
-        return c;
-      }
-    }
-  }
-  return getPythonBin();
-}
-
 async function runSslManager(
   command: SslManagerPayload["command"],
   payload: Record<string, unknown>,
 ): Promise<SslManagerResult> {
   const scriptPath = getSslManagerScriptPath();
-  const pythonExe = getPythonExe();
-
-  const sitePackagesPaths = [
-    resolve(process.cwd(), "Python/pythoncore-3.14-64/Lib/site-packages"),
-    resolve(process.cwd(), "apps/api/Python/pythoncore-3.14-64/Lib/site-packages"),
-    resolve(process.env.LOCALAPPDATA || "", "Python/pythoncore-3.14-64/Lib/site-packages"),
-  ].filter((p) => existsSync(p));
-
-  const separator = process.platform === "win32" ? ";" : ":";
-  const pythonPath = sitePackagesPaths.length > 0
-    ? `${sitePackagesPaths.join(separator)}${process.env.PYTHONPATH ? separator + process.env.PYTHONPATH : ""}`
-    : process.env.PYTHONPATH;
+  const pythonExe = getPythonBin();
 
   return new Promise((res, rej) => {
     // The payload carries the uploaded private key for `save_custom`, so it
@@ -140,7 +93,6 @@ async function runSslManager(
       env: {
         ...process.env,
         PYTHONIOENCODING: "utf-8",
-        ...(pythonPath ? { PYTHONPATH: pythonPath } : {}),
       },
     });
     watchChildTimeout(child, PYTHON_SCRIPT_TIMEOUT_MS.ssl, (ms) =>

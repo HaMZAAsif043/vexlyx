@@ -1,10 +1,11 @@
+import { resolvePythonScript } from "../../utils/pythonScript.js";
 import fs from "node:fs/promises";
-import { createReadStream, createWriteStream, existsSync } from "node:fs";
+import { createReadStream, createWriteStream } from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { pipeline } from "node:stream/promises";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+
 import type { FastifyBaseLogger } from "fastify";
 import type { PrismaClient } from "@prisma/client";
 import { env } from "../../config/env.js";
@@ -95,18 +96,7 @@ const ARCHIVE_ERROR_STATUS: Record<string, number> = {
 };
 
 function getArchiveScriptPath(): string {
-  const currentDir = path.dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    path.resolve(currentDir, "../../../../../system/python/archive_manager.py"),
-    path.resolve(currentDir, "../../../../system/python/archive_manager.py"),
-    path.resolve(process.cwd(), "../../system/python/archive_manager.py"),
-    path.resolve(process.cwd(), "system/python/archive_manager.py"),
-  ];
-  return (
-    candidates.find((candidate) => existsSync(candidate)) ??
-    candidates[0] ??
-    path.resolve(process.cwd(), "system/python/archive_manager.py")
-  );
+  return resolvePythonScript("archive_manager.py", import.meta.url);
 }
 
 function archiveLimits() {

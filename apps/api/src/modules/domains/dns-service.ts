@@ -1,3 +1,4 @@
+import { configDir } from "../../utils/configDir.js";
 import fs from "node:fs";
 import path from "node:path";
 import dns from "node:dns/promises";
@@ -27,25 +28,7 @@ import { buildRequiredMailRecords } from "../mail/required-records.js";
 // ---------------------------------------------------------------------------
 
 function getCoreDnsZonesDir(): string {
-  const candidates = [
-    path.resolve(process.cwd(), "docker/coredns/zones"),
-    path.resolve(process.cwd(), "../../docker/coredns/zones"),
-    path.resolve(process.cwd(), "../docker/coredns/zones"),
-  ];
-
-  for (const c of candidates) {
-    if (fs.existsSync(c)) {
-      return c;
-    }
-  }
-
-  const fallback = path.resolve(process.cwd(), "../../docker/coredns/zones");
-  try {
-    fs.mkdirSync(fallback, { recursive: true });
-  } catch {
-    // Ignore directory creation error in read-only environments
-  }
-  return fallback;
+  return configDir("coredns/zones");
 }
 
 export function checkDnsZonesDirWritable():

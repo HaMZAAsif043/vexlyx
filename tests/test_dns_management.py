@@ -3,17 +3,13 @@ test_dns_management.py — Automated test suite for F3.3 DNS Record Management.
 
 Tests:
 1. DNS Record Validation Logic (A IPv4, AAAA IPv6, CNAME RFC 1912 apex prohibition, MX priority, TXT, NS, SRV priority/weight/port).
-2. RFC 1035 Zone File Generation & Format (SOA serial calculation, $ORIGIN, $TTL, standard RR lines).
-3. RFC 1035 Zone File Parsing (comment stripping, multiline SOA flattening, token parsing, name relative resolution).
-4. System-layer CoreDNS zone synchronization via system/python/dns_manager.py.
-5. Live API endpoint security (401 Unauthorized protection on all DNS endpoints).
-6. Live API CRUD operations (register test domain, add A/MX/TXT records, export zone, import zone, test defaults).
+2. Live API endpoint security (401 Unauthorized protection on all DNS endpoints).
+3. Live API CRUD operations (register test domain, add A/MX/TXT records, export zone, import zone, test defaults).
 """
 
 import json
 import os
 import re
-import subprocess
 import sys
 import unittest
 import urllib.request
@@ -88,76 +84,6 @@ class TestDnsRecordValidation(unittest.TestCase):
         invalid_names = ["", "name with space", "http://domain.com", "name/slash"]
         for name in invalid_names:
             self.assertFalse(bool(DNS_NAME_REGEX.match(name)), f"Should be invalid DNS name: {name}")
-
-
-# ---------------------------------------------------------------------------
-# Unit Tests: Zone Generation & Parsing
-# ---------------------------------------------------------------------------
-
-class TestZoneGenerationAndParsing(unittest.TestCase):
-    def test_zone_generation_format(self):
-        from system.python.dns_manager import format_zone_content
-
-        records = [
-            {"type": "A", "name": "@", "value": "192.0.2.1", "ttl": 3600},
-            {"type": "CNAME", "name": "www", "value": "@", "ttl": 3600},
-            {"type": "MX", "name": "@", "value": "mail.example.com", "ttl": 3600, "priority": 10},
-            {"type": "TXT", "name": "@", "value": "v=spf1 mx ~all", "ttl": 3600},
-            {"type": "SRV", "name": "_sip._tcp", "value": "sip.example.com", "ttl": 3600, "priority": 10, "weight": 50, "port": 5060},
-        ]
-
-        zone = format_zone_content("example.com", records)
-
-        self.assertIn("$ORIGIN example.com.", zone)
-        self.assertIn("$TTL 3600", zone)
-        self.assertIn("IN  SOA ns1.vexlyx.com.", zone)
-        self.assertIn("IN  A      192.0.2.1", zone)
-        self.assertIn("www                  3600     IN  CNAME  @", zone)
-        self.assertIn("IN  MX    10 mail.example.com", zone)
-        self.assertIn('IN  TXT   "v=spf1 mx ~all"', zone)
-        self.assertIn("IN  SRV   10 50 5060 sip.example.com", zone)
-
-    def test_dns_manager_cli_sync_and_delete(self):
-        root_dir = Path(__file__).resolve().parent.parent
-        script = root_dir / "system" / "python" / "dns_manager.py"
-        self.assertTrue(script.exists(), "dns_manager.py must exist")
-
-        payload = {
-            "hostname": "test-cli-zone.com",
-            "records": [
-                {"type": "A", "name": "@", "value": "192.0.2.100", "ttl": 3600},
-                {"type": "CNAME", "name": "www", "value": "@", "ttl": 3600},
-            ],
-            "options": {"ttl": 3600},
-        }
-
-        # Run sync_zone
-        proc = subprocess.run(
-            [sys.executable, str(script), "sync_zone", json.dumps(payload)],
-            capture_output=True,
-            text=True,
-            cwd=str(root_dir),
-        )
-        self.assertEqual(proc.returncode, 0, f"sync_zone failed: {proc.stderr}")
-        res = json.loads(proc.stdout)
-        self.assertTrue(res.get("success"))
-
-        zone_path = Path(res["path"])
-        self.assertTrue(zone_path.exists(), "Zone file must be created on disk")
-        content = zone_path.read_text(encoding="utf-8")
-        self.assertIn("192.0.2.100", content)
-
-        # Run delete_zone
-        del_proc = subprocess.run(
-            [sys.executable, str(script), "delete_zone", json.dumps({"hostname": "test-cli-zone.com"})],
-            capture_output=True,
-            text=True,
-            cwd=str(root_dir),
-        )
-        self.assertEqual(del_proc.returncode, 0)
-        del_res = json.loads(del_proc.stdout)
-        self.assertTrue(del_res.get("success"))
-        self.assertFalse(zone_path.exists(), "Zone file must be deleted")
 
 
 # ---------------------------------------------------------------------------

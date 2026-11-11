@@ -1,3 +1,4 @@
+import { configDir } from "../../utils/configDir.js";
 import crypto from "node:crypto";
 import dns from "node:dns/promises";
 import fs from "node:fs";
@@ -55,27 +56,7 @@ function slugify(name: string): string {
 }
 
 function getTraefikDynamicDir(): string {
-  const candidates = [
-    path.resolve(process.cwd(), "docker/traefik/dynamic"),
-    path.resolve(process.cwd(), "../../docker/traefik/dynamic"),
-    path.resolve(process.cwd(), "../docker/traefik/dynamic"),
-  ];
-
-  for (const c of candidates) {
-    if (fs.existsSync(c)) {
-      return c;
-    }
-  }
-
-  const fallback = path.resolve(process.cwd(), "../../docker/traefik/dynamic");
-  if (!fs.existsSync(fallback)) {
-    try {
-      fs.mkdirSync(fallback, { recursive: true });
-    } catch {
-      // Ignore directory creation error in read-only setups
-    }
-  }
-  return fallback;
+  return configDir("traefik/dynamic");
 }
 
 function getTraefikConfigFile(domainId: string): string {
@@ -844,15 +825,12 @@ http:
 
     // Clean up CoreDNS zone file on disk
     const cleanHost = domain.hostname.startsWith("*.") ? domain.hostname.slice(2) : domain.hostname;
-    for (const base of ["docker/coredns/zones", "../../docker/coredns/zones", "../docker/coredns/zones"]) {
-      const zonePath = path.resolve(process.cwd(), base, `${cleanHost}.db`);
-      if (fs.existsSync(zonePath)) {
-        try {
-          fs.unlinkSync(zonePath);
-        } catch {
-          // ignore
-        }
-      }
+    const zonePath = path.join(configDir("coredns/zones"), `${cleanHost}.db`);
+    try {
+      fs.unlinkSync(zonePath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT")
+        this.logger?.error({ err, domainId }, "Failed to remove CoreDNS zone");
     }
 
     // Delete domain (cascades to subdomains and dnsRecords in database)

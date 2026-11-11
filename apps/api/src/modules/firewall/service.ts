@@ -1,7 +1,6 @@
+import { resolvePythonScript } from "../../utils/pythonScript.js";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+
 import type { PrismaClient } from "@prisma/client";
 import type { FastifyBaseLogger } from "fastify";
 import type {
@@ -35,19 +34,7 @@ export class FirewallError extends Error {
 // ---------------------------------------------------------------------------
 
 function getFirewallScriptPath(): string {
-  const currentDir = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    resolve(currentDir, "../../../../../system/python/firewall_manager.py"),
-    resolve(currentDir, "../../../../system/python/firewall_manager.py"),
-    resolve(process.cwd(), "../../system/python/firewall_manager.py"),
-    resolve(process.cwd(), "system/python/firewall_manager.py"),
-  ];
-
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
-  }
-
-  return candidates[0] ?? resolve(process.cwd(), "system/python/firewall_manager.py");
+  return resolvePythonScript("firewall_manager.py", import.meta.url);
 }
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,6 @@
+import { resolvePythonScript } from "../../utils/pythonScript.js";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+
 import type { PrismaClient } from "@prisma/client";
 import type { FastifyBaseLogger } from "fastify";
 import type { ServerMetrics, ContainerMetric, MetricsRange } from "@vexlyx/shared";
@@ -29,21 +28,7 @@ export class MonitoringError extends Error {
 // ---------------------------------------------------------------------------
 
 function getSystemMonitorScriptPath(): string {
-  const currentDir = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    resolve(currentDir, "../../../../../system/python/system_monitor.py"),
-    resolve(currentDir, "../../../../system/python/system_monitor.py"),
-    resolve(process.cwd(), "../../system/python/system_monitor.py"),
-    resolve(process.cwd(), "system/python/system_monitor.py"),
-  ];
-
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
-  }
-
-  return (
-    candidates[0] ?? resolve(process.cwd(), "system/python/system_monitor.py")
-  );
+  return resolvePythonScript("system_monitor.py", import.meta.url);
 }
 
 // ---------------------------------------------------------------------------

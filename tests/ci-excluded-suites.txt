@@ -14,7 +14,7 @@
 
 test_custom_domains.py            # needs a live panel API; its probe catches URLError and prints SKIP, so it passes without asserting anything
 test_database_provisioning.py     # script-style (0 tests under discover); its live parts need docker inspect of vexlyx-postgres / vexlyx-mysql
-test_dns_management.py            # writes docker/coredns/zones into the checkout instead of a temp dir, and its live parts need the panel API
+test_dns_management.py            # live API authentication and CRUD probes require a running panel
 test_dockerfile_runtime.py        # script-style (0 tests under discover)
 test_dovecot_imap.py              # needs docker exec into vexlyx-dovecot; USERS_FILE (:36) still reads docker/dovecot/config/users, which get_users_file() replaced with active_directory("dovecot")
 test_file_manager_sftp.py         # sync_user_projects runs sudo mount --bind and sudo chown on POSIX, so it needs root and leaves a bind mount behind
