@@ -164,7 +164,7 @@ def test_php_framework_detection():
 
 
 def test_wordpress_one_click_scaffolder():
-    print("Testing WordPress 1-click scaffolder (wp-config.php, salts, permalinks, FS_METHOD direct)...")
+    print("Testing WordPress 1-click scaffolder (wp-content scaffold, no host-side wp-config.php)...")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmppath = Path(tmpdir)
@@ -185,32 +185,18 @@ def test_wordpress_one_click_scaffolder():
 
         assert code == 0, f"WordPress install failed: {stderr}"
         assert result.get("success") is True
-        assert result.get("hasWpConfig") is True
+        assert result.get("projectDir") is not None
+        assert result.get("wpContentDir") is not None
 
-        # Check wp-config.php
-        wp_config = (tmppath / "wp-config.php").read_text(encoding="utf-8")
-        assert "define('DB_NAME', 'wp_production_db');" in wp_config
-        assert "define('DB_USER', 'wp_admin_user');" in wp_config
-        assert "define('DB_PASSWORD', 'super_secret_db_pass_123');" in wp_config
-        assert "define('DB_HOST', 'mysql-host:3306');" in wp_config
-        assert "$table_prefix = 'vx_';" in wp_config
-        assert "define('FS_METHOD', 'direct');" in wp_config
-        assert "define('AUTH_KEY'" in wp_config
-        assert "define('SECURE_AUTH_KEY'" in wp_config
-        assert "define('NONCE_SALT'" in wp_config
-        assert "HTTP_X_FORWARDED_PROTO" in wp_config
-
-        # Check .htaccess for pretty permalinks
-        htaccess = (tmppath / ".htaccess").read_text(encoding="utf-8")
-        assert "RewriteEngine On" in htaccess
-        assert "RewriteRule . /index.php [L]" in htaccess
-
-        # Check directories
+        # Check directories are scaffolded
         assert (tmppath / "wp-content" / "plugins").is_dir()
         assert (tmppath / "wp-content" / "themes").is_dir()
         assert (tmppath / "wp-content" / "uploads").is_dir()
 
-        print("  [PASS] wp-config.php generated with secure salts, DB credentials, FS_METHOD=direct, and permalinks")
+        # wp-config.php is NOT generated on host - DB credentials flow via env vars at deploy time
+        assert not (tmppath / "wp-config.php").exists()
+
+        print("  [PASS] wp-content scaffolded with plugins, themes, uploads directories")
 
 
 def test_wordpress_plugin_theme_upload_and_status():
@@ -323,9 +309,9 @@ def test_php_and_wordpress_compose_templates():
 
         content = wp_template.read_text(encoding="utf-8")
         assert "traefik.enable=true" in content
-        assert "./wp-content:/app/wp-content" in content
+        assert "../wp-content:/var/www/html/wp-content" in content
         assert "{{memory_limit}}" in content
-        print("  [PASS] wordpress.yml template verified with persistent ./wp-content volume mount")
+        print("  [PASS] wordpress.yml template verified with persistent ../wp-content volume mount")
 
 
 def main():
