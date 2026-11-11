@@ -1,3 +1,5 @@
+import { MailError } from "./errors.js";
+import { senderBelongsToDomains } from "./sender-policy.js";
 import type { PrismaClient } from "@prisma/client";
 import type {
   SmtpStatusResponse,
@@ -40,6 +42,25 @@ export class MailDiagnosticsService {
     userId: string,
     input: SendTestEmailInput,
   ): Promise<TestEmailResultResponse> {
+    const senderDomain = input.from.split("@").pop()!.toLowerCase();
+    const ownedDomains = await this.prisma.domain.findMany({
+      where: { userId, status: "ACTIVE", parentId: null },
+      select: { hostname: true },
+    });
+
+    if (
+      !senderBelongsToDomains(
+        senderDomain,
+        ownedDomains.map((d) => d.hostname),
+      )
+    ) {
+      throw new MailError(
+        `Sender ${input.from} is not on a domain you own. Use an address on one of your mail domains.`,
+        "SENDER_NOT_OWNED",
+        403,
+      );
+    }
+
     const host = process.env.SMTP_HOST || "127.0.0.1";
     const payload = {
       ...input,

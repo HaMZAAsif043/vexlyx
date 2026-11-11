@@ -7,6 +7,7 @@ process.env.DATABASE_URL ??=
   "postgresql://user:pass@localhost:5432/vexlyx_test";
 process.env.SESSION_SECRET ??=
   "test-session-secret-at-least-32-characters-long";
+vi.mock("../../utils/quota.js", () => ({ assertUnderQuota: vi.fn(), notifyQuotaThreshold: vi.fn() }));
 const { DomainService } = await import("./service.js");
 
 function fixture(projectId: string | null = null, status = "ACTIVE") {
@@ -156,4 +157,11 @@ describe("DomainService.update", () => {
   ])("rejects invalid assignment input %j", (input) => {
     expect(UpdateDomainSchema.safeParse(input).success).toBe(false);
   });
+});
+
+it("rejects an unrelated hostname using an owned ACTIVE parent", async () => {
+  const prisma = { domain: { findUnique: vi.fn().mockResolvedValue(null), findFirst: vi.fn().mockResolvedValue({ id: "parent", hostname: "owned.example", status: "ACTIVE" }), create: vi.fn() } };
+  const service = new DomainService(prisma as never);
+  await expect(service.create("u1", { hostname: "unrelated.example", parentId: "parent" } as never)).rejects.toMatchObject({ code: "INVALID_PARENT_DOMAIN" });
+  expect(prisma.domain.create).not.toHaveBeenCalled();
 });

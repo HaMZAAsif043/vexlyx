@@ -8,6 +8,10 @@ All notable changes to Vexlyx are documented here. The format follows [Keep a Ch
 
 - Share Python script/interpreter and Docker config resolution across API modules, discover Windows Python installs without a pinned version, split mail operations by concern, and remove the unused Python DNS implementation (#59).
 
+### Fixed
+
+- Reject forged parent-domain relationships and authorize test-mail senders only through independently verified root domains (#194).
+
 ### Security
 
 - An uploaded custom SSL private key is passed to `ssl_manager.py` on stdin instead of its command line, so it is no longer readable through `ps` or `/proc/<pid>/cmdline` (#190).

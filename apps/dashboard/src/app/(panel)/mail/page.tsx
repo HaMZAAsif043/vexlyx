@@ -57,6 +57,7 @@ import { RegistrarRecordsTable } from "@/components/mail/RegistrarRecordsTable";
 import { useMail } from "@/hooks/useMail";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
+import { defaultTestMailSender } from "@/lib/test-mail-sender";
 import { refreshIconClassName } from "@/hooks/useRefreshAnimation";
 import type {
   SendTestEmailInput,
@@ -289,6 +290,9 @@ export default function MailPage() {
             size="sm"
             onClick={() => {
               setTestResult(null);
+              setTestForm((prev) => {
+                return { ...prev, from: defaultTestMailSender(prev.from, domains) };
+              });
               setIsTestEmailOpen(true);
             }}
             className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90"
@@ -949,6 +953,9 @@ export default function MailPage() {
                   value={testForm.from}
                   onChange={(e) => setTestForm({ ...testForm, from: e.target.value })}
                 />
+                <p className="text-xs text-muted-foreground">
+                  Must be an address on one of your domains.
+                </p>
               </div>
 
               <div className="space-y-1.5">

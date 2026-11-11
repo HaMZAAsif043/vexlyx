@@ -135,19 +135,30 @@ export const VirtualDomainSchema = z.object({
 export type VirtualDomain = z.infer<typeof VirtualDomainSchema>;
 
 /**
+ * Values that end up in the SMTP DATA header block must not carry line
+ * breaks: a CRLF in the subject appends arbitrary headers and SMTP commands.
+ */
+const noLineBreaks = (field: string) =>
+  z.string().refine((val) => !/[\r\n]/.test(val), {
+    message: `${field} cannot contain line breaks`,
+  });
+
+/**
  * Schema validating test email delivery requests.
  */
 export const SendTestEmailSchema = z.object({
   from: z.string().email("Invalid sender email address"),
   to: z.string().email("Invalid recipient email address"),
-  subject: z.string().min(1, "Subject is required").default("Vexlyx SMTP Diagnostics Test"),
+  subject: noLineBreaks("Subject")
+    .pipe(z.string().min(1, "Subject is required"))
+    .default("Vexlyx SMTP Diagnostics Test"),
   body: z
     .string()
     .min(1, "Body is required")
     .default("This is an automated test email sent via Vexlyx Postfix SMTP service to verify TLS and DKIM."),
   port: z.union([z.literal(25), z.literal(587)]).default(587),
   useTls: z.boolean().default(true),
-  username: z.string().optional(),
+  username: noLineBreaks("Username").optional(),
   password: z.string().optional(),
 });
 

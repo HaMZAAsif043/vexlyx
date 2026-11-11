@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { spawn } from "node:child_process";
 import type { AuditLogService } from "../audit-log/service.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { reconcileMailState, MailStateSyncError } from "./state-sync.js";
@@ -11,7 +12,10 @@ vi.mock("./state-sync.js", async (original) => ({
   ...(await original<typeof import("./state-sync.js")>()),
   reconcileMailState: vi.fn(),
 }));
-const { MailService, synchronizeMailState } = await import("./service.js");
+vi.mock("node:child_process", () => ({
+  spawn: vi.fn(() => { throw new Error("mail helper must not be invoked"); }),
+}));
+const { MailService, senderBelongsToDomains, synchronizeMailState } = await import("./service.js");
 const { MailboxService } = await import("../mailboxes/service.js");
 const domains = [
   {
@@ -165,4 +169,65 @@ describe("authoritative shared mail snapshot", () => {
       details: { rollbackFailed: ["postfix"] },
     });
   });
+});
+
+describe("test email sender ownership (#194)", () => {
+  it("accepts an address on an owned domain or its subdomains", () => {
+    expect(senderBelongsToDomains("one.example", ["one.example"])).toBe(true);
+    expect(senderBelongsToDomains("mail.one.example", ["one.example"])).toBe(true);
+    expect(senderBelongsToDomains("one.example", ["*.one.example"])).toBe(true);
+    expect(senderBelongsToDomains("deep.mail.one.example", ["one.example"])).toBe(true);
+  });
+
+  it("rejects look-alike and unrelated domains", () => {
+    expect(senderBelongsToDomains("notone.example", ["one.example"])).toBe(false);
+    expect(senderBelongsToDomains("one.example.evil.test", ["one.example"])).toBe(false);
+    expect(senderBelongsToDomains("two.example", ["one.example"])).toBe(false);
+    expect(senderBelongsToDomains("example.com", [])).toBe(false);
+  });
+
+  it("refuses to send when the sender is not on a domain the caller owns", async () => {
+    const prisma = {
+      domain: {
+        findMany: vi.fn(async () => [{ hostname: "one.example" }]),
+      },
+    } as unknown as PrismaClient;
+    await expect(
+      new MailService(prisma).sendTestEmail("u1", {
+        from: "ceo@bank.example",
+        to: "victim@example.net",
+        subject: "Test",
+        body: "Test",
+        port: 587,
+        useTls: true,
+      }),
+    ).rejects.toMatchObject({ code: "SENDER_NOT_OWNED", statusCode: 403 });
+    expect(prisma.domain.findMany).toHaveBeenCalledWith({
+      where: { userId: "u1", status: "ACTIVE", parentId: null },
+      select: { hostname: true },
+    });
+  });
+
+  it.each(["PENDING", "ERROR"])("rejects a %s sender domain before invoking the mail helper", async (status) => {
+    const findMany = vi.fn(async ({ where }: { where: { userId: string; status?: string } }) =>
+      where.userId === "u1" && (!where.status || where.status === status)
+        ? [{ hostname: "bank.example" }]
+        : [],
+    );
+    const prisma = { domain: { findMany } } as unknown as PrismaClient;
+    await expect(new MailService(prisma).sendTestEmail("u1", {
+      from: "ceo@bank.example", to: "victim@example.net", subject: "Test",
+      body: "Test", port: 587, useTls: true,
+    })).rejects.toMatchObject({ code: "SENDER_NOT_OWNED", statusCode: 403 });
+    expect(findMany).toHaveBeenCalledWith({
+      where: { userId: "u1", status: "ACTIVE", parentId: null }, select: { hostname: true },
+    });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+});
+
+it("does not trust historical forged inherited ACTIVE domains for test send", async () => {
+  const records = [{ hostname: "owned.example", parentId: null }, { hostname: "unrelated.example", parentId: "owned-parent" }];
+  const prisma = { domain: { findMany: vi.fn(async ({ where }) => records.filter(record => where.parentId === undefined || record.parentId === where.parentId)) } };
+  await expect(new MailService(prisma as never).sendTestEmail("u1", { from: "sender@unrelated.example", to: "receiver@example.net", subject: "test", body: "test", port: 587, useTls: true })).rejects.toMatchObject({ code: "SENDER_NOT_OWNED" });
 });

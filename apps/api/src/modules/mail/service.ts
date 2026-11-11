@@ -93,3 +93,5 @@ export class MailService {
     return this.auth.rotateDkim(...args);
   }
 }
+
+export { senderBelongsToDomains } from "./sender-policy.js";
