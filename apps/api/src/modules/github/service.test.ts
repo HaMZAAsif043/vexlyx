@@ -12,7 +12,7 @@ vi.mock("../../utils/encryption.js", () => ({
 }));
 
 import { GitHubApiError } from "./client.js";
-import { GitHubService } from "./service.js";
+import { GitHubService, getGitHubInstallationToken } from "./service.js";
 
 describe("GitHubService.createManifest", () => {
   it("uses GitHub's supported OAuth-on-install manifest key", async () => {
@@ -92,4 +92,19 @@ it("preserves timeout errors during installation token minting", async () => {
   const client = { createInstallationToken: vi.fn().mockRejectedValue(new GitHubApiError("Timed out", 504, "GITHUB_API_TIMEOUT")) };
   const service = new GitHubService(prisma as never, {} as never, {} as never, client as never);
   await expect(service.getInstallationToken(987654n)).rejects.toMatchObject({ code: "GITHUB_API_TIMEOUT", statusCode: 504 });
+});
+
+it.each([true, false])("discards an in-flight token after App identity or credentials change (replace=%s)", async replace => {
+  let app = { appId: 100n, encryptedPrivateKey: "old-key" };
+  const prisma = { gitHubApp: { findUnique: vi.fn(async () => app) } };
+  let finish!: (value: { token: string; expires_at: string }) => void;
+  const client = { createInstallationToken: vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })).mockResolvedValue({ token: "new-token", expires_at: "2099-01-01T00:00:00Z" }) };
+  const pending = getGitHubInstallationToken(prisma as never, replace ? 123100n : 123101n, client as never);
+  await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+  app = { appId: replace ? 101n : 100n, encryptedPrivateKey: "new-key" };
+  const rejected = expect(pending).rejects.toMatchObject({ code: "GITHUB_APP_CHANGED" });
+  finish({ token: "old-token", expires_at: "2099-01-01T00:00:00Z" });
+  await rejected;
+  await expect(getGitHubInstallationToken(prisma as never, replace ? 123100n : 123101n, client as never)).resolves.toBe("new-token");
+  expect(client.createInstallationToken).toHaveBeenCalledTimes(2);
 });
