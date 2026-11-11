@@ -147,6 +147,7 @@ export class ProjectService {
   }
 
   async create(userId: string, data: CreateProjectInput) {
+    if (data.type === "WORDPRESS" && data.baseDirectory) throw new ProjectError("WordPress requires the repository root; clear the base directory", "WORDPRESS_BASE_DIRECTORY_UNSUPPORTED", 422);
     await assertUnderQuota(
       this.prisma,
       userId,
@@ -226,6 +227,7 @@ export class ProjectService {
   async update(userId: string, projectId: string, data: UpdateProjectInput) {
     // Verify ownership first
     const project = await this.getById(userId, projectId);
+    if (project.type === "WORDPRESS" && data.baseDirectory) throw new ProjectError("WordPress requires the repository root; clear the base directory", "WORDPRESS_BASE_DIRECTORY_UNSUPPORTED", 422);
 
     // If name is changing, check it won't collide with another project
     if (data.name) {

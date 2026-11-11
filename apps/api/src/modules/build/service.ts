@@ -490,7 +490,7 @@ export function createBuildProcessor(
         }
       }
 
-      const sourceDir = resolveSourceDirectory(projectDir, project.baseDirectory);
+      const sourceDir = resolveSourceDirectory(projectDir, project.baseDirectory, project.type);
       await appendLog(`[vexlyx] Build source: ${project.baseDirectory ?? "."}`);
 
       // Fetch and decrypt project environment variables early
@@ -545,6 +545,8 @@ export function createBuildProcessor(
           ? "Static Site"
           : planResult.framework.charAt(0).toUpperCase() + planResult.framework.slice(1);
       await appendLog(`[vexlyx] Detected framework: ${displayFramework}`);
+
+      if (planResult.detectedType === "WORDPRESS" && project.baseDirectory) throw new BuildError("WordPress requires the repository root; clear the base directory", "WORDPRESS_BASE_DIRECTORY_UNSUPPORTED", 422);
 
       // Auto-align project type if framework is detected and differs from current setting
       let effectiveProjectType = project.type;
@@ -603,7 +605,6 @@ export function createBuildProcessor(
         deployImageName = "nginx:alpine";
         staticRoot = sourceDir;
       } else if (isWordPress) {
-        staticRoot = sourceDir;
         await appendLog("[vexlyx] WordPress project — skipping Nixpacks build, using official WordPress image");
       } else if (isPhpNoBuild) {
         await appendLog("[vexlyx] PHP project with no build command — skipping Nixpacks build");
@@ -833,7 +834,7 @@ export class BuildService {
     const envService = new EnvService(this.prisma);
     const envVars = await envService.getDecryptedMap(projectId);
 
-    const plan = await runBuildPlan(resolveSourceDirectory(projectDir, project.baseDirectory), envVars);
+    const plan = await runBuildPlan(resolveSourceDirectory(projectDir, project.baseDirectory, project.type), envVars);
 
     return {
       framework: plan.framework,
@@ -929,6 +930,7 @@ export class BuildService {
         userId: true,
         gitUrl: true,
         baseDirectory: true,
+        type: true,
         installCmd: true,
         buildCmd: true,
         deletedAt: true,

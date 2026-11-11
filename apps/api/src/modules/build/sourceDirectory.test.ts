@@ -56,3 +56,9 @@ it("requires an existing directory", () => {
   expect(() => resolveSourceDirectory(root, "web")).toThrow();
   expect(() => resolveSourceDirectory(root, "missing")).toThrow();
 });
+
+it("refuses a WordPress base directory even when it exists", () => {
+  const root = temp(); mkdirSync(join(root, "blog"));
+  expect(() => resolveSourceDirectory(root, "blog", "WORDPRESS")).toThrow();
+  expect(resolveSourceDirectory(root, null, "WORDPRESS")).toBe(root);
+});

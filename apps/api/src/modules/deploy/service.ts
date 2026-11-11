@@ -512,7 +512,7 @@ export class DeployService {
       );
     }
 
-    const sourceDir = resolveSourceDirectory(projectDir, project.baseDirectory);
+    const sourceDir = resolveSourceDirectory(projectDir, project.baseDirectory, project.type);
     let imageName = `${env.NIXPACKS_IMAGE_PREFIX}-${projectId}`;
     let staticRoot: string | undefined;
 
@@ -542,8 +542,6 @@ export class DeployService {
       imageName = env.PHP_FPM_IMAGE;
       staticRoot = sourceDir;
     }
-
-    if (project.type === "WORDPRESS") staticRoot = sourceDir;
 
     // Fetch and decrypt project environment variables. Done before the status
     // flips to CREATING so an undecryptable secret fails the request cleanly

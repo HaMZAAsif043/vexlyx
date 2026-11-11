@@ -256,6 +256,11 @@ describe("build job install command", () => {
 
 describe("advanced build controls", () => {
   const job = { deploymentId: "d1", projectId: PROJECT_ID, userId: USER_ID, projectDir: join(projectsDir, PROJECT_ID), imageName: "vexlyx-p1", buildCmd: "npm run build" };
+  it("rejects WordPress under a custom base directory before building", async () => {
+    mkdirSync(join(job.projectDir, "blog"), { recursive: true });
+    await expect(runJob(job, storedProject({ type: "WORDPRESS", baseDirectory: "blog" }))).rejects.toThrow();
+    expect(buildPayloads).toHaveLength(0);
+  });
   it("uses the selected monorepo source and bypasses cache when disabled", async () => {
     const source = join(projectsDir, PROJECT_ID, "apps", "web");
     mkdirSync(source, { recursive: true });

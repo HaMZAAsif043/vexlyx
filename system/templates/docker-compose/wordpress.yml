@@ -20,7 +20,7 @@ services:
 {{env_block}}
     volumes:
       - "wp_core_{{service_name}}:/var/www/html"
-      - "{{wp_content_root}}:/var/www/html/wp-content"
+      - "../wp-content:/var/www/html/wp-content"
     deploy:
       resources:
         limits:
@@ -35,7 +35,7 @@ services:
       - app
     volumes:
       - "wp_core_{{service_name}}:/var/www/html:ro"
-      - "{{wp_content_root}}:/var/www/html/wp-content:ro"
+      - "../wp-content:/var/www/html/wp-content:ro"
       - "{{nginx_conf_path}}:/etc/nginx/conf.d/default.conf:ro"
     ports:
       - "{{host_port}}:80"

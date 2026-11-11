@@ -4,9 +4,9 @@ import { resolve, sep } from "node:path";
 export class SourceDirectoryError extends Error {
   readonly code = "INVALID_BASE_DIRECTORY";
   readonly statusCode = 422;
-  constructor() {
+  constructor(message = "Base directory must be an existing directory inside this project's source, without traversal or generated directories") {
     super(
-      "Base directory must be an existing directory inside this project's source, without traversal or generated directories",
+      message,
     );
   }
 }
@@ -14,7 +14,9 @@ export class SourceDirectoryError extends Error {
 export function resolveSourceDirectory(
   projectDir: string,
   baseDirectory?: string | null,
+  projectType?: string,
 ): string {
+  if (projectType === "WORDPRESS" && baseDirectory) throw new SourceDirectoryError("WordPress requires the repository root; clear the base directory");
   if (!baseDirectory) return projectDir;
   try {
     if (

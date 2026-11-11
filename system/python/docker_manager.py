@@ -568,7 +568,6 @@ def generate_compose_file(
         .replace("{{memory_limit}}", memory_limit)
         .replace("{{env_block}}", env_block)
     )
-    content = content.replace("{{wp_content_root}}", (extra_placeholders or {}).get("wp_content_root", (compose_dir.parent / "wp-content").resolve().as_posix()))
     for key, value in (extra_placeholders or {}).items():
         content = content.replace(f"{{{{{key}}}}}", value)
     compose_dir.mkdir(parents=True, exist_ok=True)
@@ -885,7 +884,6 @@ def cmd_deploy(payload: dict) -> None:
 
     # F5.7 — WORDPRESS: generate fastcgi nginx config + map DB_* env vars to WORDPRESS_DB_*
     if project_type_upper == "WORDPRESS":
-        extra_placeholders["wp_content_root"] = (Path(payload.get("staticRoot") or project_dir) / "wp-content").resolve().as_posix()
         nginx_conf_path = generate_nginx_conf(
             compose_dir,
             get_nginx_templates_dir() / "wordpress.conf.template",
@@ -917,7 +915,7 @@ def cmd_deploy(payload: dict) -> None:
         )
         extra_placeholders["nginx_conf_path"] = nginx_conf_path.resolve().as_posix()
 
-    for handed_over in hand_docroot_to_php(Path(payload.get("staticRoot") or project_dir), project_type_upper, php_no_build):
+    for handed_over in hand_docroot_to_php(Path(payload.get("staticRoot") or project_dir) if php_no_build else Path(project_dir), project_type_upper, php_no_build):
         log_line(f"[vexlyx] {handed_over.name} is now writable by PHP-FPM (uid {PHP_FPM_UID})")
 
     log_line(f"[vexlyx] Generating docker-compose.yml in {compose_dir}")

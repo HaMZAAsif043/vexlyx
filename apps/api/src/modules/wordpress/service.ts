@@ -249,6 +249,7 @@ export class WordPressService {
         id: true,
         userId: true,
         type: true,
+        baseDirectory: true,
         deletedAt: true,
       },
     });
@@ -264,6 +265,8 @@ export class WordPressService {
         403,
       );
     }
+
+    if (project.baseDirectory) throw new WordPressError("WordPress requires the repository root; clear the base directory before installation, import, export or uploads", "WORDPRESS_BASE_DIRECTORY_UNSUPPORTED", 422);
 
     return project;
   }
