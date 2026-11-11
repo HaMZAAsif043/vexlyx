@@ -3,6 +3,13 @@ import { createGitHubAppJwt } from "./tokens.js";
 const GITHUB_API = "https://api.github.com";
 const API_VERSION = "2022-11-28";
 
+/** Timeout for general API reads, including paged repository/installation lists. */
+const API_TIMEOUT_MS = 15_000;
+/** Timeout for short token-minting and OAuth code-exchange calls. */
+const TOKEN_MINT_TIMEOUT_MS = 10_000;
+/** Reject incomplete results after 50 pages instead of making an ownership verdict. */
+const MAX_INSTALLATION_PAGES = 50;
+
 export class GitHubApiError extends Error {
   constructor(
     message: string,
@@ -40,25 +47,68 @@ export interface GitHubRepositoryResponse {
 
 interface RequestOptions extends RequestInit {
   token?: string;
+  /** Override the default outbound timeout in milliseconds. */
+  timeoutMs?: number;
+}
+
+/**
+ * Wraps a fetch timeout/abort into a typed GitHubApiError so callers can
+ * distinguish "GitHub never answered" from a genuine HTTP error status.
+ */
+function throwIfTimeout(error: unknown, timeoutMs: number): void {
+  const name = error instanceof Error ? error.name : "";
+  if (name === "TimeoutError" || name === "AbortError") {
+    throw new GitHubApiError(
+      `GitHub did not respond within ${timeoutMs}ms`,
+      504,
+      "GITHUB_API_TIMEOUT",
+    );
+  }
+}
+
+async function fetchJson<T>(url: string, options: RequestOptions = {}): Promise<{ data: T; nextPath: string | null }> {
+  const { token, headers, timeoutMs = API_TIMEOUT_MS, ...requestOptions } = options;
+  const deadline = AbortSignal.timeout(timeoutMs);
+  const signal = requestOptions.signal ? AbortSignal.any([requestOptions.signal, deadline]) : deadline;
+  try {
+    const response = await fetch(url, {
+      ...requestOptions,
+      signal,
+      headers: {
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": API_VERSION,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...headers,
+      },
+    });
+    if (!response.ok) throw new GitHubApiError(`GitHub request failed with status ${response.status}`, response.status);
+    return { data: await response.json() as T, nextPath: extractNextPath(response.headers.get("link")) };
+  } catch (error) {
+    if (deadline.aborted) throwIfTimeout(deadline.reason, timeoutMs);
+    throw error;
+  }
 }
 
 async function githubRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { token, headers, ...requestOptions } = options;
-  const response = await fetch(`${GITHUB_API}${path}`, {
-    ...requestOptions,
-    headers: {
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": API_VERSION,
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...headers,
-    },
-  });
+  return (await fetchJson<T>(`${GITHUB_API}${path}`, options)).data;
+}
 
-  if (!response.ok) {
-    throw new GitHubApiError(`GitHub request failed with status ${response.status}`, response.status);
-  }
+/**
+ * Extracts the path of the rel="next" page from a GitHub Link header, e.g.
+ * `<https://api.github.com/user/installations?per_page=100&page=2>; rel="next", ...`.
+ * Returns null when there is no next page.
+ */
+function extractNextPath(linkHeader: string | null): string | null {
+  if (!linkHeader) return null;
+  const match = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
+  if (!match) return null;
+  const url = new URL(match[1]!);
+  if (url.origin !== GITHUB_API) throw new GitHubApiError("Invalid GitHub pagination origin", 502);
+  return `${url.pathname}${url.search}`;
+}
 
-  return response.json() as Promise<T>;
+async function githubRequestWithHeaders<T>(path: string, options: RequestOptions = {}) {
+  return fetchJson<T>(`${GITHUB_API}${path}`, options);
 }
 
 export class GitHubClient {
@@ -80,21 +130,38 @@ export class GitHubClient {
   }
 
   async exchangeUserCode(clientId: string, clientSecret: string, code: string) {
-    const response = await fetch("https://github.com/login/oauth/access_token", {
+    const { data: body } = await fetchJson<{ access_token?: string; error?: string }>("https://github.com/login/oauth/access_token", {
       method: "POST",
       headers: { Accept: "application/json", "Content-Type": "application/json" },
       body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, code }),
+      timeoutMs: TOKEN_MINT_TIMEOUT_MS,
     });
-    if (!response.ok) throw new GitHubApiError("GitHub authorization failed", response.status);
-    const body = await response.json() as { access_token?: string; error?: string };
     if (!body.access_token) throw new GitHubApiError("GitHub authorization did not return an access token", 401);
     return body.access_token;
   }
 
+  /**
+   * Lists every installation visible to the user token, following the Link
+   * header across pages so an account with more than 100 installations is not
+   * silently truncated to the first page.
+   */
   async listUserInstallations(userToken: string) {
-    return githubRequest<{ installations: GitHubInstallationResponse[] }>("/user/installations?per_page=100", {
-      token: userToken,
-    });
+    const installations: GitHubInstallationResponse[] = [];
+    let path: string | null = "/user/installations?per_page=100";
+    let pages = 0;
+    while (path && pages < MAX_INSTALLATION_PAGES) {
+      const response: {
+        data: { installations: GitHubInstallationResponse[] };
+        nextPath: string | null;
+      } = await githubRequestWithHeaders<{ installations: GitHubInstallationResponse[] }>(path, {
+        token: userToken,
+      });
+      installations.push(...response.data.installations);
+      path = response.nextPath;
+      pages += 1;
+    }
+    if (path) throw new GitHubApiError("GitHub pagination limit exceeded", 502, "GITHUB_API_PAGINATION_LIMIT");
+    return { installations };
   }
 
   async getInstallation(appId: bigint, privateKey: string, installationId: bigint) {
@@ -106,7 +173,7 @@ export class GitHubClient {
   async createInstallationToken(appId: bigint, privateKey: string, installationId: bigint) {
     return githubRequest<{ token: string; expires_at: string }>(
       `/app/installations/${installationId}/access_tokens`,
-      { method: "POST", token: createGitHubAppJwt(appId, privateKey) },
+      { method: "POST", token: createGitHubAppJwt(appId, privateKey), timeoutMs: TOKEN_MINT_TIMEOUT_MS },
     );
   }
 
@@ -125,9 +192,16 @@ export class GitHubClient {
   }
 
   async listBranches(token: string, owner: string, repository: string, page = 1) {
-    return githubRequest<Array<{ name: string; protected: boolean }>>(
-      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/branches?per_page=100&page=${page}`,
-      { token },
-    );
+    const branches: Array<{ name: string; protected: boolean }> = [];
+    let path: string | null = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/branches?per_page=100&page=${page}`;
+    let pages = 0;
+    while (path && pages < MAX_INSTALLATION_PAGES) {
+      const response: { data: Array<{ name: string; protected: boolean }>; nextPath: string | null } = await githubRequestWithHeaders(path, { token });
+      branches.push(...response.data);
+      path = response.nextPath;
+      pages += 1;
+    }
+    if (path) throw new GitHubApiError("GitHub pagination limit exceeded", 502, "GITHUB_API_PAGINATION_LIMIT");
+    return branches;
   }
 }
