@@ -16,3 +16,6 @@ overrides:
   ip-address: ">=10.7.5"
   postcss: ">=8.5.18"
   source-map-js: ">=1.2.2"
+  '@fastify/swagger-ui>@fastify/static': "10.1.10"
+  '@fastify/static>glob': "14.0.4"
+  'glob>minimatch': "11.0.5"

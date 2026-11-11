@@ -15,6 +15,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -80,26 +81,23 @@ class GitBranchSwitchTests(unittest.TestCase):
         self.git("-C", str(repo), "add", name)
         self.git("-C", str(repo), "commit", "-qm", f"add {name}")
 
-    def run_sync(self, branch: str) -> dict:
-        """Run cmd_clone, requiring exactly one JSON document on stdout."""
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            try:
-                git_manager.cmd_clone({
-                    "projectId": "p1", "projectsDir": str(self.projects),
-                    "gitUrl": URL, "branch": branch,
-                })
-                exited = False
-            except SystemExit:
-                exited = True
-        documents = [line for line in out.getvalue().splitlines() if line.strip()]
+    def run_sync(self, branch: str, git_url: str = URL) -> dict:
+        """Exercise the real entry point, including its error-to-JSON boundary."""
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).parents[1] / "system/python/git_manager.py")],
+            input=json.dumps({
+                "command": "clone", "projectId": "p1", "projectsDir": str(self.projects),
+                "gitUrl": git_url, "branch": branch,
+            }), capture_output=True, text=True, timeout=120,
+        )
+        documents = [line for line in result.stdout.splitlines() if line.strip()]
         self.assertEqual(
             len(documents), 1,
             f"git_manager.py must answer with one JSON document, got {documents}",
         )
         document = json.loads(documents[0])
         self.assertEqual(
-            exited, not document.get("success"),
+            result.returncode != 0, not document.get("success"),
             f"exit status and reported result disagree: {document}",
         )
         return document
@@ -149,10 +147,24 @@ class GitBranchSwitchTests(unittest.TestCase):
 
         document = self.run_sync("no-such-branch")
         self.assertEqual(document["code"], "COMMAND_FAILED")
-        self.assertIn("pathspec", document["error"])
+        self.assertIn("no-such-branch", document["error"])
         # A failed sync must leave the workspace exactly where it was.
         self.assertTrue((self.workspace / "uploads.txt").exists())
         self.assertTrue((self.workspace / ".git").is_dir())
+
+    def test_repository_change_fallback_emits_one_document_and_preserves_uploads(self):
+        self.sync("main")
+        (self.workspace / "uploads.txt").write_text("customer data")
+        other = self.root / "other"
+        self.git("init", "-q", "--initial-branch=main", str(other))
+        self.write_file(other, "different.txt", "unrelated repository\n")
+        other_url = "https://github.com/team/other"
+        self.git("config", "--global", "--add", f"url.{other.as_uri()}.insteadOf", other_url)
+        document = self.run_sync("main", other_url)
+        self.assertTrue(document.get("success"), document)
+        self.assertEqual(document["action"], "cloned")
+        self.assertEqual((self.workspace / "different.txt").read_text(), "unrelated repository\n")
+        self.assertEqual((Path(document["previousWorkspace"]) / "uploads.txt").read_text(), "customer data")
 
 
 if __name__ == "__main__":
