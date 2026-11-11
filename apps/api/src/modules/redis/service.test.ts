@@ -94,6 +94,7 @@ function fixture(recordOverrides: Record<string, unknown> = {}, findUniqueResult
       update: vi.fn().mockResolvedValue(record),
       delete: vi.fn().mockResolvedValue(record),
     },
+    envVar: { findUnique: vi.fn().mockResolvedValue(null), updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
     project: {
       findFirst: vi.fn().mockResolvedValue({ id: "p1" }),
     },
@@ -376,6 +377,17 @@ describe("RedisInstanceService.stats (F5.30)", () => {
 });
 
 describe("RedisInstanceService.rotatePassword (F5.30)", () => {
+  it.each([true, false])("refreshes an injected URL and preserves a user override (injected=%s)", async injected => {
+    spawnMock.mockReturnValue(scriptResult(JSON.stringify({ success: true }), 0));
+    const { prisma, service } = fixture({ projectId: "p1" });
+    prisma.envVar.findUnique.mockResolvedValue({ id: "env1", value: "envcipher" } as never);
+    decryptMock.mockImplementation(value => value === "envcipher" ? (injected ? `redis://:${"a".repeat(32)}@${CONTAINER}:6379` : "redis://custom:other@elsewhere:6379") : "a".repeat(32));
+    const result = await service.rotatePassword(INSTANCE_ID, USER_ID);
+    expect(result).toHaveProperty("message", expect.stringContaining("Redeploy"));
+    expect(prisma.envVar.updateMany).toHaveBeenCalledTimes(injected ? 1 : 0);
+    if (injected) expect(prisma.envVar.updateMany).toHaveBeenCalledWith({ where: { id: "env1", value: "envcipher" }, data: { value: "encrypted-ciphertext" } });
+  });
+
   it("recreates the container with a new password and audits without the secret", async () => {
     spawnMock.mockReturnValue(scriptResult(JSON.stringify({ success: true }), 0));
     const { auditLog, prisma, service } = fixture();

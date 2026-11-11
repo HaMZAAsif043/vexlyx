@@ -632,10 +632,19 @@ export class RedisInstanceService {
 
     let updated: RedisInstance;
     try {
-      updated = await this.prisma.redisInstance.update({
-        where: { id: record.id },
-        data: { passwordEncrypted: encrypt(plainPassword), status: "RUNNING" },
-        include: { project: { select: { id: true, name: true } } },
+      updated = await this.prisma.$transaction(async transaction => {
+        const saved = await transaction.redisInstance.update({
+          where: { id: record.id },
+          data: { passwordEncrypted: encrypt(plainPassword), status: "RUNNING" },
+          include: { project: { select: { id: true, name: true } } },
+        });
+        if (record.projectId) {
+          const variable = await transaction.envVar.findUnique({ where: { projectId_key: { projectId: record.projectId, key: "REDIS_URL" } } });
+          if (variable && decrypt(variable.value) === this.buildConnectionUrl(record, oldPassword)) {
+            await transaction.envVar.updateMany({ where: { id: variable.id, value: variable.value }, data: { value: encrypt(this.buildConnectionUrl(record, plainPassword)) } });
+          }
+        }
+        return saved;
       });
     } catch (err) {
       // The container already requires the new password while the record
@@ -674,7 +683,7 @@ export class RedisInstanceService {
       { after: { name: record.name } },
     );
 
-    return this.formatDetail(updated, plainPassword);
+    return { ...this.formatDetail(updated, plainPassword), message: record.projectId ? "Password rotated. Redeploy the linked project to load its refreshed REDIS_URL; custom URL overrides are preserved." : "Password rotated." };
   }
 
   // -------------------------------------------------------------------------

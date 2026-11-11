@@ -101,6 +101,8 @@ export interface RedisInstanceSummary {
 }
 
 export interface RedisInstanceDetail extends RedisInstanceSummary {
+  /** Password rotation explains when a linked application must be redeployed. */
+  message?: string;
   /** Internal-only connection URL (redis://:password@container:6379). Detail endpoint only. */
   connectionUrl: string;
   port: number;
