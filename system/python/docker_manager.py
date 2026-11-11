@@ -846,7 +846,7 @@ def _parse_build_stages(content: str, build_args: dict | None = None) -> list[di
                 for name, value in values.items():
                     if bare:
                         global_args[name] = build_args.get(
-                            name, global_args.get(name, "")
+                            name, current["args"].get(name, global_args.get(name, ""))
                         )
                     else:
                         global_args[name] = build_args.get(
@@ -869,7 +869,7 @@ def _parse_build_stages(content: str, build_args: dict | None = None) -> list[di
                         # A bare `ARG NAME` re-declares the global default;
                         # the build --build-arg for this name wins over both.
                         current["args"][name] = build_args.get(
-                            name, global_args.get(name, "")
+                            name, current["args"].get(name, global_args.get(name, ""))
                         )
                     else:
                         # An ARG default yields to the matching --build-arg

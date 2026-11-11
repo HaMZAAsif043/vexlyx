@@ -30,6 +30,10 @@ class FirstExposedPortTests(unittest.TestCase):
             (Path(temp.name) / "Dockerfile").write_text(dockerfile, encoding="utf-8")
         return temp.name
 
+    def test_bare_child_arg_keeps_the_inherited_value(self):
+        directory = self.make_dir("FROM scratch AS base\nARG PORT=8080\nFROM base AS child\nARG PORT\nEXPOSE $PORT\n")
+        self.assertEqual(docker_manager.first_exposed_port(directory), 8080)
+
     def test_reads_first_exposed_port_from_repo_dockerfile(self):
         # The exact #152 repro: a WordPress apache image with EXPOSE 80.
         d = self.make_dir(
