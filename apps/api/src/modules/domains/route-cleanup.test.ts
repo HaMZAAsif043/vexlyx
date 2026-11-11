@@ -8,7 +8,7 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("retryable route cleanup", () => {
   it("reports filesystem failures rather than allowing domain detachment", () => {
-    vi.spyOn(fs, "existsSync").mockReturnValue(true);
+    vi.spyOn(fs, "existsSync").mockReturnValue(false);
     vi.spyOn(fs, "unlinkSync").mockImplementation(() => {
       throw Object.assign(new Error("permission denied"), { code: "EACCES" });
     });

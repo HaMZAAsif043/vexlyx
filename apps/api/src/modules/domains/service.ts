@@ -92,8 +92,6 @@ export function removeTraefikRouteFile(
   logger?: Pick<FastifyBaseLogger, "error">,
 ): void {
   const configPath = getTraefikConfigFile(domainId);
-  if (!fs.existsSync(configPath)) return;
-
   try {
     fs.unlinkSync(configPath);
   } catch (err) {
