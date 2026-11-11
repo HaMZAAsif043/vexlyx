@@ -132,7 +132,7 @@ def write_project_file(project_dir: Path, path: Path, content: str) -> None:
         handle.write(content)
 
 
-def get_nixpacks_binary() -> str:
+def find_nixpacks_binary() -> str | None:
     """Find nixpacks in PATH or common install directories."""
     binary = shutil.which("nixpacks")
     if binary:
@@ -151,10 +151,22 @@ def get_nixpacks_binary() -> str:
         if candidate.is_file():
             return str(candidate.resolve())
 
+    return None
+
+
+def nixpacks_install_hint() -> str:
+    """Platform-appropriate command to install nixpacks."""
     if sys.platform == "win32":
-        install_cmd = "PowerShell: irm https://nixpacks.com/install.ps1 | iex"
-    else:
-        install_cmd = "curl -sSL https://nixpacks.com/install.sh | sh"
+        return "PowerShell: irm https://nixpacks.com/install.ps1 | iex"
+    return "curl -sSL https://nixpacks.com/install.sh | sh"
+
+
+def get_nixpacks_binary() -> str:
+    """Find nixpacks, failing loudly when it is required (build/deploy)."""
+    binary = find_nixpacks_binary()
+    if not binary:
+        fail(f"nixpacks not found. Install it with: {nixpacks_install_hint()}", "NIXPACKS_NOT_FOUND")
+    return binary  # type: ignore[return-value]  — fail() exits
 
 # ---------------------------------------------------------------------------
 # Bounded subprocess execution (#52)
@@ -1142,58 +1154,64 @@ def cmd_plan(payload: dict) -> None:
         })
         return
 
-    # Resolved only after the Dockerfile branch has returned: a project that owns
-    # its Dockerfile never calls nixpacks and must not need it installed (#222).
-    nixpacks_bin = get_nixpacks_binary()
-
-    cmd = [nixpacks_bin, "plan", project_dir, "--format", "json"]
-
-    # Detect python version and propagate to nixpacks plan
-    py_ver = detect_python_version(project_path, env_vars if isinstance(env_vars, dict) else None)
-    if py_ver:
-        cmd += ["--env", f"NIXPACKS_PYTHON_VERSION={py_ver}"]
-
-    # Detect node version and propagate to nixpacks plan
-    node_ver = detect_node_version(project_path, env_vars if isinstance(env_vars, dict) else None)
-    if not node_ver and ((project_path / "vite.config.js").is_file() or (project_path / "vite.config.ts").is_file() or (project_path / "next.config.js").is_file() or (project_path / "next.config.mjs").is_file() or (project_path / "next.config.ts").is_file()):
-        node_ver = "20"
-
-    if node_ver:
-        cmd += ["--env", f"NIXPACKS_NODE_VERSION={node_ver}"]
-
-    # Detect php version and propagate to nixpacks plan
-    php_ver = detect_php_version(project_path, env_vars if isinstance(env_vars, dict) else None)
-    if php_ver:
-        cmd += ["--env", f"NIXPACKS_PHP_VERSION={php_ver}"]
-
-    if isinstance(env_vars, dict):
-        for k, v in env_vars.items():
-            if k and v is not None and k not in ("NIXPACKS_PYTHON_VERSION", "NIXPACKS_NODE_VERSION", "NIXPACKS_PHP_VERSION"):
-                cmd += ["--env", f"{k}={v}"]
-
-    result = run_bounded(
-        PLAN_TIMEOUT,
-        cmd,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-
+    nixpacks_bin = find_nixpacks_binary()
     plan = {}
-    if result.returncode == 0:
-        raw_output = result.stdout.strip()
-        if raw_output:
-            try:
-                plan = json.loads(raw_output)
-            except json.JSONDecodeError:
-                plan = {}
+    result = None
+
+    if nixpacks_bin:
+        cmd = [nixpacks_bin, "plan", project_dir, "--format", "json"]
+
+        # Detect python version and propagate to nixpacks plan
+        py_ver = detect_python_version(project_path, env_vars if isinstance(env_vars, dict) else None)
+        if py_ver:
+            cmd += ["--env", f"NIXPACKS_PYTHON_VERSION={py_ver}"]
+
+        # Detect node version and propagate to nixpacks plan
+        node_ver = detect_node_version(project_path, env_vars if isinstance(env_vars, dict) else None)
+        if not node_ver and ((project_path / "vite.config.js").is_file() or (project_path / "vite.config.ts").is_file() or (project_path / "next.config.js").is_file() or (project_path / "next.config.mjs").is_file() or (project_path / "next.config.ts").is_file()):
+            node_ver = "20"
+
+        if node_ver:
+            cmd += ["--env", f"NIXPACKS_NODE_VERSION={node_ver}"]
+
+        # Detect php version and propagate to nixpacks plan
+        php_ver = detect_php_version(project_path, env_vars if isinstance(env_vars, dict) else None)
+        if php_ver:
+            cmd += ["--env", f"NIXPACKS_PHP_VERSION={php_ver}"]
+
+        if isinstance(env_vars, dict):
+            for k, v in env_vars.items():
+                if k and v is not None and k not in ("NIXPACKS_PYTHON_VERSION", "NIXPACKS_NODE_VERSION", "NIXPACKS_PHP_VERSION"):
+                    cmd += ["--env", f"{k}={v}"]
+
+        result = run_bounded(
+            PLAN_TIMEOUT,
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+
+        if result.returncode == 0:
+            raw_output = result.stdout.strip()
+            if raw_output:
+                try:
+                    plan = json.loads(raw_output)
+                except json.JSONDecodeError:
+                    plan = {}
 
     framework, build_cmd, start_cmd, detected_type = detect_framework_and_commands(
         project_path, plan
     )
 
-    if result.returncode != 0 and framework == "unknown":
+    if nixpacks_bin is None and framework == "unknown":
+        fail(
+            f"nixpacks not found and framework detection was inconclusive. Install it with: {nixpacks_install_hint()}",
+            "NIXPACKS_NOT_FOUND",
+        )
+
+    if result is not None and result.returncode != 0 and framework == "unknown":
         error_output = (result.stderr or result.stdout or "").strip()
         fail(f"nixpacks plan failed:\n{error_output}", "NIXPACKS_PLAN_FAILED")
 

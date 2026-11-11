@@ -4,8 +4,10 @@ import os
 import sys
 import json
 import shutil
+import subprocess
 import tarfile
 from pathlib import Path
+from unittest.mock import patch
 
 # Add project root to sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -70,38 +72,47 @@ class TestFileManagerSftp(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(chroot_proj1, "index.php")))
         self.assertTrue(os.path.exists(os.path.join(chroot_proj2, "app.js")))
 
-    def test_wordpress_export_db_regex(self):
-        """Verify that cmd_wordpress_export properly parses wp-config.php and generates tar.gz."""
+    def test_wordpress_export_archives_wp_content_and_db_dump(self):
+        """Verify cmd_wordpress_export archives wp-content plus the SQL dump, without a database."""
         proj_dir = Path(self.temp_dir) / "wp_project"
         export_dir = Path(self.temp_dir) / "wp_export"
         tar_path = export_dir / "backup.tar.gz"
         proj_dir.mkdir(parents=True, exist_ok=True)
 
-        wp_config = proj_dir / "wp-config.php"
-        wp_config.write_text(
-            "<?php\n"
-            "define('DB_NAME', 'vexlyx_db');\n"
-            "define('DB_USER', 'vexlyx_usr');\n"
-            "define('DB_PASSWORD', 's3cr3t');\n"
-            "define('DB_HOST', 'localhost:3306');\n",
-            encoding="utf-8"
-        )
-        (proj_dir / "index.php").write_text("<?php echo 'hello'; ?>", encoding="utf-8")
+        wp_content = proj_dir / "wp-content"
+        wp_content.mkdir(parents=True, exist_ok=True)
+        (wp_content / "index.php").write_text("<?php echo 'hello'; ?>", encoding="utf-8")
 
-        # Run cmd_wordpress_export (will attempt mysqldump which may gracefully fail or succeed)
-        try:
+        # Mock the mysqldump call so the export path runs without a database.
+        mock_dump = subprocess.CompletedProcess(
+            args=["mysqldump"],
+            returncode=0,
+            stdout=b"-- mocked SQL dump\nCREATE TABLE wp_posts (id INT);\n",
+            stderr=b"",
+        )
+        with patch("system.python.build_manager.run_bounded", return_value=mock_dump) as mock_run:
             cmd_wordpress_export({
                 "projectDir": str(proj_dir),
                 "exportDir": str(export_dir),
                 "tarPath": str(tar_path),
+                "dbName": "test_db",
+                "dbUser": "test_user",
+                "dbPassword": "test_pass",
+                "dbHost": "localhost",
             })
-        except SystemExit:
-            pass
+
+        # The export must have dumped the requested database.
+        self.assertEqual(mock_run.call_count, 1)
+        mysqldump_cmd = mock_run.call_args.args[1]
+        self.assertEqual(mysqldump_cmd[0], "mysqldump")
+        self.assertIn("test_db", mysqldump_cmd)
 
         self.assertTrue(tar_path.is_file(), "Exported tarball should exist")
         with tarfile.open(tar_path, "r:gz") as tar:
             names = tar.getnames()
             self.assertTrue(any("index.php" in n for n in names), "Tarball should contain project files")
+            sql_member = next(n for n in names if n.endswith("database.sql"))
+            self.assertEqual(tar.extractfile(sql_member).read(), mock_dump.stdout, "Tarball should contain the dumped SQL")
 
     def test_wordpress_import_tarslip_prevention(self):
         """Verify that malicious tarballs with symlinks and traversal paths are blocked during import."""

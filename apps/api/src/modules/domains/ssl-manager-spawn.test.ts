@@ -8,6 +8,7 @@ process.env.SESSION_SECRET ??= "test-session-secret-at-least-32-characters-long"
 
 const spawned: { file: string; args: string[] }[] = [];
 const stdinDocuments: string[] = [];
+let failStdin = false;
 
 // Stands in for `ssl_manager.py`: it records what was put on the command line
 // and what arrived on stdin, and answers with the JSON document the helper
@@ -26,6 +27,7 @@ vi.mock("node:child_process", () => ({
     child.stdin.on("data", (chunk: Buffer) => {
       stdinDocuments.push(chunk.toString("utf-8"));
     });
+    if (failStdin) child.stdin.destroy(new Error("write EPIPE"));
     setImmediate(() => {
       child.stdout.end(
         JSON.stringify({
@@ -92,6 +94,7 @@ describe("ssl_manager.py invocation (#190)", () => {
   beforeEach(() => {
     spawned.length = 0;
     stdinDocuments.length = 0;
+    failStdin = false;
   });
 
   it("passes the payload on stdin and nothing but the script on the command line", async () => {
@@ -128,6 +131,16 @@ describe("ssl_manager.py invocation (#190)", () => {
     expect(commandLine).not.toContain("PRIVATE KEY");
     expect(commandLine).not.toContain(PRIVATE_KEY);
     for (const arg of call.args) expect(arg).not.toMatch(/BEGIN (RSA )?PRIVATE KEY/);
+  });
+
+  it("returns a controlled error when the helper closes stdin before reading", async () => {
+    failStdin = true;
+    const { service, prisma } = fixture();
+    await expect(upload(service)).rejects.toMatchObject({
+      code: "SSL_MANAGER_STDIN_ERROR", statusCode: 500,
+    });
+    expect(prisma.certificate.upsert).not.toHaveBeenCalled();
+    expect(spawned[0]?.args.join(" ")).not.toContain("PRIVATE KEY");
   });
 
   // A certificate deletion has to reach the <host>.crt/.key convenience copies
