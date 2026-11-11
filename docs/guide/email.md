@@ -106,6 +106,33 @@ refuse a password until the connection is encrypted, so a client left with its s
 *None* fails at the password step with `Must issue a STARTTLS command first` — that is the server
 requiring TLS, not a wrong password.
 
+### Thunderbird automatic setup
+
+Vexlyx serves provider settings at
+`https://<mail-domain>/.well-known/autoconfig/mail/config-v1.1.xml`, one of
+[Thunderbird's standard discovery locations](https://github.com/thunderbird/autoconfig/wiki/The-autoconfig-file).
+Enter the full mailbox address and its password in Thunderbird; incoming mail uses
+IMAP on 993 with SSL/TLS and sending uses SMTP on 587 with STARTTLS.
+
+The mail domain must be verified (ACTIVE), have SSL enabled with a trusted certificate,
+and have its apex A/AAAA records pointing to this server. The installer configures
+`HOSTED_MAIL_HOSTNAME` from `VEXLYX_MAIL_HOSTNAME`; this is the shared, certificate-covered
+mail hostname advertised in the response, even when the mailbox belongs to another
+hosted domain. If it is absent or invalid, discovery returns 503 instead of guessing a host.
+
+The exact discovery path takes priority over a project's website route, including
+path-prefixed routes, and also works for domains with no project. Other website paths
+continue to reach the project. HTTP requests to the discovery path redirect to HTTPS.
+Routes are regenerated at API startup and when domain or SSL settings change.
+Unverified domains and registered child domains do not receive discovery settings.
+The endpoint uses a full-address placeholder rather than looking up mailbox accounts.
+
+No `autoconfig` or `autodiscover` DNS records are needed for this well-known URL.
+If the domain's website is hosted elsewhere, serve or proxy this path there;
+pointing only its MX record at Vexlyx does not route web requests to this server.
+Outlook Autodiscover and Apple configuration profiles are not published; use the
+manual settings above for those clients.
+
 ## Troubleshooting delivery
 
 If mail isn't arriving, admins can check **Mail → Queue** for stuck/deferred messages (hold,

@@ -145,15 +145,17 @@ describe("route upstream", () => {
       expect(execMock).not.toHaveBeenCalled();
     });
 
-    it("only considers active domains attached to a live project", async () => {
+    it("considers live project routes and verified mail roots", async () => {
       const { service, findMany } = serviceWith([]);
       await service.syncAllRoutes();
 
       const where = findMany.mock.calls[0]![0].where;
       expect(where).toMatchObject({
         status: "ACTIVE",
-        projectId: { not: null },
-        project: { deletedAt: null },
+        OR: [
+          { projectId: { not: null }, project: { deletedAt: null } },
+          { parentId: null },
+        ],
       });
     });
 
