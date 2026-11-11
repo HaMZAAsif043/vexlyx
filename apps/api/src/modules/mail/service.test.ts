@@ -203,7 +203,7 @@ describe("test email sender ownership (#194)", () => {
       }),
     ).rejects.toMatchObject({ code: "SENDER_NOT_OWNED", statusCode: 403 });
     expect(prisma.domain.findMany).toHaveBeenCalledWith({
-      where: { userId: "u1", status: "ACTIVE" },
+      where: { userId: "u1", status: "ACTIVE", parentId: null },
       select: { hostname: true },
     });
   });
@@ -220,8 +220,14 @@ describe("test email sender ownership (#194)", () => {
       body: "Test", port: 587, useTls: true,
     })).rejects.toMatchObject({ code: "SENDER_NOT_OWNED", statusCode: 403 });
     expect(findMany).toHaveBeenCalledWith({
-      where: { userId: "u1", status: "ACTIVE" }, select: { hostname: true },
+      where: { userId: "u1", status: "ACTIVE", parentId: null }, select: { hostname: true },
     });
     expect(spawn).not.toHaveBeenCalled();
   });
+});
+
+it("does not trust historical forged inherited ACTIVE domains for test send", async () => {
+  const records = [{ hostname: "owned.example", parentId: null }, { hostname: "unrelated.example", parentId: "owned-parent" }];
+  const prisma = { domain: { findMany: vi.fn(async ({ where }) => records.filter(record => where.parentId === undefined || record.parentId === where.parentId)) } };
+  await expect(new MailService(prisma as never).sendTestEmail("u1", { from: "sender@unrelated.example", to: "receiver@example.net", subject: "test", body: "test", port: 587, useTls: true })).rejects.toMatchObject({ code: "SENDER_NOT_OWNED" });
 });

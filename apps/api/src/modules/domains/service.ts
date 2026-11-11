@@ -448,6 +448,10 @@ http:
       });
     }
 
+    if (input.parentId && (!parentDomain || !input.hostname.toLowerCase().endsWith("." + parentDomain.hostname.toLowerCase().replace(/^\*\./, "")))) {
+      throw new DomainError("The hostname must be a subdomain of the selected parent you own", "INVALID_PARENT_DOMAIN", 422);
+    }
+
     // Account-Level Verification Inheritance:
     // If user owns and has verified the parent domain, automatically inherit verification!
     const isInheritedActive = parentDomain !== null && parentDomain.status === "ACTIVE";
