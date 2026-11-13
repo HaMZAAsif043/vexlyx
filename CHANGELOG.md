@@ -4,6 +4,10 @@ All notable changes to Vexlyx are documented here. The format follows [Keep a Ch
 
 ## Unreleased
 
+### Changed
+
+- Explicit `any` types and stray `console.log` calls now fail lint and CI (#58). Operational `console.warn`/`console.error` calls remain allowed; CLI regression probes verify both API and dashboard enforcement.
+
 ### Security
 
 - An uploaded custom SSL private key is passed to `ssl_manager.py` on stdin instead of its command line, so it is no longer readable through `ps` or `/proc/<pid>/cmdline` (#190).
