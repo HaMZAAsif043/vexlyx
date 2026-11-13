@@ -45,6 +45,7 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm test:lint-policy
       - run: pnpm lint
 
   typecheck:
@@ -73,6 +74,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @vexlyx/api db:generate
       - run: pnpm test
+      - run: python3 -m unittest discover -s tests -p test_privileged_helper_guards.py
+      - run: python3 -m unittest discover -s tests -p test_cleanup_failure_guards.py
       - run: python3 -m unittest discover -s tests -p test_restore_stop_safety.py
       - run: python3 -m unittest discover -s tests -p test_git_url_policy.py
       - run: python3 -m unittest discover -s tests -p test_git_branch_switch.py

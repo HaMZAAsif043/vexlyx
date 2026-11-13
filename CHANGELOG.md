@@ -4,9 +4,9 @@ All notable changes to Vexlyx are documented here. The format follows [Keep a Ch
 
 ## Unreleased
 
-### Fixed
+### Changed
 
-- Preserve local GitHub installation disconnects across webhooks and invalidate installations when replacing the configured App (#70).
+- Explicit `any` types and stray `console.log` calls now fail lint and CI (#58). Operational `console.warn`/`console.error` calls remain allowed; CLI regression probes verify both API and dashboard enforcement.
 
 ### Security
 
