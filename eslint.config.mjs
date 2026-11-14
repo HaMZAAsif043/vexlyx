@@ -34,7 +34,7 @@ export default tseslint.config(
   {
     rules: {
       /* Enforce CLAUDE.md Section 6: no `any` type */
-      "@typescript-eslint/no-explicit-any": "warn",
+      "@typescript-eslint/no-explicit-any": "error",
 
       /* Encourage explicit return types on exported functions */
       "@typescript-eslint/explicit-function-return-type": "off",
@@ -46,7 +46,7 @@ export default tseslint.config(
       ],
 
       /* Discourage console.log in production (CLAUDE.md Section 6) */
-      "no-console": ["warn", { allow: ["warn", "error"] }],
+      "no-console": ["error", { allow: ["warn", "error"] }],
     },
   },
   // Plain Node scripts (dev-setup, docs tooling) run outside any bundler,

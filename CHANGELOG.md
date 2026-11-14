@@ -4,9 +4,9 @@ All notable changes to Vexlyx are documented here. The format follows [Keep a Ch
 
 ## Unreleased
 
-### Fixed
+### Changed
 
-- Reject forged parent-domain relationships and authorize test-mail senders only through independently verified root domains (#194).
+- Explicit `any` types and stray `console.log` calls now fail lint and CI (#58). Operational `console.warn`/`console.error` calls remain allowed; CLI regression probes verify both API and dashboard enforcement.
 
 ### Security
 
